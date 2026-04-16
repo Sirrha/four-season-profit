@@ -1918,10 +1918,13 @@ let scanFileData=null,scanFileType=null,scanResults=[];
 
 function saveApiKey(val){
   const status=document.getElementById('apikey-status');
-  if(val&&val.startsWith('sk-ant')){
-    localStorage.setItem('fs_anthropic_key',val);
-    if(status){status.textContent='✅ API-nøkkel lagret!';status.style.color='var(--accent)';}
-  } else if(val&&val.length>5){
+  // Clean the key - remove non-ASCII
+  const clean=(val||'').replace(/[^\x20-\x7E]/g,'').trim();
+  if(clean&&clean.startsWith('sk-ant')){
+    localStorage.setItem('fs_anthropic_key',clean);
+    document.getElementById('scan-apikey').value=clean;
+    if(status){status.textContent='✅ API-nøkkel lagret! ('+clean.length+' tegn)';status.style.color='var(--accent)';}
+  } else if(clean&&clean.length>5){
     if(status){status.textContent='⚠️ Ugyldig nøkkel — skal starte med sk-ant-...';status.style.color='#f88';}
   }
 }
@@ -1989,8 +1992,47 @@ async function runAIScan(){
   const mediaType=scanFileType==='pdf'?'application/pdf':(scanFileType==='png'?'image/png':'image/jpeg');
   const prompt='Du er en AI-assistent for Four Season AS, en norsk dagligvarebutikk. Analyser denne fakturaen og ekstraher all informasjon. Returner KUN et JSON-objekt, ingen annen tekst: {"leverandor":"navn","fakturanr":"nr","dato":"YYYY-MM-DD","totalInkl":0.00,"linjer":[{"beskrivelse":"produktnavn","varenr":"nr","antall":1,"enhet":"stk","prisPerEnhetInkl":0.00,"totalInkl":0.00,"mva":15}]}. Regler: Priser alltid inkl. MVA. MVA 15% matvarer, 25% non-food/tobakk, 0% paller.';
   try{
-    const apiKey=document.getElementById('scan-apikey').value.trim()||localStorage.getItem('fs_anthropic_key')||'';
-    const resp=await fetch('https://api.anthropic.com/v1/messages',{
+    const rawKey=document.getElementById('scan-apikey').value.trim()||localStorage.getItem('fs_anthropic_key')||'';
+    // Strip ALL non-ASCII characters from API key
+    const apiKey=rawKey.replace(/[^ -~]/g,'').trim();
+    if(!apiKey){showScanError('Mangler API-nøkkel!');document.getElementById('scan-progress').style.display='none';document.getElementById('scan-btn-area').style.display='block';return;}
+    
+    // Use XMLHttpRequest instead of fetch to avoid Edge encoding issues
+    const requestBody=JSON.stringify({
+      model:'claude-sonnet-4-20250514',max_tokens:1500,
+      messages:[{role:'user',content:[
+        scanFileType==='pdf'
+          ? {type:'document',source:{type:'base64',media_type:'application/pdf',data:scanFileData}}
+          : {type:'image',source:{type:'base64',media_type:mediaType,data:scanFileData}},
+        {type:'text',text:prompt}
+      ]}]
+    });
+    
+    const resp = await new Promise((resolve,reject)=>{
+      const xhr=new XMLHttpRequest();
+      xhr.open('POST','https://api.anthropic.com/v1/messages');
+      xhr.setRequestHeader('Content-Type','application/json');
+      xhr.setRequestHeader('x-api-key',apiKey);
+      xhr.setRequestHeader('anthropic-version','2023-06-01');
+      xhr.setRequestHeader('anthropic-dangerous-allow-browser','true');
+      xhr.onload=()=>resolve({ok:xhr.status>=200&&xhr.status<300,status:xhr.status,json:()=>Promise.resolve(JSON.parse(xhr.responseText))});
+      xhr.onerror=()=>reject(new Error('Nettverksfeil — sjekk internettforbindelsen'));
+      xhr.send(requestBody);
+    });
+    const fakeResp = resp; // compatibility
+    if(!fakeResp.ok){
+      const err=await fakeResp.json();
+      throw new Error(err.error?.message||'API-feil: '+fakeResp.status);
+    }
+    const data=await fakeResp.json();
+    const text=data.content.find(c=>c.type==='text')?.text||'';
+    let parsed;
+    try{const jsonMatch=text.match(/\{[\s\S]*\}/);parsed=JSON.parse(jsonMatch?jsonMatch[0]:text);}
+    catch(e){throw new Error('AI klarte ikke å lese fakturaen. Prøv et klarere bilde.');}
+    scanResults=parsed;
+    showScanResults(parsed);
+    // Skip old fetch code below
+    if(false){const resp=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{
         'Content-Type':'application/json',
@@ -2015,7 +2057,7 @@ async function runAIScan(){
     try{const m=text.match(/\{[\s\S]*\}/);parsed=JSON.parse(m?m[0]:text);}
     catch(e){throw new Error('AI klarte ikke lese fakturaen. Proev klarere bilde.')}
     scanResults=parsed;showScanResults(parsed);
-  }catch(err){
+  }}catch(err){
     document.getElementById('scan-progress').style.display='none';
     document.getElementById('scan-btn-area').style.display='block';
     showScanError('Feil: '+err.message);
