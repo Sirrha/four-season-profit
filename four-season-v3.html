@@ -1910,6 +1910,163 @@ document.head.appendChild(shakeStyle);
   }
   initFirebase(FIREBASE_CONFIG);
 })();
+
+// ─────────────────────────────────────────
+// AI FAKTURA SKANNER
+// ─────────────────────────────────────────
+let scanFileData=null,scanFileType=null,scanResults=[];
+
+function openScanner(){
+  resetScanner();
+  document.getElementById('ov-scanner').classList.add('open');
+}
+function closeScanner(){
+  document.getElementById('ov-scanner').classList.remove('open');
+}
+
+function resetScanner(){
+  scanFileData=null;scanFileType=null;scanResults=[];
+  ['scan-preview','scan-btn-area','scan-progress','scan-results','scan-error'].forEach(id=>{
+    const el=document.getElementById(id);if(el)el.style.display='none';
+  });
+  const uz=document.getElementById('scan-upload-zone');if(uz)uz.style.display='block';
+  const fi=document.getElementById('scan-file-input');if(fi)fi.value='';
+}
+
+function handleScanDrop(e){
+  e.preventDefault();
+  const uz=document.getElementById('scan-upload-zone');
+  if(uz)uz.classList.remove('dragover');
+  const file=e.dataTransfer.files[0];
+  if(file)handleScanFile(file);
+}
+
+function handleScanFile(file){
+  if(!file)return;
+  if(file.size>10*1024*1024){showScanError('Filen er for stor. Maks 10MB.');return}
+  const isPDF=file.type==='application/pdf'||file.name.toLowerCase().endsWith('.pdf');
+  const isImage=file.type.startsWith('image/');
+  if(!isPDF&&!isImage){showScanError('Ugyldig filtype. Bruk JPG, PNG eller PDF.');return}
+  scanFileType=isPDF?'pdf':'image';
+  const reader=new FileReader();
+  reader.onload=function(ev){
+    scanFileData=ev.target.result.split(',')[1];
+    const prev=document.getElementById('scan-preview');
+    const img=document.getElementById('scan-preview-img');
+    if(isImage&&img){img.src=ev.target.result;}
+    else if(img){img.src='';img.alt='PDF: '+file.name;}
+    if(prev)prev.style.display='block';
+    const pn=document.getElementById('scan-preview-name');
+    if(pn)pn.textContent=file.name+' ('+Math.round(file.size/1024)+' KB)';
+    const uz=document.getElementById('scan-upload-zone');if(uz)uz.style.display='none';
+    const ba=document.getElementById('scan-btn-area');if(ba)ba.style.display='block';
+  };
+  reader.readAsDataURL(file);
+}
+
+async function runAIScan(){
+  if(!scanFileData){showScanError('Last opp en fil forst.');return}
+  document.getElementById('scan-btn-area').style.display='none';
+  document.getElementById('scan-progress').style.display='block';
+  document.getElementById('scan-error').style.display='none';
+  const mediaType=scanFileType==='pdf'?'application/pdf':'image/jpeg';
+  const prompt='Du er en AI-assistent for Four Season AS, en norsk dagligvarebutikk. Analyser denne fakturaen og ekstraher all informasjon. Returner KUN et JSON-objekt, ingen annen tekst: {"leverandor":"navn","fakturanr":"nr","dato":"YYYY-MM-DD","totalInkl":0.00,"linjer":[{"beskrivelse":"produktnavn","varenr":"nr","antall":1,"enhet":"stk","prisPerEnhetInkl":0.00,"totalInkl":0.00,"mva":15}]}. Regler: Priser alltid inkl. MVA. MVA 15% matvarer, 25% non-food/tobakk, 0% paller.';
+  try{
+    const resp=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model:'claude-sonnet-4-20250514',max_tokens:1500,
+        messages:[{role:'user',content:[
+          {type:scanFileType==='pdf'?'document':'image',source:{type:'base64',media_type:mediaType,data:scanFileData}},
+          {type:'text',text:prompt}
+        ]}]
+      })
+    });
+    if(!resp.ok){const err=await resp.json();throw new Error(err.error?.message||'API-feil '+resp.status)}
+    const data=await resp.json();
+    const text=data.content.find(c=>c.type==='text')?.text||'';
+    let parsed;
+    try{const m=text.match(/\{[\s\S]*\}/);parsed=JSON.parse(m?m[0]:text);}
+    catch(e){throw new Error('AI klarte ikke lese fakturaen. Proev klarere bilde.')}
+    scanResults=parsed;showScanResults(parsed);
+  }catch(err){
+    document.getElementById('scan-progress').style.display='none';
+    document.getElementById('scan-btn-area').style.display='block';
+    showScanError('Feil: '+err.message);
+  }
+}
+
+function showScanResults(data){
+  document.getElementById('scan-progress').style.display='none';
+  document.getElementById('scan-results').style.display='block';
+  document.getElementById('scan-result-header').innerHTML=
+    '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><strong>'+(data.leverandor||'Ukjent lev.')+'</strong><span>'+(data.fakturanr||'Uten nr')+'</span></div>'+
+    '<div style="display:flex;justify-content:space-between;opacity:.8"><span>Dato: '+(fmtDate(data.dato)||'')+'</span><span>Total: '+fmtNOK(data.totalInkl||0)+'</span></div>';
+  const container=document.getElementById('scan-lines-list');
+  container.innerHTML='';
+  (data.linjer||[]).forEach((l,i)=>{
+    const prds=dbAll('products');
+    const dw=(l.beskrivelse||'').toLowerCase().split(' ');
+    const match=prds.find(p=>dw.some(w=>w.length>2&&p.navn?.toLowerCase().includes(w)));
+    const div=document.createElement('div');
+    div.className='scan-result-line'+(match?' confirmed':'');
+    div.id='scan-line-'+i;
+    div.innerHTML=
+      '<div class="scan-line-top">'+
+        '<div>'+
+          '<div class="scan-line-name">'+(l.beskrivelse||'Ukjent')+'</div>'+
+          '<div style="font-size:11px;color:var(--muted);margin-top:2px">'+l.antall+' '+(l.enhet||'stk')+' x '+fmtNOK(l.prisPerEnhetInkl)+' = <strong>'+fmtNOK(l.totalInkl)+'</strong> inkl. MVA ('+l.mva+'%)'+(l.varenr?' - Varenr: '+l.varenr:'')+'</div>'+
+          (match?'<div style="font-size:11px;color:var(--ok);margin-top:3px">Matcher: <strong>'+match.navn+'</strong></div>':
+                 '<div style="font-size:11px;color:var(--warn);margin-top:3px">Ikke funnet i produktliste</div>')+
+        '</div>'+
+        '<div class="scan-line-actions">'+
+          '<button class="scan-confirm-btn" onclick="toggleScanLine('+i+',true)">OK</button>'+
+          '<button class="scan-skip-btn" onclick="toggleScanLine('+i+',false)">Hopp</button>'+
+        '</div>'+
+      '</div>'+
+      '<div class="fr3" style="margin-top:8px">'+
+        '<div><label class="fl">Antall kolli</label><input class="fi" type="number" step="0.01" value="'+l.antall+'" id="sl-antall-'+i+'" style="padding:8px"></div>'+
+        '<div><label class="fl">Kg/stk per kolli</label><input class="fi" type="number" step="0.001" placeholder="F.eks. 5" id="sl-vekt-'+i+'" style="padding:8px"></div>'+
+        '<div><label class="fl">Pris/kolli inkl.</label><input class="fi" type="number" step="0.01" value="'+l.prisPerEnhetInkl+'" id="sl-pris-'+i+'" style="padding:8px"></div>'+
+      '</div>';
+    container.appendChild(div);
+  });
+}
+
+function toggleScanLine(i,confirm){
+  const el=document.getElementById('scan-line-'+i);
+  if(!el)return;
+  el.classList.toggle('confirmed',confirm);
+  el.classList.toggle('skipped',!confirm);
+}
+
+function confirmScanToInnkjop(){
+  const data=scanResults;
+  if(!data||!data.linjer){showToast('Ingen data','err');return}
+  if(data.dato)document.getElementById('inn-dato').value=data.dato;
+  if(data.fakturanr)document.getElementById('inn-faktura').value=data.fakturanr;
+  if(data.leverandor)document.getElementById('inn-lev').value=data.leverandor;
+  pLines=[];
+  const prds=dbAll('products');
+  data.linjer.forEach((l,i)=>{
+    const el=document.getElementById('scan-line-'+i);
+    if(el&&el.classList.contains('skipped'))return;
+    const dw=(l.beskrivelse||'').toLowerCase().split(' ');
+    const match=prds.find(p=>dw.some(w=>w.length>2&&p.navn?.toLowerCase().includes(w)));
+    const antall=parseFloat(document.getElementById('sl-antall-'+i)?.value)||l.antall||1;
+    const vekt=parseFloat(document.getElementById('sl-vekt-'+i)?.value)||1;
+    const pris=parseFloat(document.getElementById('sl-pris-'+i)?.value)||l.prisPerEnhetInkl||0;
+    pLines.push({productId:match?match.id:'',antall,vektPerKolli:vekt,prisPerKolliInkl:pris,vatRate:l.mva||15});
+  });
+  closeScanner();renderPLines();
+  showToast('AI overforte '+pLines.length+' linjer');
+}
+
+function showScanError(msg){
+  const el=document.getElementById('scan-error');
+  if(el){el.textContent=msg;el.style.display='block';}
+}
 </script>
 
 <!-- ══════════════════════════════════════
