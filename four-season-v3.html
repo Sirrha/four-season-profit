@@ -1916,8 +1916,16 @@ document.head.appendChild(shakeStyle);
 // ─────────────────────────────────────────
 let scanFileData=null,scanFileType=null,scanResults=[];
 
+function saveApiKey(val){
+  if(val&&val.startsWith('sk-ant')){
+    localStorage.setItem('fs_anthropic_key',val);
+  }
+}
 function openScanner(){
   resetScanner();
+  // Load saved API key
+  const saved=localStorage.getItem('fs_anthropic_key');
+  if(saved)document.getElementById('scan-apikey').value=saved;
   document.getElementById('ov-scanner').classList.add('open');
 }
 function closeScanner(){
@@ -2081,6 +2089,19 @@ function showScanError(msg){
       <div style="font-size:11px;color:var(--muted);margin-top:2px">Last opp faktura — AI leser og registrerer automatisk</div>
     </div>
     <span class="scan-ai-badge">AI</span>
+  </div>
+
+  <!-- API Key input -->
+  <div id="scan-apikey-section" style="margin-bottom:14px">
+    <div style="background:#f7f6f2;border:1.5px solid var(--border);border-radius:10px;padding:12px">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">🔑 Anthropic API-nøkkel</div>
+      <input class="fi" id="scan-apikey" type="password" placeholder="sk-ant-..." autocomplete="off"
+        style="margin-bottom:6px;font-family:'DM Mono',monospace;font-size:13px"
+        oninput="saveApiKey(this.value)">
+      <div style="font-size:11px;color:var(--muted)">
+        Hent gratis API-nøkkel på <a href="https://console.anthropic.com" target="_blank" style="color:var(--accent)">console.anthropic.com</a> → API Keys → Create Key
+      </div>
+    </div>
   </div>
 
   <!-- Upload zone -->
