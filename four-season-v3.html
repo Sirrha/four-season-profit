@@ -231,6 +231,30 @@ select.fi:focus{background-color:#fff}
 .login-user-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(77,184,118,.2);border:1px solid rgba(77,184,118,.4);color:var(--accent);padding:4px 10px;border-radius:20px;font-size:12px;font-weight:600}
 /* User badge in header */
 .user-badge{background:rgba(255,255,255,.13);border:none;color:#fff;padding:5px 10px;border-radius:7px;font-family:'Sora',sans-serif;font-size:11px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:5px}
+
+/* ── AI SCANNER ── */
+#ov-scanner{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:600;display:none;align-items:flex-end}
+#ov-scanner.open{display:flex}
+.scanner-modal{background:var(--card);border-radius:18px 18px 0 0;width:100%;max-height:95vh;overflow-y:auto;padding:17px 14px 36px;animation:su .22s ease}
+.upload-zone{border:2px dashed var(--border);border-radius:12px;padding:28px 16px;text-align:center;cursor:pointer;transition:all .2s;background:var(--bg);margin-bottom:14px}
+.upload-zone:active,.upload-zone.dragover{border-color:var(--accent);background:#f0fff6}
+.upload-zone .uz-icon{font-size:36px;margin-bottom:8px}
+.upload-zone .uz-text{font-size:14px;font-weight:600;color:var(--primary)}
+.upload-zone .uz-sub{font-size:12px;color:var(--muted);margin-top:4px}
+.scan-result-line{background:var(--bg);border-radius:10px;padding:12px;margin-bottom:8px;border:1.5px solid var(--border)}
+.scan-result-line.confirmed{border-color:var(--accent);background:#f0fff6}
+.scan-result-line.skipped{opacity:.4}
+.scan-line-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.scan-line-name{font-weight:700;font-size:14px}
+.scan-line-actions{display:flex;gap:6px}
+.scan-confirm-btn{background:var(--accent);color:#fff;border:none;padding:5px 10px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Sora',sans-serif}
+.scan-skip-btn{background:transparent;color:var(--muted);border:1.5px solid var(--border);padding:5px 10px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Sora',sans-serif}
+.scan-ai-badge{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;padding:3px 8px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:.3px}
+.scan-progress{background:var(--primary);color:#fff;border-radius:12px;padding:16px;text-align:center;margin-bottom:14px}
+.scan-progress .sp-icon{font-size:28px;animation:pulse2 1s ease infinite;margin-bottom:6px}
+@keyframes pulse2{0%,100%{transform:scale(1)}50%{transform:scale(1.15)}}
+.scan-progress .sp-text{font-size:13px;font-weight:600}
+.scan-progress .sp-sub{font-size:11px;opacity:.7;margin-top:3px}
 </style>
 </head>
 <body>
@@ -468,6 +492,10 @@ service cloud.firestore {
 <div class="modal">
   <div class="mh"></div>
   <div class="mt">Nytt innkjøp / faktura</div>
+  <!-- AI Scanner button -->
+  <button class="btn btn-f" onclick="openScanner()" style="background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;margin-bottom:14px;font-size:13px">
+    🤖 Skann faktura med AI — last opp bilde eller PDF
+  </button>
   <div class="fr">
     <div class="fg"><label class="fl">Dato *</label><input class="fi" id="inn-dato" type="date"></div>
     <div class="fg"><label class="fl">Fakturanr.</label><input class="fi" id="inn-faktura" placeholder="F-2024-001" autocomplete="off"></div>
@@ -1883,5 +1911,73 @@ document.head.appendChild(shakeStyle);
   initFirebase(FIREBASE_CONFIG);
 })();
 </script>
+
+<!-- ══════════════════════════════════════
+     AI FAKTURA SKANNER MODAL
+══════════════════════════════════════ -->
+<div id="ov-scanner">
+<div class="scanner-modal">
+  <div class="mh"></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <div>
+      <div style="font-size:17px;font-weight:700">🤖 AI Fakturaskanner</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:2px">Last opp faktura — AI leser og registrerer automatisk</div>
+    </div>
+    <span class="scan-ai-badge">AI</span>
+  </div>
+
+  <!-- Upload zone -->
+  <div id="scan-upload-zone" class="upload-zone" onclick="document.getElementById('scan-file-input').click()" 
+       ondragover="event.preventDefault();this.classList.add('dragover')"
+       ondragleave="this.classList.remove('dragover')"
+       ondrop="handleScanDrop(event)">
+    <div class="uz-icon">📄</div>
+    <div class="uz-text">Trykk for å laste opp faktura</div>
+    <div class="uz-sub">Støtter JPG, PNG, PDF · Maks 10MB</div>
+  </div>
+  <input type="file" id="scan-file-input" accept="image/*,.pdf" style="display:none" onchange="handleScanFile(this.files[0])">
+
+  <!-- Preview -->
+  <div id="scan-preview" style="display:none;margin-bottom:14px">
+    <img id="scan-preview-img" style="width:100%;border-radius:10px;max-height:200px;object-fit:contain;background:#f0f0f0">
+    <div id="scan-preview-name" style="font-size:11px;color:var(--muted);margin-top:5px;text-align:center"></div>
+  </div>
+
+  <!-- Scan button -->
+  <div id="scan-btn-area" style="display:none">
+    <button class="btn btn-f" onclick="runAIScan()" style="background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;margin-bottom:14px">
+      🤖 Start AI-skanning
+    </button>
+  </div>
+
+  <!-- Progress -->
+  <div id="scan-progress" style="display:none">
+    <div class="scan-progress">
+      <div class="sp-icon">🤖</div>
+      <div class="sp-text">AI leser fakturaen…</div>
+      <div class="sp-sub">Dette tar noen sekunder</div>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div id="scan-results" style="display:none">
+    <div style="font-size:13px;font-weight:700;margin-bottom:10px;color:var(--primary)">
+      📋 AI fant disse varene — bekreft og juster:
+    </div>
+    <div id="scan-result-header" style="background:var(--primary);color:#fff;border-radius:10px;padding:11px 13px;margin-bottom:10px;font-size:12px"></div>
+    <div id="scan-lines-list"></div>
+    <div style="margin-top:14px;display:flex;gap:8px">
+      <button class="btn btn-p" style="flex:1" onclick="confirmScanToInnkjop()">✅ Overfør til innkjøp</button>
+      <button class="btn btn-g" onclick="closeScanner()">Avbryt</button>
+    </div>
+  </div>
+
+  <!-- Error -->
+  <div id="scan-error" style="display:none;background:#fdecea;border:1.5px solid #f5a0a0;border-radius:10px;padding:12px;font-size:13px;color:var(--danger);margin-bottom:14px"></div>
+
+  <button class="btn btn-g btn-f" onclick="closeScanner()" style="margin-top:8px">Lukk</button>
+</div>
+</div>
+
 </body>
 </html>
