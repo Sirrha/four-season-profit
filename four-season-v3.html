@@ -1986,7 +1986,7 @@ async function runAIScan(){
   document.getElementById('scan-btn-area').style.display='none';
   document.getElementById('scan-progress').style.display='block';
   document.getElementById('scan-error').style.display='none';
-  const mediaType=scanFileType==='pdf'?'application/pdf':'image/jpeg';
+  const mediaType=scanFileType==='pdf'?'application/pdf':(scanFileType==='png'?'image/png':'image/jpeg');
   const prompt='Du er en AI-assistent for Four Season AS, en norsk dagligvarebutikk. Analyser denne fakturaen og ekstraher all informasjon. Returner KUN et JSON-objekt, ingen annen tekst: {"leverandor":"navn","fakturanr":"nr","dato":"YYYY-MM-DD","totalInkl":0.00,"linjer":[{"beskrivelse":"produktnavn","varenr":"nr","antall":1,"enhet":"stk","prisPerEnhetInkl":0.00,"totalInkl":0.00,"mva":15}]}. Regler: Priser alltid inkl. MVA. MVA 15% matvarer, 25% non-food/tobakk, 0% paller.';
   try{
     const apiKey=document.getElementById('scan-apikey').value.trim()||localStorage.getItem('fs_anthropic_key')||'';
@@ -2001,7 +2001,9 @@ async function runAIScan(){
       body:JSON.stringify({
         model:'claude-sonnet-4-20250514',max_tokens:1500,
         messages:[{role:'user',content:[
-          {type:scanFileType==='pdf'?'document':'image',source:{type:'base64',media_type:mediaType,data:scanFileData}},
+          scanFileType==='pdf'
+            ? {type:'document',source:{type:'base64',media_type:'application/pdf',data:scanFileData}}
+            : {type:'image',source:{type:'base64',media_type:mediaType,data:scanFileData}},
           {type:'text',text:prompt}
         ]}]
       })
