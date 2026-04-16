@@ -454,10 +454,10 @@ service cloud.firestore {
   </div>
   <div class="stitle">Priser</div>
   <div class="pgrid">
-    <div><label class="fl">Innkjøpspris inkl. MVA</label><input class="fi" id="prd-buy-inkl" type="number" step="0.01" min="0" placeholder="0,00" oninput="syncPrdPrices('buy-inkl')"></div>
-    <div><label class="fl">Innkjøpspris eks. MVA</label><input class="fi" id="prd-buy-eks" type="number" step="0.01" min="0" placeholder="0,00" oninput="syncPrdPrices('buy-eks')"></div>
+    <div><label class="fl">Innkjøpspris eks. MVA *</label><input class="fi" id="prd-buy-eks" type="number" step="0.01" min="0" placeholder="0,00" oninput="syncPrdPrices('buy-eks')"></div>
+    <div><label class="fl">Innkjøpspris inkl. MVA (auto)</label><input class="fi fi-auto" id="prd-buy-inkl" type="number" step="0.01" min="0" placeholder="Beregnes…" readonly></div>
     <div><label class="fl">Salgspris eks. MVA *</label><input class="fi" id="prd-sell-eks" type="number" step="0.01" min="0" placeholder="0,00" oninput="syncPrdPrices('sell-eks')"></div>
-    <div><label class="fl">Utpris inkl. MVA</label><input class="fi" id="prd-sell-inkl" type="number" step="0.01" min="0" placeholder="0,00" oninput="syncPrdPrices('sell-inkl')"></div>
+    <div><label class="fl">Utpris inkl. MVA (auto)</label><input class="fi fi-auto" id="prd-sell-inkl" type="number" step="0.01" min="0" placeholder="Beregnes…" readonly></div>
   </div>
   <div id="prd-gm-preview"></div>
   <button class="btn btn-p btn-f" id="prd-save-btn" onclick="saveProdukt()">💾 Lagre produkt</button>
@@ -949,17 +949,18 @@ function openProduktModal(id=null){
 }
 function syncPrdPrices(src){
   const mva=parseInt(document.getElementById('prd-mva').value)||15,f=1+mva/100;
-  const bi=parseFloat(document.getElementById('prd-buy-inkl').value)||0;
   const be=parseFloat(document.getElementById('prd-buy-eks').value)||0;
   const se=parseFloat(document.getElementById('prd-sell-eks').value)||0;
-  const si=parseFloat(document.getElementById('prd-sell-inkl').value)||0;
-  if(src==='buy-inkl'&&bi)document.getElementById('prd-buy-eks').value=(bi/f).toFixed(4);
-  if(src==='buy-eks'&&be)document.getElementById('prd-buy-inkl').value=(be*f).toFixed(4);
-  if(src==='sell-eks'&&se)document.getElementById('prd-sell-inkl').value=(se*f).toFixed(4);
-  if(src==='sell-inkl'&&si)document.getElementById('prd-sell-eks').value=(si/f).toFixed(4);
-  if(src==='mva'){
-    if(bi)document.getElementById('prd-buy-eks').value=(bi/f).toFixed(4);else if(be)document.getElementById('prd-buy-inkl').value=(be*f).toFixed(4);
-    if(se)document.getElementById('prd-sell-inkl').value=(se*f).toFixed(4);else if(si)document.getElementById('prd-sell-eks').value=(si/f).toFixed(4);
+  // Always auto-calculate inkl from eks
+  if(be>0){
+    document.getElementById('prd-buy-inkl').value=(be*f).toFixed(2);
+  } else {
+    document.getElementById('prd-buy-inkl').value='';
+  }
+  if(se>0){
+    document.getElementById('prd-sell-inkl').value=(se*f).toFixed(2);
+  } else {
+    document.getElementById('prd-sell-inkl').value='';
   }
   updatePrdGmPreview();
 }
@@ -1390,6 +1391,9 @@ function renderRapporter(){
     <button class="tab ${rapTab==='kategorier'?'active':''}" onclick="rapTab='kategorier';renderRapContent()">📂 Kategorier</button>
     <button class="tab ${rapTab==='produkter'?'active':''}" onclick="rapTab='produkter';renderRapContent()">📦 Produkter</button>
     <button class="tab ${rapTab==='dag'?'active':''}" onclick="rapTab='dag';renderRapContent()">📅 Per dag</button>
+    <button class="tab ${rapTab==='svinnrap'?'active':''}" onclick="rapTab='svinnrap';renderRapContent()">🗑️ Svinn</button>
+    <button class="tab ${rapTab==='ukerapport'?'active':''}" onclick="rapTab='ukerapport';renderRapContent()">📆 Uke vs Uke</button>
+    <button class="tab ${rapTab==='graf'?'active':''}" onclick="rapTab='graf';renderRapContent()">📈 Graf</button>
   </div><div id="rap-content"></div>`;
   renderRapContent();
 }
@@ -1398,7 +1402,10 @@ function renderRapContent(){
   if(rapTab==='fakturaer')el.innerHTML=rapFakturaer();
   else if(rapTab==='kategorier')el.innerHTML=rapKategorier();
   else if(rapTab==='produkter')el.innerHTML=rapProdukter();
-  else el.innerHTML=rapDag();
+  else if(rapTab==='dag')el.innerHTML=rapDag();
+  else if(rapTab==='svinnrap')el.innerHTML=rapSvinn();
+  else if(rapTab==='ukerapport')el.innerHTML=rapUkeVsUke();
+  else if(rapTab==='graf'){el.innerHTML='<div id="graf-container"></div>';rapGraf();}
 }
 function rapFakturaer(){
   const purchases=dbAll('purchases').slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
@@ -1505,6 +1512,214 @@ function rapDag(){
     </div>`;
   });
   return html+'</div>';
+}
+
+
+// ─────────────────────────────────────────
+// RAPPORT: SVINN
+// ─────────────────────────────────────────
+function rapSvinn(){
+  const svinns=dbAll('svinn');
+  const prds=dbAll('products');
+  if(!svinns.length)return`<div class="empty"><div class="ei">✅</div><p>Ingen svinn registrert ennå!</p></div>`;
+
+  // Totals
+  const totKost=svinns.reduce((a,s)=>{const p=dbFind('products',s.productId);return a+(s.kostverdi||(p?(s.qty||0)*(p.buyEks||0):0))},0);
+
+  // Group by product
+  const byPrd={};
+  svinns.forEach(s=>{
+    if(!byPrd[s.productId])byPrd[s.productId]={qty:0,kost:0,count:0};
+    const p=dbFind('products',s.productId);
+    byPrd[s.productId].qty+=(s.qty||0);
+    byPrd[s.productId].kost+=(s.kostverdi||(p?(s.qty||0)*(p.buyEks||0):0));
+    byPrd[s.productId].count++;
+  });
+
+  // Sort by cost
+  const sorted=Object.entries(byPrd).sort((a,b)=>b[1].kost-a[1].kost);
+
+  // Group by reason
+  const byArsak={};
+  svinns.forEach(s=>{
+    if(!byArsak[s.arsak])byArsak[s.arsak]={count:0,kost:0};
+    const p=dbFind('products',s.productId);
+    byArsak[s.arsak].count++;
+    byArsak[s.arsak].kost+=(s.kostverdi||(p?(s.qty||0)*(p.buyEks||0):0));
+  });
+
+  const ARSAK_L={utgatt:'Utgått dato',skadet:'Skadet/knust',tyveri:'Tyveri/svinn',annet:'Annet'};
+
+  let html=`
+  <div class="sg" style="margin-bottom:10px">
+    <div class="sc"><div class="sl">Total svinnkostnad</div><div class="sv r">${fmtNOK(totKost)}</div></div>
+    <div class="sc"><div class="sl">Antall poster</div><div class="sv">${svinns.length}</div></div>
+  </div>
+
+  <div class="stitle">Årsaker</div>
+  <div class="card" style="padding:0 14px">`;
+  Object.entries(byArsak).forEach(([k,v])=>{
+    html+=`<div class="li">
+      <div class="lim"><div class="lit">${ARSAK_L[k]||k}</div>
+      <div class="lis">${v.count} registrering${v.count!==1?'er':''}</div></div>
+      <div class="liv r">${fmtNOK(v.kost)}</div>
+    </div>`;
+  });
+  html+=`</div>
+
+  <div class="stitle">Produkter med mest svinn (kostnad)</div>
+  <div class="card" style="padding:0 14px">`;
+  sorted.forEach(([pid,v])=>{
+    const p=dbFind('products',pid);
+    html+=`<div class="li">
+      <div style="font-size:20px;flex-shrink:0">${p?CATS[p.kategori]?.emoji||'📦':'📦'}</div>
+      <div class="lim"><div class="lit">${p?.navn||'Ukjent'}</div>
+      <div class="lis">${fmtN(v.qty,2)} ${p?.enhet||''} · ${v.count} poster</div></div>
+      <div class="liv r">${fmtNOK(v.kost)}</div>
+    </div>`;
+  });
+  html+=`</div>`;
+  return html;
+}
+
+// ─────────────────────────────────────────
+// RAPPORT: UKE VS UKE
+// ─────────────────────────────────────────
+function rapUkeVsUke(){
+  const purchases=dbAll('purchases');
+  if(!purchases.length)return`<div class="empty"><div class="ei">📆</div><p>Ingen data ennå.</p></div>`;
+
+  function getWeekNum(dateStr){
+    const d=new Date(dateStr);
+    const startOfYear=new Date(d.getFullYear(),0,1);
+    return Math.ceil(((d-startOfYear)/86400000+startOfYear.getDay()+1)/7);
+  }
+  function getWeekKey(dateStr){
+    const d=new Date(dateStr);
+    return d.getFullYear()+'-W'+String(getWeekNum(dateStr)).padStart(2,'0');
+  }
+  function getWeekLabel(key){
+    const [yr,w]=key.split('-W');
+    return`Uke ${w}, ${yr}`;
+  }
+
+  const weekMap={};
+  purchases.forEach(p=>{
+    if(!p.dato)return;
+    const wk=getWeekKey(p.dato);
+    if(!weekMap[wk])weekMap[wk]={buyEks:0,buyInkl:0,salgEks:0,gmKr:0,count:0};
+    const s=calcPurchaseStats(p);
+    weekMap[wk].buyEks+=s.buyEksTotal;weekMap[wk].buyInkl+=s.buyInklTotal;
+    weekMap[wk].salgEks+=s.forvSalgEks;weekMap[wk].gmKr+=s.gmKr;weekMap[wk].count++;
+  });
+
+  const weeks=Object.entries(weekMap).sort((a,b)=>b[0].localeCompare(a[0])).slice(0,8);
+  if(weeks.length<2)return`<div class="empty"><div class="ei">📆</div><p>Trenger data fra minst 2 uker for sammenligning.</p></div>`;
+
+  let html=`<div class="stitle">Siste 8 uker — sammenligning</div>`;
+
+  weeks.forEach(([wk,v],i)=>{
+    const prev=weeks[i+1];
+    const gmPct=v.salgEks>0?(v.gmKr/v.salgEks)*100:0;
+    let trendHtml='';
+    if(prev){
+      const diff=v.gmKr-prev[1].gmKr;
+      const pct=prev[1].gmKr>0?(diff/Math.abs(prev[1].gmKr))*100:0;
+      const up=diff>=0;
+      trendHtml=`<span style="font-size:11px;color:${up?'var(--ok)':'var(--danger)'}">${up?'▲':'▼'} ${fmtNOK(Math.abs(diff))} (${fmtPct(Math.abs(pct))})</span>`;
+    }
+    html+=`<div class="card" style="padding:12px 14px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <strong style="font-size:14px">${getWeekLabel(wk)}</strong>
+        ${trendHtml}
+      </div>
+      <div class="sg sg3" style="margin-bottom:0">
+        <div class="sc" style="padding:8px"><div class="sl">Innkjøp inkl.</div><div class="sv" style="font-size:14px">${fmtNOK(v.buyInkl)}</div></div>
+        <div class="sc" style="padding:8px"><div class="sl">GM kr</div><div class="sv ${v.gmKr>=0?'g':'r'}" style="font-size:14px">${fmtNOK(v.gmKr)}</div></div>
+        <div class="sc" style="padding:8px"><div class="sl">GM%</div><div class="sv" style="font-size:14px"><span class="mlbl ${marginCls(gmPct)}">${fmtPct(gmPct)}</span></div></div>
+      </div>
+    </div>`;
+  });
+  return html;
+}
+
+// ─────────────────────────────────────────
+// RAPPORT: GRAF (GM over tid)
+// ─────────────────────────────────────────
+function rapGraf(){
+  const purchases=dbAll('purchases');
+  if(!purchases.length){
+    document.getElementById('graf-container').innerHTML=`<div class="empty"><div class="ei">📈</div><p>Ingen data ennå.</p></div>`;
+    return;
+  }
+
+  // Build daily data
+  const dayMap={};
+  purchases.forEach(p=>{
+    if(!p.dato)return;
+    if(!dayMap[p.dato])dayMap[p.dato]={buyInkl:0,gmKr:0,gmPct:0,salgEks:0};
+    const s=calcPurchaseStats(p);
+    dayMap[p.dato].buyInkl+=s.buyInklTotal;
+    dayMap[p.dato].salgEks+=s.forvSalgEks;
+    dayMap[p.dato].gmKr+=s.gmKr;
+  });
+  Object.keys(dayMap).forEach(d=>{
+    const v=dayMap[d];
+    v.gmPct=v.salgEks>0?(v.gmKr/v.salgEks)*100:0;
+  });
+
+  const days=Object.entries(dayMap).sort((a,b)=>a[0].localeCompare(b[0])).slice(-30);
+  const maxBuy=Math.max(...days.map(d=>d[1].buyInkl),1);
+  const maxGm=Math.max(...days.map(d=>Math.abs(d[1].gmKr)),1);
+
+  const W=days.length;
+  const barW=Math.max(8,Math.floor(320/W)-2);
+
+  let barsHtml='';
+  days.forEach(([dato,v])=>{
+    const buyH=Math.round((v.buyInkl/maxBuy)*80);
+    const gmH=Math.round((Math.abs(v.gmKr)/maxGm)*80);
+    const gmPos=v.gmKr>=0;
+    const label=fmtDate(dato).slice(0,5);
+    barsHtml+=`<div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex:1;min-width:${barW}px;cursor:pointer" title="${label}&#10;Innkjøp: ${fmtNOK(v.buyInkl)}&#10;GM: ${fmtNOK(v.gmKr)} (${fmtPct(v.gmPct)})">
+      <div style="display:flex;gap:1px;align-items:flex-end;height:80px">
+        <div style="width:${barW/2-1}px;height:${buyH}px;background:rgba(255,255,255,.25);border-radius:2px 2px 0 0"></div>
+        <div style="width:${barW/2-1}px;height:${gmH}px;background:${gmPos?'var(--accent)':'var(--danger)'};border-radius:2px 2px 0 0"></div>
+      </div>
+      <div style="font-size:8px;color:rgba(255,255,255,.5);transform:rotate(-45deg);margin-top:4px;white-space:nowrap">${label}</div>
+    </div>`;
+  });
+
+  document.getElementById('graf-container').innerHTML=`
+    <div class="stitle">GM per dag — siste ${days.length} dager</div>
+    <div style="background:var(--primary);border-radius:var(--r);padding:16px;overflow-x:auto">
+      <div style="display:flex;gap:16px;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:rgba(255,255,255,.7)">
+          <div style="width:10px;height:10px;background:rgba(255,255,255,.25);border-radius:2px"></div>Innkjøp inkl.
+        </div>
+        <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:rgba(255,255,255,.7)">
+          <div style="width:10px;height:10px;background:var(--accent);border-radius:2px"></div>GM kr
+        </div>
+      </div>
+      <div style="display:flex;align-items:flex-end;gap:2px;min-width:${W*(barW+2)}px;padding-bottom:28px">
+        ${barsHtml}
+      </div>
+    </div>
+
+    <div class="stitle" style="margin-top:16px">GM% per dag</div>
+    <div class="card" style="padding:0 14px">
+      ${days.slice().reverse().slice(0,10).map(([dato,v])=>`
+      <div class="li">
+        <div style="width:44px;flex-shrink:0;text-align:center">
+          <div style="font-size:12px;font-weight:700">${fmtDate(dato).slice(0,5)}</div>
+        </div>
+        <div class="lim">
+          <div style="font-size:13px;font-weight:600">Innkjøp: ${fmtNOK(v.buyInkl)}</div>
+          <div style="font-size:11px;color:var(--muted)">GM kr: ${fmtNOK(v.gmKr)}</div>
+        </div>
+        <div style="text-align:right">${marginBadge(v.gmPct)}</div>
+      </div>`).join('')}
+    </div>`;
 }
 
 // ─────────────────────────────────────────
