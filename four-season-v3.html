@@ -2008,13 +2008,12 @@ async function runAIScan(){
       ]}]
     });
     
-    // Use CORS proxy to bypass browser restrictions
-    const PROXY='https://corsproxy.io/?url=';
-    const TARGET='https://api.anthropic.com/v1/messages';
+    // Use Cloudflare Worker proxy
+    const WORKER_URL='https://fourseason.herishhashemi.workers.dev';
     
     const resp = await new Promise((resolve,reject)=>{
       const xhr=new XMLHttpRequest();
-      xhr.open('POST', PROXY+encodeURIComponent(TARGET));
+      xhr.open('POST', WORKER_URL);
       xhr.setRequestHeader('Content-Type','application/json');
       xhr.setRequestHeader('x-api-key',apiKey);
       xhr.setRequestHeader('anthropic-version','2023-06-01');
