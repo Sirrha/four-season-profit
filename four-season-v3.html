@@ -1989,9 +1989,15 @@ async function runAIScan(){
   const mediaType=scanFileType==='pdf'?'application/pdf':'image/jpeg';
   const prompt='Du er en AI-assistent for Four Season AS, en norsk dagligvarebutikk. Analyser denne fakturaen og ekstraher all informasjon. Returner KUN et JSON-objekt, ingen annen tekst: {"leverandor":"navn","fakturanr":"nr","dato":"YYYY-MM-DD","totalInkl":0.00,"linjer":[{"beskrivelse":"produktnavn","varenr":"nr","antall":1,"enhet":"stk","prisPerEnhetInkl":0.00,"totalInkl":0.00,"mva":15}]}. Regler: Priser alltid inkl. MVA. MVA 15% matvarer, 25% non-food/tobakk, 0% paller.';
   try{
+    const apiKey=document.getElementById('scan-apikey').value.trim()||localStorage.getItem('fs_anthropic_key')||'';
     const resp=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:{
+        'Content-Type':'application/json',
+        'x-api-key':apiKey,
+        'anthropic-version':'2023-06-01',
+        'anthropic-dangerous-allow-browser':'true'
+      },
       body:JSON.stringify({
         model:'claude-sonnet-4-20250514',max_tokens:1500,
         messages:[{role:'user',content:[
