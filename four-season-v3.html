@@ -2008,15 +2008,32 @@ async function runAIScan(){
       ]}]
     });
     
+    // Use CORS proxy to bypass browser restrictions
+    const PROXY='https://corsproxy.io/?url=';
+    const TARGET='https://api.anthropic.com/v1/messages';
+    
     const resp = await new Promise((resolve,reject)=>{
       const xhr=new XMLHttpRequest();
-      xhr.open('POST','https://api.anthropic.com/v1/messages');
+      xhr.open('POST', PROXY+encodeURIComponent(TARGET));
       xhr.setRequestHeader('Content-Type','application/json');
       xhr.setRequestHeader('x-api-key',apiKey);
       xhr.setRequestHeader('anthropic-version','2023-06-01');
       xhr.setRequestHeader('anthropic-dangerous-allow-browser','true');
-      xhr.onload=()=>resolve({ok:xhr.status>=200&&xhr.status<300,status:xhr.status,json:()=>Promise.resolve(JSON.parse(xhr.responseText))});
-      xhr.onerror=()=>reject(new Error('Nettverksfeil — sjekk internettforbindelsen'));
+      xhr.onload=()=>{
+        if(xhr.status===200){
+          resolve({ok:true,status:xhr.status,json:()=>Promise.resolve(JSON.parse(xhr.responseText))});
+        } else {
+          try{
+            const err=JSON.parse(xhr.responseText);
+            reject(new Error(err.error?.message||'API-feil: '+xhr.status+' — '+xhr.responseText.slice(0,100)));
+          }catch(e){
+            reject(new Error('API-feil '+xhr.status));
+          }
+        }
+      };
+      xhr.onerror=()=>reject(new Error('Nettverksfeil. Sjekk at du er på internett.'));
+      xhr.ontimeout=()=>reject(new Error('Tidsavbrudd — prøv igjen'));
+      xhr.timeout=30000;
       xhr.send(requestBody);
     });
     const fakeResp = resp; // compatibility
