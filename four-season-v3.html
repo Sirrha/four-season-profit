@@ -1917,15 +1917,24 @@ document.head.appendChild(shakeStyle);
 let scanFileData=null,scanFileType=null,scanResults=[];
 
 function saveApiKey(val){
+  const status=document.getElementById('apikey-status');
   if(val&&val.startsWith('sk-ant')){
     localStorage.setItem('fs_anthropic_key',val);
+    if(status){status.textContent='✅ API-nøkkel lagret!';status.style.color='var(--accent)';}
+  } else if(val&&val.length>5){
+    if(status){status.textContent='⚠️ Ugyldig nøkkel — skal starte med sk-ant-...';status.style.color='#f88';}
   }
 }
 function openScanner(){
   resetScanner();
   // Load saved API key
   const saved=localStorage.getItem('fs_anthropic_key');
-  if(saved)document.getElementById('scan-apikey').value=saved;
+  const keyInput=document.getElementById('scan-apikey');
+  const status=document.getElementById('apikey-status');
+  if(saved){
+    keyInput.value=saved;
+    if(status){status.textContent='✅ API-nøkkel lagret fra forrige gang!';status.style.color='var(--accent)';}
+  }
   document.getElementById('ov-scanner').classList.add('open');
 }
 function closeScanner(){
@@ -2091,15 +2100,15 @@ function showScanError(msg){
     <span class="scan-ai-badge">AI</span>
   </div>
 
-  <!-- API Key input -->
+  <!-- API Key input - prominent -->
   <div id="scan-apikey-section" style="margin-bottom:14px">
-    <div style="background:#f7f6f2;border:1.5px solid var(--border);border-radius:10px;padding:12px">
-      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">🔑 Anthropic API-nøkkel</div>
-      <input class="fi" id="scan-apikey" type="password" placeholder="sk-ant-..." autocomplete="off"
-        style="margin-bottom:6px;font-family:'DM Mono',monospace;font-size:13px"
+    <div style="background:var(--primary);border-radius:10px;padding:13px">
+      <div style="font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">🔑 Steg 1 — Lim inn API-nøkkel</div>
+      <input id="scan-apikey" type="text" placeholder="sk-ant-api03-..." autocomplete="off"
+        style="width:100%;padding:10px 12px;border-radius:8px;border:2px solid rgba(77,184,118,.5);background:rgba(255,255,255,.1);color:#fff;font-family:'DM Mono',monospace;font-size:13px;outline:none;margin-bottom:7px"
         oninput="saveApiKey(this.value)">
-      <div style="font-size:11px;color:var(--muted)">
-        Hent gratis API-nøkkel på <a href="https://console.anthropic.com" target="_blank" style="color:var(--accent)">console.anthropic.com</a> → API Keys → Create Key
+      <div id="apikey-status" style="font-size:11px;color:rgba(255,255,255,.6)">
+        Kopier nøkkelen fra console.anthropic.com → API Keys
       </div>
     </div>
   </div>
