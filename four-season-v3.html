@@ -2008,7 +2008,7 @@ async function runAIScan(){
     : {type:'image', source:{type:'base64', media_type:mediaType, data:scanFileData}};
 
   var reqBody = JSON.stringify({
-    model: 'claude-3-5-sonnet-20241022',
+    model: 'claude-sonnet-4-6',
     max_tokens: 1500,
     messages: [{role:'user', content:[contentItem, {type:'text',text:prompt}]}]
   });
@@ -2031,10 +2031,21 @@ async function runAIScan(){
       text = data.content.find(function(c){return c.type==='text';}).text || '';
     }
     
-    var match = text.match(/{[\s\S]*}/);
     var parsed;
-    try { parsed = JSON.parse(match ? match[0] : text); }
-    catch(e){ throw new Error('AI klarte ikke lese fakturaen. Prøv et klarere bilde.'); }
+    try {
+      // Clean the response - remove markdown code blocks
+      var cleaned = text
+        .replace(/```json/gi,'')
+        .replace(/```/g,'')
+        .trim();
+      
+      // Extract JSON object
+      var match = cleaned.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(match ? match[0] : cleaned);
+      
+    } catch(e){ 
+      throw new Error('JSON-feil. AI svarte: ' + text.slice(0,200));
+    }
 
     scanResults = parsed;
     showScanResults(parsed);
