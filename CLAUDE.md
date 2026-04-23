@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository shape
 
-The entire application is **one file**: `four-season-v25.html` (~5300 lines, ~300 KB). There is no build system, no package manager, no test suite, no linter config. HTML, CSS and JavaScript all live inline in that single file.
+The entire application is **one file**: `index.html` (~5300 lines, ~300 KB). There is no build system, no package manager, no test suite, no linter config. HTML, CSS and JavaScript all live inline in that single file.
 
-- **Run locally**: open `four-season-v25.html` directly in a browser, or serve the folder statically (e.g. `python -m http.server`) — no build step.
+- **Run locally**: open `index.html` directly in a browser, or serve the folder statically (e.g. `python -m http.server`) — no build step.
 - **Deploy**: committing to `main` is the deploy (the file is self-contained and served as a static asset).
 - **Firebase config** is hardcoded in the `boot()` IIFE near the bottom of the `<script>` block; the visible setup screen (`#setup-screen`) is legacy onboarding UI that is hidden on boot and only reachable via `resetSetup()`.
 
@@ -116,8 +116,8 @@ Named after Herish's parallel work with another AI collaborator ("Sirrha"). It d
 - Small focused releases over large risky ones. If a task grows mid-build, suggest splitting it.
 
 ### Current project state (April 2026)
-- **v25** of the invoice app is in production at `github.com/Sirrha/four-season-profit` (GitHub Pages).
-- The live file is `four-season-v25.html`. A yellow debug stripe was removed in April 2026 (it had been added to diagnose a price-rule bug that turned out to already be fixed).
+- **v25+** of the invoice app is in production at **sormena.no** (GitHub Pages, custom domain; git remote: `github.com/Sirrha/four-season-profit`).
+- The live file is `index.html`. A yellow debug stripe was removed in April 2026 (it had been added to diagnose a price-rule bug that turned out to already be fixed).
 - Next planned work: **v26** (scope to be decided together).
 - Future: separate bank-statement analysis app (design drafted by Sirrha).
 - Future: full cost module (husleie, strøm, forsikring, abonnementer) for a more realistic netto calculation.
