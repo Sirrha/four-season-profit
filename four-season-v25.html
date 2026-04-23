@@ -4609,7 +4609,6 @@ function showScanResults(data){
     ruleNote+=' · <span style="color:#ffd54f">Leverandør har «'+(savedRule==='eks'?'eks':'inkl')+'» lagret — matematikken sier noe annet</span>';
   }
   document.getElementById('scan-result-header').innerHTML=
-    '<div style="background:#ff0;color:#000;padding:6px;margin-bottom:8px;font-size:11px;font-family:monospace">DEBUG: initial='+initial+' auto.rule='+auto.rule+' auto.isClear='+auto.isClear+' savedRule='+savedRule+' avvikEks='+(auto.avvikEks?.toFixed(2))+' avvikInkl='+(auto.avvikInkl?.toFixed(2))+' totalInkl='+auto.totalInkl+' sumEks='+(auto.sumHvisEks?.toFixed(2))+' sumInkl='+(auto.sumHvisInkl?.toFixed(2))+'</div>'+
     '<div style="display:flex;justify-content:space-between;margin-bottom:4px">'+levLabel+'<span>'+(data.fakturanr||'Uten nr')+'</span></div>'+
     '<div style="display:flex;justify-content:space-between;opacity:.8;font-size:12px"><span>Dato: '+(fmtDate(data.dato)||'')+'</span><span>Totalt på faktura: '+fmtNOK(data.totalInkl||0)+'</span></div>'+
     '<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.2)">'+
