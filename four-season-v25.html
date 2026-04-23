@@ -63,6 +63,9 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 .hdr-right{display:flex;gap:8px;align-items:center}
 .hdr-btn{background:rgba(255,255,255,.13);border:none;color:#fff;padding:7px 12px;border-radius:7px;font-family:'Sora',sans-serif;font-size:12px;font-weight:600;cursor:pointer}
 .hdr-btn:hover{background:rgba(255,255,255,.2)}
+.hdr-add-btn{background:var(--accent);color:#fff;border:none;padding:7px 13px;border-radius:7px;font-family:'Sora',sans-serif;font-size:12px;font-weight:700;cursor:pointer;display:none;align-items:center;gap:4px;white-space:nowrap}
+.hdr-add-btn:hover{filter:brightness(1.08)}
+@media(max-width:768px){.hdr-add-btn{display:none !important}}
 
 /* ── BOTTOM NAV ── */
 .bnav{position:fixed;bottom:0;left:0;right:0;height:var(--nav);background:var(--primary);display:flex;z-index:200;box-shadow:0 -2px 10px rgba(0,0,0,.18);border-top:1px solid rgba(255,255,255,.08)}
@@ -467,6 +470,7 @@ service cloud.firestore {
     </div>
   </div>
   <div class="hdr-right"><button class="user-badge" id="current-user-btn" onclick="logoutUser()" style="display:none"></button>
+    <button class="hdr-add-btn" id="hdrAddBtn" onclick="handleHdrAdd()"></button>
     <button class="hdr-btn" id="hdrExpBtn" style="display:none" onclick="handleExport()">📤 CSV</button>
 
   </div>
@@ -1082,7 +1086,25 @@ function goTo(pg){
   currentPage=pg;
   const eb=document.getElementById('hdrExpBtn');
   eb.style.display=(pg==='produkter'||pg==='innkjop')?'block':'none';
+  updateHdrAddBtn();
   renderPage(pg);
+}
+function updateHdrAddBtn(){
+  const btn=document.getElementById('hdrAddBtn');
+  if(!btn)return;
+  const labels={innkjop:'+ Nytt innkjøp',produkter:'+ Nytt produkt',salg:'+ Nytt salg',svinn:'+ Nytt svinn',leverandorer:'+ Ny leverandør'};
+  const label=labels[currentPage];
+  const role=currentUser?.role;
+  if(label&&role!=='regnskap'){
+    btn.textContent=label;
+    btn.style.display='inline-flex';
+  }else{
+    btn.style.display='none';
+  }
+}
+function handleHdrAdd(){
+  const map={produkter:openProduktModal,leverandorer:openLeverandorModal,innkjop:openInnkjopModal,salg:openDagsalgModal,svinn:openSvinnModal};
+  if(map[currentPage])map[currentPage]();
 }
 document.querySelectorAll('.nb').forEach(b=>b.addEventListener('click',()=>goTo(b.dataset.pg)));
 document.getElementById('fabBtn').addEventListener('click',()=>{
@@ -3967,6 +3989,7 @@ function applyRoleRestrictions(){
   } else {
     fab.style.display = 'flex';
   }
+  updateHdrAddBtn();
 }
 
 function checkLoginSession(){
