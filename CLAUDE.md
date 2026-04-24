@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current status
 
-**As of 2026-04-24** — sormena.no is live on GitHub Pages; HTTPS provisioning by Let's Encrypt pending; next architectural decision: **utsalgspris dagens vs. frosset** (to be decided with Herish + Soren before the v27 bank module build).
+**As of 2026-04-24** — sormena.no is live on GitHub Pages; HTTPS provisioning by Let's Encrypt pending.
+
+Architecture decisions locked in `docs/architecture/pricing-and-reporting.md` (must read before touching price, profit, or reporting code).
 
 ## Repository shape
 
