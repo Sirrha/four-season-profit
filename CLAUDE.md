@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Current status
+
+**As of 2026-04-24** — sormena.no is live on GitHub Pages; HTTPS provisioning by Let's Encrypt pending; next architectural decision: **utsalgspris dagens vs. frosset** (to be decided with Herish + Soren before the v27 bank module build).
+
 ## Repository shape
 
 The entire application is **one file**: `index.html` (~5300 lines, ~300 KB). There is no build system, no package manager, no test suite, no linter config. HTML, CSS and JavaScript all live inline in that single file.
@@ -11,6 +15,15 @@ The entire application is **one file**: `index.html` (~5300 lines, ~300 KB). The
 - **Firebase config** is hardcoded in the `boot()` IIFE near the bottom of the `<script>` block; the visible setup screen (`#setup-screen`) is legacy onboarding UI that is hidden on boot and only reachable via `resetSetup()`.
 
 When editing, preserve the existing style: terse, dense, heavily-abbreviated identifiers (`sg`, `sc`, `sv`, `li`, `lim`, `lit`, `lis`, `liv`, `fi`, `fg`, `fl`, `btn-p`, `btn-g`, `ov`, `kbox`, `krow`, etc.) and no module/class boundaries — functions are top-level in one IIFE-less `<script>`.
+
+## Local development setup
+
+- **Repo path**: `C:\Users\gamme\projects\four-season-profit` (Windows user `gamme`).
+- **Shell**: PowerShell on Windows. Claude Code's Bash tool exposes Unix-style bash (use forward slashes, `/dev/null`), and PowerShell is available via the PowerShell tool for native Windows commands.
+- **Launch**: `claude` from the repo root.
+- **Same laptop** is used at both work and home — no environment drift between sessions, no separate dev/prod paths.
+- **Versions** (as of 2026-04-24): git `2.54.0.windows.1`, node `v24.15.0` (node is used only for `node --check` on the inline JS before shipping — see workflow conventions below).
+- **Git**: branch `main` is the deploy branch; remote is `github.com/Sirrha/four-season-profit`; committing to `main` publishes to sormena.no via GitHub Pages.
 
 ## Domain
 
