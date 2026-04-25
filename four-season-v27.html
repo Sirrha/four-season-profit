@@ -417,7 +417,7 @@ service cloud.firestore {
     <label class="login-select-label">Velg bruker</label>
     <select class="login-select" id="login-user" onchange="onLoginUserChange()">
       <option value="">— Velg bruker —</option>
-      <option value="Herish">👤 Herish</option>
+      <option value="Herish">👤 Hasher</option>
       <option value="Admin">🔧 Admin</option>
       <option value="Regnskap">📊 Regnskap</option>
       <option value="Sormena">👤 Sormena</option>
@@ -3908,12 +3908,14 @@ function exportCSV(type){
 // LOGIN SYSTEM
 // ─────────────────────────────────────────
 const USERS = {
-  'Herish':  {pin:'162026', role:'admin',    label:'👤 Herish'},
+  'Herish':  {pin:'162026', role:'admin',    label:'👤 Hasher'},
   'Admin':   {pin:'222026', role:'admin',    label:'🔧 Admin'},
   'Regnskap':{pin:'732026', role:'regnskap', label:'📊 Regnskap'},
   'Sormena': {pin:'052026', role:'staff',    label:'👤 Sormena'}
 };
 // Roles: admin=full access, regnskap=view only, staff=register only (no delete)
+
+function displayUserName(name){return name==='Herish'?'Hasher':name}
 
 let currentUser = null;
 let pinEntry = '';
@@ -3958,7 +3960,7 @@ function checkPin(){
     btn.textContent = user.label + ' · Logg ut';
     btn.style.display = 'flex';
     applyRoleRestrictions();
-    showToast('Velkommen, ' + username + '! 👋');
+    showToast('Velkommen, ' + displayUserName(username) + '! 👋');
   } else {
     errEl.textContent = 'Feil PIN-kode. Prøv igjen.';
     pinEntry = '';
@@ -3971,7 +3973,7 @@ function checkPin(){
 }
 
 function logoutUser(){
-  if(!confirm('Logg ut ' + (currentUser?.name||'') + '?')) return;
+  if(!confirm('Logg ut ' + displayUserName(currentUser?.name||'') + '?')) return;
   currentUser = null;
   sessionStorage.removeItem('fs_user');
   pinEntry = '';
