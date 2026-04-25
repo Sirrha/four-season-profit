@@ -488,6 +488,7 @@ service cloud.firestore {
 <div class="page" id="pg-leverandorer"></div>
 <div class="page" id="pg-innboks"></div>
 <div class="page" id="pg-timeliste"></div>
+<div class="page" id="pg-betalinger"></div>
 
 <button class="fab" id="fabBtn">+</button>
 
@@ -497,6 +498,7 @@ service cloud.firestore {
   <button class="nb" data-pg="leverandorer"><span class="ni">🏢</span><span class="nl">Lev.</span></button>
   <button class="nb" data-pg="innboks"><span class="ni">📬</span><span class="nl">Innboks</span></button>
   <button class="nb" data-pg="innkjop"><span class="ni">🛒</span><span class="nl">Innkjøp</span></button>
+  <button class="nb" data-pg="betalinger"><span class="ni">🏦</span><span class="nl">Betalinger</span></button>
   <button class="nb" data-pg="salg"><span class="ni">💰</span><span class="nl">Salg</span></button>
   <button class="nb" data-pg="svinn"><span class="ni">🗑️</span><span class="nl">Svinn</span></button>
   <button class="nb" data-pg="timeliste"><span class="ni">👥</span><span class="nl">Timeliste</span></button>
@@ -836,7 +838,7 @@ const ARSAK={utgatt:'Utgått dato',skadet:'Skadet/knust',tyveri:'Tyveri/svinn',a
 // ─────────────────────────────────────────
 // LOCAL CACHE  (kept in sync by Firestore listeners)
 // ─────────────────────────────────────────
-let LOCAL={products:[],purchases:[],sales:[],svinn:[],leverandorer:[],dagsalg:[],innboks:[],ansatte:[],vakter:[]};
+let LOCAL={products:[],purchases:[],sales:[],svinn:[],leverandorer:[],dagsalg:[],innboks:[],ansatte:[],vakter:[],payments:[]};
 let db=null; // Firestore instance
 
 // ─────────────────────────────────────────
@@ -906,7 +908,7 @@ function initFirebase(cfg){
 let listenersReady=0;
 function startListeners(){
   listenersReady=0;
-  const cols=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter'];
+  const cols=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter','payments'];
   cols.forEach(col=>{
     listeners[col]=db.collection(col).onSnapshot(snap=>{
       LOCAL[col]=snap.docs.map(d=>({id:d.id,...d.data()}));
@@ -937,7 +939,7 @@ function showApp(){
 
 function renderIfActive(col){
   if(!document.getElementById('main-app').style.display||document.getElementById('main-app').style.display==='none')return;
-  const map={products:'produkter',purchases:'innkjop',sales:'salg',svinn:'svinn',leverandorer:'leverandorer',dagsalg:'salg',innboks:'innboks',ansatte:'timeliste',vakter:'timeliste'};
+  const map={products:'produkter',purchases:'innkjop',sales:'salg',svinn:'svinn',leverandorer:'leverandorer',dagsalg:'salg',innboks:'innboks',ansatte:'timeliste',vakter:'timeliste',payments:'betalinger'};
   if(currentPage===map[col]||currentPage==='oversikt'||currentPage==='rapporter'){
     renderPage(currentPage);
   }
@@ -1079,7 +1081,7 @@ document.querySelectorAll('.ov').forEach(ov=>ov.addEventListener('click',e=>{if(
 // NAVIGATION
 // ─────────────────────────────────────────
 let currentPage='oversikt';
-const pageTitles={oversikt:'Oversikt',produkter:'Produktregister',leverandorer:'Leverandører',innboks:'Innboks',innkjop:'Innkjøp & Fakturaer',salg:'Salgslogg',svinn:'Svinn & Justering',rapporter:'Rapporter',timeliste:'Timeliste & Ansatte'};
+const pageTitles={oversikt:'Oversikt',produkter:'Produktregister',leverandorer:'Leverandører',innboks:'Innboks',innkjop:'Innkjøp & Fakturaer',salg:'Salgslogg',svinn:'Svinn & Justering',rapporter:'Rapporter',timeliste:'Timeliste & Ansatte',betalinger:'Betalinger'};
 function goTo(pg){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nb').forEach(b=>b.classList.remove('active'));
@@ -1095,7 +1097,7 @@ function goTo(pg){
 function updateHdrAddBtn(){
   const btn=document.getElementById('hdrAddBtn');
   if(!btn)return;
-  const labels={innkjop:'+ Nytt innkjøp',produkter:'+ Nytt produkt',salg:'+ Nytt salg',svinn:'+ Nytt svinn',leverandorer:'+ Ny leverandør'};
+  const labels={innkjop:'+ Nytt innkjøp',produkter:'+ Nytt produkt',salg:'+ Nytt salg',svinn:'+ Nytt svinn',leverandorer:'+ Ny leverandør',betalinger:'+ Ny betaling'};
   const label=labels[currentPage];
   const role=currentUser?.role;
   if(label&&role!=='regnskap'){
@@ -1106,17 +1108,17 @@ function updateHdrAddBtn(){
   }
 }
 function handleHdrAdd(){
-  const map={produkter:openProduktModal,leverandorer:openLeverandorModal,innkjop:openInnkjopModal,salg:openDagsalgModal,svinn:openSvinnModal};
+  const map={produkter:openProduktModal,leverandorer:openLeverandorModal,innkjop:openInnkjopModal,salg:openDagsalgModal,svinn:openSvinnModal,betalinger:openBetalingModal};
   if(map[currentPage])map[currentPage]();
 }
 document.querySelectorAll('.nb').forEach(b=>b.addEventListener('click',()=>goTo(b.dataset.pg)));
 document.getElementById('fabBtn').addEventListener('click',()=>{
-  const map={produkter:openProduktModal,leverandorer:openLeverandorModal,innboks:openInnboksUpload,innkjop:openInnkjopModal,salg:openDagsalgModal,svinn:openSvinnModal,oversikt:openInnkjopModal,timeliste:openAnsattModal};
+  const map={produkter:openProduktModal,leverandorer:openLeverandorModal,innboks:openInnboksUpload,innkjop:openInnkjopModal,salg:openDagsalgModal,svinn:openSvinnModal,oversikt:openInnkjopModal,timeliste:openAnsattModal,betalinger:openBetalingModal};
   if(map[currentPage])map[currentPage]();
 });
 function handleExport(){if(currentPage==='produkter')exportCSV('products');else if(currentPage==='innkjop')exportCSV('purchases')}
 function renderPage(pg){
-  const fn={oversikt:renderOversikt,produkter:renderProdukter,leverandorer:renderLeverandorer,innboks:renderInnboks,innkjop:renderInnkjop,salg:renderSalg,svinn:renderSvinn,rapporter:renderRapporter,timeliste:renderTimeliste};
+  const fn={oversikt:renderOversikt,produkter:renderProdukter,leverandorer:renderLeverandorer,innboks:renderInnboks,innkjop:renderInnkjop,salg:renderSalg,svinn:renderSvinn,rapporter:renderRapporter,timeliste:renderTimeliste,betalinger:renderBetalinger};
   if(fn[pg])fn[pg]();
 }
 
@@ -2656,6 +2658,70 @@ async function migrateLeverandorer(){
     });
   }
   showToast(`${unmigrated.length} leverandør${unmigrated.length===1?'':'er'} opprettet`);
+}
+
+// ─────────────────────────────────────────
+// BETALINGER PAGE
+// ─────────────────────────────────────────
+let betFilter='mnd';
+let betLevFilter='alle';
+function renderBetalinger(){
+  const el=document.getElementById('pg-betalinger');
+  const all=dbAll('payments').slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
+  const todayStr=today(),monthStr=todayStr.slice(0,7);
+  let filtered=all;
+  if(betFilter==='dag')filtered=filtered.filter(p=>p.dato===todayStr);
+  else if(betFilter==='mnd')filtered=filtered.filter(p=>(p.dato||'').startsWith(monthStr));
+  else if(betFilter==='uke'){const w=getWeekStart();filtered=filtered.filter(p=>(p.dato||'')>=w)}
+  if(betLevFilter!=='alle')filtered=filtered.filter(p=>p.leverandorId===betLevFilter);
+  const levs=dbAll('leverandorer').slice().sort((a,b)=>(a.navn||'').localeCompare(b.navn||'','no'));
+  let html=`<div class="tabs">
+    <button class="tab ${betFilter==='dag'?'active':''}" onclick="betFilter='dag';renderBetalinger()">I dag</button>
+    <button class="tab ${betFilter==='uke'?'active':''}" onclick="betFilter='uke';renderBetalinger()">Denne uken</button>
+    <button class="tab ${betFilter==='mnd'?'active':''}" onclick="betFilter='mnd';renderBetalinger()">Denne måneden</button>
+    <button class="tab ${betFilter==='alle'?'active':''}" onclick="betFilter='alle';renderBetalinger()">Alle</button>
+  </div>
+  <div style="margin:8px 0 12px"><select class="fi" onchange="betLevFilter=this.value;renderBetalinger()" style="font-size:13px">
+    <option value="alle"${betLevFilter==='alle'?' selected':''}>Alle leverandører</option>
+    ${levs.map(l=>`<option value="${l.id}"${betLevFilter===l.id?' selected':''}>${escapeHtml(l.navn)}</option>`).join('')}
+  </select></div>`;
+  if(!filtered.length){
+    const msg=all.length===0
+      ?'Ingen betalinger registrert.<br>Trykk + for å legge til din første betaling.'
+      :'Ingen betalinger i perioden.';
+    html+=`<div class="empty"><div class="ei">🏦</div><p>${msg}</p></div>`;
+  } else {
+    const methodIcon={transfer:'🏦',card:'💳',giro:'🧾'};
+    html+=`<div class="card" style="padding:0 14px">`;
+    filtered.forEach(p=>{
+      const lev=p.leverandorId?dbFind('leverandorer',p.leverandorId):null;
+      const supplierName=lev?escapeHtml(lev.navn):escapeHtml(p.levTekstRaa||'Ukjent');
+      const supplierBadge=lev?'':' <span style="font-size:10.5px;color:#c98a00;font-weight:600">⚠️ ikke i register</span>';
+      const linked=(p.linkedeFakturaer||[]).length>0;
+      const linkBadge=linked
+        ?'<span style="background:rgba(45,122,74,.15);color:var(--ok);padding:2px 7px;border-radius:10px;font-size:10.5px;font-weight:600">🔗 lenket</span>'
+        :'<span style="background:rgba(224,144,37,.12);color:var(--warn);padding:2px 7px;border-radius:10px;font-size:10.5px;font-weight:600">ulenket</span>';
+      const ic=methodIcon[p.metode]||'💰';
+      html+=`<div class="li">
+        <div style="width:40px;flex-shrink:0;text-align:center"><div style="font-size:12px;font-weight:700;color:var(--muted)">${fmtDate(p.dato).slice(0,5)}</div></div>
+        <div class="lim">
+          <div class="lit">${ic} ${supplierName}${supplierBadge}</div>
+          <div class="lis">${escapeHtml(p.referanse||p.arkivref||'–')}</div>
+          <div style="margin-top:4px;display:flex;gap:7px;flex-wrap:wrap">${linkBadge}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-weight:700;font-size:14px">${fmtNOK(+p.belop||0)}</div>
+        </div>
+      </div>`;
+    });
+    html+=`</div>`;
+    const tot=filtered.reduce((s,p)=>s+(+p.belop||0),0);
+    html+=`<div style="text-align:center;padding:14px 0;font-size:13px;color:var(--muted);font-weight:600">Total ${fmtNOK(tot)} (${filtered.length} betaling${filtered.length===1?'':'er'})</div>`;
+  }
+  el.innerHTML=html;
+}
+function openBetalingModal(){
+  alert('Lagre ny betaling — kommer i neste steg');
 }
 
 // ─────────────────────────────────────────
