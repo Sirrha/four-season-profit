@@ -1739,6 +1739,43 @@ function showInvoiceDetail(id){
   const p=dbFind('purchases',id);if(!p)return;
   const stats=calcPurchaseStats(p);
   const reel=calcInvoiceReelStats(id);
+  const pay=getInvoicePaymentStatus(id);
+  const linkedPayments=dbAll('payments').filter(x=>(x.linkedeFakturaer||[]).includes(id)).sort((a,b)=>(a.dato||'').localeCompare(b.dato||''));
+  const pillStyle={
+    paid:{bg:'rgba(45,122,74,.25)',color:'#9eddb1',label:'✓ Betalt'},
+    partial:{bg:'rgba(224,144,37,.25)',color:'#ffd29a',label:'⚠ Delvis'},
+    unpaid:{bg:'rgba(220,50,50,.22)',color:'#ffbcbc',label:'● Ikke betalt'}
+  }[pay.status];
+  const statusPill=`<span style="background:${pillStyle.bg};color:${pillStyle.color};padding:4px 10px;border-radius:14px;font-size:11px;font-weight:700;white-space:nowrap">${pillStyle.label}</span>`;
+  const payMethodIcon={transfer:'🏦',card:'💳',giro:'🧾'};
+  let payRowsHtml='';
+  if(linkedPayments.length){
+    linkedPayments.forEach(pmt=>{
+      const ic=payMethodIcon[pmt.metode]||'💰';
+      const sharedCount=(pmt.linkedeFakturaer||[]).length-1;
+      const sharedNote=sharedCount>0?`<div style="font-size:10px;opacity:.55;margin-top:2px">delt med ${sharedCount} andre faktura${sharedCount===1?'':'er'}</div>`:'';
+      payRowsHtml+=`<div style="background:rgba(255,255,255,.08);border-radius:10px;padding:11px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:13px">${ic} ${fmtDate(pmt.dato)}</div>
+          <div style="font-size:11px;opacity:.65">${escapeHtml(pmt.referanse||pmt.arkivref||'–')}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-weight:700;font-size:13px">${fmtNOK(+pmt.belop||0)}</div>
+          ${sharedNote}
+        </div>
+      </div>`;
+    });
+  } else {
+    payRowsHtml=`<div style="background:rgba(255,255,255,.06);border-radius:10px;padding:11px 12px;text-align:center;font-size:12.5px;color:rgba(255,255,255,.55)">Ingen betalinger lenket ennå.</div>`;
+  }
+  const betalingerHtml=`<div style="margin-bottom:14px">
+    <div class="stitle" style="color:#fff;opacity:.7;margin-top:0">BETALINGER</div>
+    <div style="background:rgba(255,255,255,.08);border-radius:10px;padding:11px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;font-size:12.5px">
+      <span style="opacity:.85">Betalt: ${fmtNOK(pay.paidAmount)} · Utestående: ${fmtNOK(pay.outstanding)}</span>
+      <span style="font-size:11px;opacity:.6">${linkedPayments.length} betaling${linkedPayments.length===1?'':'er'}</span>
+    </div>
+    ${payRowsHtml}
+  </div>`;
   let linesHtml='';
   (p.lines||[]).forEach((l,idx)=>{
     const prod=dbFind('products',l.productId);if(!prod)return;
@@ -1803,9 +1840,13 @@ function showInvoiceDetail(id){
           <div class="mt" style="color:#fff;margin-bottom:5px">${p.fakturanr||'Faktura'}</div>
           <div style="font-size:12px;opacity:.7">${p.lev||'Ukjent lev.'} · ${fmtDate(p.dato)}${p.notes?' · '+p.notes:''}</div>
         </div>
-        <button class="btn btn-s" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3);padding:6px 12px;font-size:11.5px;flex-shrink:0" onclick="showEditHeaderForm('${id}')" title="Rediger faktura-hode">✏️ Rediger</button>
+        <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
+          ${statusPill}
+          <button class="btn btn-s" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3);padding:6px 12px;font-size:11.5px" onclick="showEditHeaderForm('${id}')" title="Rediger faktura-hode">✏️ Rediger</button>
+        </div>
       </div>
       ${reellHtml}
+      ${betalingerHtml}
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;margin-bottom:6px">
         <div class="stitle" style="color:#fff;opacity:.7;margin:0">PRODUKTLINJER</div>
         <button class="btn btn-s" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3);padding:6px 12px;font-size:11px" onclick="showAddLineForm('${id}')">➕ Legg til linje</button>
