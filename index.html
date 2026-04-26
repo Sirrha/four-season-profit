@@ -891,7 +891,7 @@ const ARSAK={utgatt:'Utgått dato',skadet:'Skadet/knust',tyveri:'Tyveri/svinn',a
 // ─────────────────────────────────────────
 // LOCAL CACHE  (kept in sync by Firestore listeners)
 // ─────────────────────────────────────────
-let LOCAL={products:[],purchases:[],sales:[],svinn:[],leverandorer:[],dagsalg:[],innboks:[],ansatte:[],vakter:[],payments:[]};
+let LOCAL={products:[],purchases:[],sales:[],svinn:[],leverandorer:[],dagsalg:[],innboks:[],ansatte:[],vakter:[],payments:[],bankTransactions:[]};
 let db=null; // Firestore instance
 
 // ─────────────────────────────────────────
@@ -961,7 +961,7 @@ function initFirebase(cfg){
 let listenersReady=0;
 function startListeners(){
   listenersReady=0;
-  const cols=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter','payments'];
+  const cols=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter','payments','bankTransactions'];
   cols.forEach(col=>{
     listeners[col]=db.collection(col).onSnapshot(snap=>{
       LOCAL[col]=snap.docs.map(d=>({id:d.id,...d.data()}));
@@ -982,6 +982,8 @@ function startListeners(){
 function showApp(){
   document.getElementById('loading-screen').classList.add('hidden');
   document.getElementById('main-app').style.display='block';
+  // Run one-shot migrations before showing UI. Fire-and-forget — migration is idempotent (sentinel + per-doc skip), so concurrent tabs are safe.
+  migratePaymentsToBankTransactions();
   if(!currentUser){
     document.getElementById('login-screen').classList.remove('hidden');
   } else {
@@ -992,7 +994,7 @@ function showApp(){
 
 function renderIfActive(col){
   if(!document.getElementById('main-app').style.display||document.getElementById('main-app').style.display==='none')return;
-  const map={products:'produkter',purchases:'innkjop',sales:'salg',svinn:'svinn',leverandorer:'leverandorer',dagsalg:'salg',innboks:'innboks',ansatte:'timeliste',vakter:'timeliste',payments:'betalinger'};
+  const map={products:'produkter',purchases:'innkjop',sales:'salg',svinn:'svinn',leverandorer:'leverandorer',dagsalg:'salg',innboks:'innboks',ansatte:'timeliste',vakter:'timeliste',payments:'betalinger',bankTransactions:'betalinger'};
   if(currentPage===map[col]||currentPage==='oversikt'||currentPage==='rapporter'){
     renderPage(currentPage);
   }
@@ -1110,7 +1112,8 @@ function calcInvoiceReelStats(invoiceId){
 function getInvoicePaymentStatus(invoiceId){
   const purchase=dbFind('purchases',invoiceId);
   const total=purchase?calcPurchaseStats(purchase).buyInklTotal:0;
-  const linked=dbAll('payments').filter(p=>(p.linkedeFakturaer||[]).includes(invoiceId));
+  // Filter on type: only supplier payments count toward invoice status. !type catches any pre-type-field records (defensive).
+  const linked=dbAll('bankTransactions').filter(p=>(p.type==='supplier_payment'||!p.type)&&(p.linkedeFakturaer||[]).includes(invoiceId));
   // Even-split attribution across each payment's linked invoices — refined in STEP 5 if accountant needs per-invoice splits.
   let paidAmount=0;
   for(const p of linked){const n=(p.linkedeFakturaer||[]).length||1;paidAmount+=(+p.belop||0)/n}
@@ -1737,7 +1740,7 @@ function showInvoiceDetail(id){
   const stats=calcPurchaseStats(p);
   const reel=calcInvoiceReelStats(id);
   const pay=getInvoicePaymentStatus(id);
-  const linkedPayments=dbAll('payments').filter(x=>(x.linkedeFakturaer||[]).includes(id)).sort((a,b)=>(a.dato||'').localeCompare(b.dato||''));
+  const linkedPayments=dbAll('bankTransactions').filter(x=>(x.type==='supplier_payment'||!x.type)&&(x.linkedeFakturaer||[]).includes(id)).sort((a,b)=>(a.dato||'').localeCompare(b.dato||''));
   const pillStyle={
     paid:{bg:'rgba(45,122,74,.25)',color:'#9eddb1',label:'✓ Betalt'},
     partial:{bg:'rgba(224,144,37,.25)',color:'#ffd29a',label:'⚠ Delvis'},
@@ -2772,7 +2775,8 @@ let betFilter='mnd';
 let betLevFilter='alle';
 function renderBetalinger(){
   const el=document.getElementById('pg-betalinger');
-  const all=dbAll('payments').slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
+  // STEP 1: filter to supplier_payment only. STEP 4 will add tabs for other types (lønn, drift, POS-innskudd).
+  const all=dbAll('bankTransactions').filter(p=>p.type==='supplier_payment'||!p.type).slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
   const todayStr=today(),monthStr=todayStr.slice(0,7);
   let filtered=all;
   if(betFilter==='dag')filtered=filtered.filter(p=>p.dato===todayStr);
@@ -2954,7 +2958,8 @@ async function saveBetaling(){
   if(!levId&&!levTekst){showToast('Velg leverandør eller skriv navn','err');return}
   const arkivref=document.getElementById('bet-arkivref').value.trim();
   if(arkivref){
-    const dup=dbAll('payments').find(p=>(p.arkivref||'').trim()===arkivref);
+    // No type filter: arkivref is a unique bank-ID across ALL transaction types — any duplicate is a real duplicate.
+    const dup=dbAll('bankTransactions').find(p=>(p.arkivref||'').trim()===arkivref);
     if(dup){
       const choice=confirm(
         'En betaling med samme arkivref finnes allerede:\n\n'+
@@ -2968,6 +2973,7 @@ async function saveBetaling(){
     }
   }
   const newId=uid();
+  const period=dato.length>=7?dato.slice(0,7):'';
   const payment={
     id:newId,
     tenantId:'fourseason',
@@ -2984,9 +2990,12 @@ async function saveBetaling(){
     linkedeFakturaer:Array.from(betSelectedInvoices),
     opprettetAv:currentUser?.name||'ukjent',
     opprettet:new Date().toISOString(),
-    notat:document.getElementById('bet-notat').value.trim()
+    notat:document.getElementById('bet-notat').value.trim(),
+    type:'supplier_payment',
+    direction:'out',
+    period
   };
-  await db.collection('payments').doc(newId).set(payment);
+  await db.collection('bankTransactions').doc(newId).set(payment);
   showToast(`Betaling lagret · ${fmtNOK(belop)}`);
   closeModal('ov-betaling');
 }
@@ -4370,6 +4379,49 @@ document.head.appendChild(shakeStyle);
   }
   initFirebase(FIREBASE_CONFIG);
 })();
+
+// ─────────────────────────────────────────
+// MIGRATIONS — one-shot data transformations gated by Firestore _meta/migrations sentinels
+// ─────────────────────────────────────────
+
+async function migratePaymentsToBankTransactions(){
+  try{
+    const sentinelRef=db.collection('_meta').doc('migrations');
+    const snap=await sentinelRef.get();
+    const sentinel=snap.exists?snap.data():{};
+    if(sentinel.paymentsToBankTransactions)return;
+    const sourcePayments=dbAll('payments');
+    if(sourcePayments.length===0){
+      await sentinelRef.set({paymentsToBankTransactions:new Date().toISOString()},{merge:true});
+      console.log('[migration] payments → bankTransactions: 0 records (empty source)');
+      return;
+    }
+    // Belt-and-braces: fetch existing bankTransactions IDs to skip duplicates if sentinel was manually deleted for re-run.
+    const existingSnap=await db.collection('bankTransactions').get();
+    const existingIds=new Set(existingSnap.docs.map(d=>d.id));
+    const migratedAt=new Date().toISOString();
+    let copied=0,skipped=0;
+    for(const p of sourcePayments){
+      if(existingIds.has(p.id)){skipped++;continue}
+      const date=p.dato||'';
+      const period=date.length>=7?date.slice(0,7):'';
+      await db.collection('bankTransactions').doc(p.id).set({
+        ...p,
+        type:'supplier_payment',
+        direction:'out',
+        period,
+        migratedFromPayments:true,
+        migratedAt
+      });
+      copied++;
+    }
+    await sentinelRef.set({paymentsToBankTransactions:migratedAt},{merge:true});
+    console.log('[migration] payments → bankTransactions: '+copied+' records migrated, '+skipped+' skipped (already in target)');
+  }catch(e){
+    console.error('[migration] payments → bankTransactions failed:',e);
+    showToast('Migrasjon av betalinger feilet — prøver igjen ved neste oppstart','err');
+  }
+}
 
 // ─────────────────────────────────────────
 // AI FAKTURA SKANNER
