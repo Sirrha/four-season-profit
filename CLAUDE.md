@@ -8,9 +8,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Architecture decisions locked in `docs/architecture/pricing-and-reporting.md` (must read before touching price, profit, or reporting code).
 
+## System inventory rule
+
+**docs/system-inventory.md MUST be updated after every commit that adds, removes, or significantly changes a module, screen, modal, Firestore collection, or major function.**
+
+When working on this codebase:
+1. Before making changes — read docs/system-inventory.md to understand what already exists. Do not duplicate functionality.
+2. After making changes — update docs/system-inventory.md to reflect the new state (line numbers, function names, collections, modals, status notes).
+3. Inventory updates are committed in the same commit as the code change, OR in an immediate follow-up commit with message format "docs(inventory): ..."
+
+This rule exists because Soren (the planning AI in chat) cannot read code directly. The inventory is the bridge. If it gets stale, Soren plans blind and Claude Code duplicates work.
+
 ## Repository shape
 
-The entire application is **one file**: `index.html` (~5300 lines, ~300 KB). There is no build system, no package manager, no test suite, no linter config. HTML, CSS and JavaScript all live inline in that single file.
+The entire application is **one file**: `index.html` (~5692 lines, ~300 KB). There is no build system, no package manager, no test suite, no linter config. HTML, CSS and JavaScript all live inline in that single file.
 
 - **Run locally**: open `index.html` directly in a browser, or serve the folder statically (e.g. `python -m http.server`) — no build step.
 - **Deploy**: committing to `main` is the deploy (the file is self-contained and served as a static asset).
@@ -48,10 +59,10 @@ Dates are stored as `YYYY-MM-DD` (ISO) and displayed as `DD.MM.YYYY`. Numbers ar
 
 ### Data layer — Firestore as the source of truth
 
-9 Firestore collections, mirrored into a single in-memory object `LOCAL`:
+10 Firestore collections, mirrored into a single in-memory object `LOCAL`:
 
 ```
-products, purchases, sales, svinn, leverandorer, dagsalg, innboks, ansatte, vakter
+products, purchases, sales, svinn, leverandorer, dagsalg, innboks, ansatte, vakter, payments
 ```
 
 `startListeners()` attaches an `onSnapshot` listener per collection. Every snapshot overwrites `LOCAL[col]` and calls `renderIfActive(col)` → `renderPage(currentPage)`. **There is no local optimistic update** — all writes go through `dbAdd` / `dbUpdate` / `dbDelete`, and the UI repaints when Firestore echoes the change back. If you add a new collection, it must be added to the `cols` array in `startListeners()` and to the `LOCAL` initializer, or its listener will never fire.
@@ -60,10 +71,10 @@ Reads use `dbFind(col, id)` / `dbAll(col)` against `LOCAL` — never query Fires
 
 ### UI layer — page dispatch
 
-Single-page app with 9 pages (`#pg-oversikt`, `#pg-produkter`, `#pg-innkjop`, `#pg-salg`, `#pg-svinn`, `#pg-rapporter`, `#pg-leverandorer`, `#pg-innboks`, `#pg-timeliste`). Navigation goes through:
+Single-page app with 10 pages (`#pg-oversikt`, `#pg-produkter`, `#pg-innkjop`, `#pg-salg`, `#pg-svinn`, `#pg-rapporter`, `#pg-leverandorer`, `#pg-innboks`, `#pg-timeliste`, `#pg-betalinger`). Navigation goes through:
 
 - `goTo(pg)` — toggles `.active` classes, updates header, calls `renderPage(pg)`.
-- `renderPage(pg)` — dispatcher that calls one of `renderOversikt` / `renderProdukter` / `renderInnkjop` / `renderSalg` / `renderSvinn` / `renderRapporter` / `renderLeverandorer` / `renderInnboks` / `renderTimeliste`.
+- `renderPage(pg)` — dispatcher that calls one of `renderOversikt` / `renderProdukter` / `renderInnkjop` / `renderSalg` / `renderSvinn` / `renderRapporter` / `renderLeverandorer` / `renderInnboks` / `renderTimeliste` / `renderBetalinger`.
 - The FAB (`#fabBtn`) dispatches to a per-page `open*Modal()` based on `currentPage`.
 
 Every render function rebuilds its page from `LOCAL` on each call — do not try to do diff-patch updates.
@@ -131,14 +142,15 @@ Named after Herish's parallel work with another AI collaborator ("Sirrha"). It d
 - Small focused releases over large risky ones. If a task grows mid-build, suggest splitting it.
 
 ### Current project state (April 2026)
-- **v25+** of the invoice app is in production at **sormena.no** (GitHub Pages, custom domain; git remote: `github.com/Sirrha/four-season-profit`).
+- **v27** of the invoice app is in production at **sormena.no** (GitHub Pages, custom domain; git remote: `github.com/Sirrha/four-season-profit`). Cutover from preview file `four-season-v27.html` into `index.html` happened on 2026-04-26.
+- v27 added the **Betalinger module** (`payments` collection, two-phase Ny betaling modal, payment-status pill + linked-payments panel on invoice detail) and a **"Hasher" display alias** for Herish (underlying name unchanged).
 - The live file is `index.html`. A yellow debug stripe was removed in April 2026 (it had been added to diagnose a price-rule bug that turned out to already be fixed).
-- Next planned work: **v26** (scope to be decided together).
+- Next planned work: scope to be decided together.
 - Future: separate bank-statement analysis app (design drafted by Sirrha).
 - Future: full cost module (husleie, strøm, forsikring, abonnementer) for a more realistic netto calculation.
 
 ### Workflow conventions with Herish
-- **Versioned filenames** — `four-season-v26.html`, etc. Never overwrite, never use `index.html`.
+- **Single production file**: `index.html`. Major version work happens in a separate file (e.g. `four-season-vNN.html`) until cutover, then cutover replaces `index.html` and the version file is deleted.
 - **Before shipping**: `node --check` on the inline JS + structural regex checks for new features *and* regression of prior features.
 - **Test against real invoices** where possible (Herish has AFFA, Tenza, Nordic Engros, RAMCO samples).
 - When debugging, **ask for real data/screenshots** rather than guessing.
