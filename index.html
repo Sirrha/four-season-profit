@@ -417,7 +417,7 @@ service cloud.firestore {
     <label class="login-select-label">Velg bruker</label>
     <select class="login-select" id="login-user" onchange="onLoginUserChange()">
       <option value="">— Velg bruker —</option>
-      <option value="Herish">👤 Herish</option>
+      <option value="Herish">👤 Hasher</option>
       <option value="Admin">🔧 Admin</option>
       <option value="Regnskap">📊 Regnskap</option>
       <option value="Sormena">👤 Sormena</option>
@@ -485,6 +485,7 @@ service cloud.firestore {
 <div class="page" id="pg-leverandorer"></div>
 <div class="page" id="pg-innboks"></div>
 <div class="page" id="pg-timeliste"></div>
+<div class="page" id="pg-betalinger"></div>
 
 <button class="fab" id="fabBtn">+</button>
 
@@ -494,6 +495,7 @@ service cloud.firestore {
   <button class="nb" data-pg="leverandorer"><span class="ni">🏢</span><span class="nl">Lev.</span></button>
   <button class="nb" data-pg="innboks"><span class="ni">📬</span><span class="nl">Innboks</span></button>
   <button class="nb" data-pg="innkjop"><span class="ni">🛒</span><span class="nl">Innkjøp</span></button>
+  <button class="nb" data-pg="betalinger"><span class="ni">🏦</span><span class="nl">Betalinger</span></button>
   <button class="nb" data-pg="salg"><span class="ni">💰</span><span class="nl">Salg</span></button>
   <button class="nb" data-pg="svinn"><span class="ni">🗑️</span><span class="nl">Svinn</span></button>
   <button class="nb" data-pg="timeliste"><span class="ni">👥</span><span class="nl">Timeliste</span></button>
@@ -798,6 +800,62 @@ service cloud.firestore {
   <button class="btn btn-d btn-f" id="lev-del-btn" onclick="deleteLeverandorCurrent()" style="display:none;margin-top:10px">🗑️ Slett</button>
 </div></div>
 
+<!-- Betaling -->
+<div class="ov" id="ov-betaling">
+<div class="modal">
+  <div class="mh"></div>
+
+  <!-- PHASE 1: payment data -->
+  <div id="bet-phase-1">
+    <div class="mt">Ny betaling</div>
+    <input type="hidden" id="bet-id">
+    <div class="fr">
+      <div class="fg"><label class="fl">Dato *</label><input class="fi" id="bet-dato" type="date"></div>
+      <div class="fg"><label class="fl">Booking-dato</label><input class="fi" id="bet-booking" type="date"></div>
+    </div>
+    <div class="fg"><label class="fl">Leverandør</label>
+      <select class="fi" id="bet-lev-id" onchange="onBetLevChange()">
+        <option value="">— Velg leverandør —</option>
+      </select>
+      <input class="fi" id="bet-lev-tekst" placeholder="…eller skriv navn fra kontoutskrift" style="margin-top:6px" autocomplete="off">
+      <div style="font-size:10.5px;color:var(--muted);margin-top:4px">Velg leverandør for å lenke til ulenkede fakturaer i neste steg. Tom leverandør = lagres uten lenking.</div>
+    </div>
+    <div class="fr">
+      <div class="fg"><label class="fl">Beløp (NOK) *</label><input class="fi" id="bet-belop" type="number" step="0.01" inputmode="decimal" placeholder="0.00"></div>
+      <div class="fg"><label class="fl">Metode</label>
+        <select class="fi" id="bet-metode">
+          <option value="transfer">🏦 Bankoverføring</option>
+          <option value="card">💳 Kort</option>
+          <option value="giro">🧾 Giro</option>
+        </select>
+      </div>
+    </div>
+    <div class="fr">
+      <div class="fg"><label class="fl">Bankkonto</label><input class="fi" id="bet-bankkonto" placeholder="F.eks. 1234.56.78901" autocomplete="off"></div>
+      <div class="fg"><label class="fl">Referanse</label><input class="fi" id="bet-referanse" placeholder="Overføring innland nr.…" autocomplete="off"></div>
+    </div>
+    <div class="fg"><label class="fl">Arkivref (DNB)</label><input class="fi" id="bet-arkivref" placeholder="Unik bank-ID" autocomplete="off"></div>
+    <div class="fg"><label class="fl">Notat</label><input class="fi" id="bet-notat" autocomplete="off"></div>
+    <div class="fr" style="margin-top:6px">
+      <button class="btn btn-g btn-f" onclick="closeModal('ov-betaling')">Avbryt</button>
+      <button class="btn btn-p btn-f" onclick="goToBetPhase2()">Neste →</button>
+    </div>
+  </div>
+
+  <!-- PHASE 2: invoice linking -->
+  <div id="bet-phase-2" style="display:none">
+    <div class="mt">Lenk til fakturaer</div>
+    <div id="bet-summary" style="font-size:12.5px;color:var(--muted);margin-bottom:10px"></div>
+    <div id="bet-invoices-list"></div>
+    <div id="bet-link-status" style="margin:10px 0;font-size:13px;font-weight:600;text-align:center"></div>
+    <div class="fr" style="margin-top:6px">
+      <button class="btn btn-g btn-f" onclick="goToBetPhase1()">← Tilbake</button>
+      <button class="btn btn-p btn-f" onclick="saveBetaling()">💾 Lagre</button>
+    </div>
+  </div>
+
+</div></div>
+
 <!-- ══════════════════════════════════════
      JAVASCRIPT
 ══════════════════════════════════════ -->
@@ -833,7 +891,7 @@ const ARSAK={utgatt:'Utgått dato',skadet:'Skadet/knust',tyveri:'Tyveri/svinn',a
 // ─────────────────────────────────────────
 // LOCAL CACHE  (kept in sync by Firestore listeners)
 // ─────────────────────────────────────────
-let LOCAL={products:[],purchases:[],sales:[],svinn:[],leverandorer:[],dagsalg:[],innboks:[],ansatte:[],vakter:[]};
+let LOCAL={products:[],purchases:[],sales:[],svinn:[],leverandorer:[],dagsalg:[],innboks:[],ansatte:[],vakter:[],payments:[]};
 let db=null; // Firestore instance
 
 // ─────────────────────────────────────────
@@ -903,7 +961,7 @@ function initFirebase(cfg){
 let listenersReady=0;
 function startListeners(){
   listenersReady=0;
-  const cols=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter'];
+  const cols=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter','payments'];
   cols.forEach(col=>{
     listeners[col]=db.collection(col).onSnapshot(snap=>{
       LOCAL[col]=snap.docs.map(d=>({id:d.id,...d.data()}));
@@ -934,7 +992,7 @@ function showApp(){
 
 function renderIfActive(col){
   if(!document.getElementById('main-app').style.display||document.getElementById('main-app').style.display==='none')return;
-  const map={products:'produkter',purchases:'innkjop',sales:'salg',svinn:'svinn',leverandorer:'leverandorer',dagsalg:'salg',innboks:'innboks',ansatte:'timeliste',vakter:'timeliste'};
+  const map={products:'produkter',purchases:'innkjop',sales:'salg',svinn:'svinn',leverandorer:'leverandorer',dagsalg:'salg',innboks:'innboks',ansatte:'timeliste',vakter:'timeliste',payments:'betalinger'};
   if(currentPage===map[col]||currentPage==='oversikt'||currentPage==='rapporter'){
     renderPage(currentPage);
   }
@@ -1049,6 +1107,17 @@ function calcInvoiceReelStats(invoiceId){
   const reellGmPct=(hasSales&&faktiskSalgEks>0)?(reellGmKr/faktiskSalgEks)*100:null;
   return{...base,faktiskSalgEks,svinnKost,reellGmKr,reellGmPct,hasSales,wasteCount:wasteAll.length,salesCount:linkedSales.length};
 }
+function getInvoicePaymentStatus(invoiceId){
+  const purchase=dbFind('purchases',invoiceId);
+  const total=purchase?calcPurchaseStats(purchase).buyInklTotal:0;
+  const linked=dbAll('payments').filter(p=>(p.linkedeFakturaer||[]).includes(invoiceId));
+  // Even-split attribution across each payment's linked invoices — refined in STEP 5 if accountant needs per-invoice splits.
+  let paidAmount=0;
+  for(const p of linked){const n=(p.linkedeFakturaer||[]).length||1;paidAmount+=(+p.belop||0)/n}
+  const paid=linked.length>0;
+  const status=!paid?'unpaid':(paidAmount+0.005<total?'partial':'paid');
+  return{paid,paymentIds:linked.map(p=>p.id),paidAmount,status,total,outstanding:Math.max(0,total-paidAmount)};
+}
 function marginCls(m){return m>=30?'g':m>=20?'o':'r'}
 function marginBadge(m){const c=m>=30?'b-g':m>=20?'b-o':'b-r';return`<span class="b ${c}">${fmtPct(m)}</span>`}
 function gmPanelHtml(gmKr,gmPct,paaslagPct){
@@ -1076,7 +1145,7 @@ document.querySelectorAll('.ov').forEach(ov=>ov.addEventListener('click',e=>{if(
 // NAVIGATION
 // ─────────────────────────────────────────
 let currentPage='oversikt';
-const pageTitles={oversikt:'Oversikt',produkter:'Produktregister',leverandorer:'Leverandører',innboks:'Innboks',innkjop:'Innkjøp & Fakturaer',salg:'Salgslogg',svinn:'Svinn & Justering',rapporter:'Rapporter',timeliste:'Timeliste & Ansatte'};
+const pageTitles={oversikt:'Oversikt',produkter:'Produktregister',leverandorer:'Leverandører',innboks:'Innboks',innkjop:'Innkjøp & Fakturaer',salg:'Salgslogg',svinn:'Svinn & Justering',rapporter:'Rapporter',timeliste:'Timeliste & Ansatte',betalinger:'Betalinger'};
 function goTo(pg){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nb').forEach(b=>b.classList.remove('active'));
@@ -1092,7 +1161,7 @@ function goTo(pg){
 function updateHdrAddBtn(){
   const btn=document.getElementById('hdrAddBtn');
   if(!btn)return;
-  const labels={innkjop:'+ Nytt innkjøp',produkter:'+ Nytt produkt',salg:'+ Nytt salg',svinn:'+ Nytt svinn',leverandorer:'+ Ny leverandør'};
+  const labels={innkjop:'+ Nytt innkjøp',produkter:'+ Nytt produkt',salg:'+ Nytt salg',svinn:'+ Nytt svinn',leverandorer:'+ Ny leverandør',betalinger:'+ Ny betaling'};
   const label=labels[currentPage];
   const role=currentUser?.role;
   if(label&&role!=='regnskap'){
@@ -1103,17 +1172,17 @@ function updateHdrAddBtn(){
   }
 }
 function handleHdrAdd(){
-  const map={produkter:openProduktModal,leverandorer:openLeverandorModal,innkjop:openInnkjopModal,salg:openDagsalgModal,svinn:openSvinnModal};
+  const map={produkter:openProduktModal,leverandorer:openLeverandorModal,innkjop:openInnkjopModal,salg:openDagsalgModal,svinn:openSvinnModal,betalinger:openBetalingModal};
   if(map[currentPage])map[currentPage]();
 }
 document.querySelectorAll('.nb').forEach(b=>b.addEventListener('click',()=>goTo(b.dataset.pg)));
 document.getElementById('fabBtn').addEventListener('click',()=>{
-  const map={produkter:openProduktModal,leverandorer:openLeverandorModal,innboks:openInnboksUpload,innkjop:openInnkjopModal,salg:openDagsalgModal,svinn:openSvinnModal,oversikt:openInnkjopModal,timeliste:openAnsattModal};
+  const map={produkter:openProduktModal,leverandorer:openLeverandorModal,innboks:openInnboksUpload,innkjop:openInnkjopModal,salg:openDagsalgModal,svinn:openSvinnModal,oversikt:openInnkjopModal,timeliste:openAnsattModal,betalinger:openBetalingModal};
   if(map[currentPage])map[currentPage]();
 });
 function handleExport(){if(currentPage==='produkter')exportCSV('products');else if(currentPage==='innkjop')exportCSV('purchases')}
 function renderPage(pg){
-  const fn={oversikt:renderOversikt,produkter:renderProdukter,leverandorer:renderLeverandorer,innboks:renderInnboks,innkjop:renderInnkjop,salg:renderSalg,svinn:renderSvinn,rapporter:renderRapporter,timeliste:renderTimeliste};
+  const fn={oversikt:renderOversikt,produkter:renderProdukter,leverandorer:renderLeverandorer,innboks:renderInnboks,innkjop:renderInnkjop,salg:renderSalg,svinn:renderSvinn,rapporter:renderRapporter,timeliste:renderTimeliste,betalinger:renderBetalinger};
   if(fn[pg])fn[pg]();
 }
 
@@ -1667,6 +1736,43 @@ function showInvoiceDetail(id){
   const p=dbFind('purchases',id);if(!p)return;
   const stats=calcPurchaseStats(p);
   const reel=calcInvoiceReelStats(id);
+  const pay=getInvoicePaymentStatus(id);
+  const linkedPayments=dbAll('payments').filter(x=>(x.linkedeFakturaer||[]).includes(id)).sort((a,b)=>(a.dato||'').localeCompare(b.dato||''));
+  const pillStyle={
+    paid:{bg:'rgba(45,122,74,.25)',color:'#9eddb1',label:'✓ Betalt'},
+    partial:{bg:'rgba(224,144,37,.25)',color:'#ffd29a',label:'⚠ Delvis'},
+    unpaid:{bg:'rgba(220,50,50,.22)',color:'#ffbcbc',label:'● Ikke betalt'}
+  }[pay.status];
+  const statusPill=`<span style="background:${pillStyle.bg};color:${pillStyle.color};padding:4px 10px;border-radius:14px;font-size:11px;font-weight:700;white-space:nowrap">${pillStyle.label}</span>`;
+  const payMethodIcon={transfer:'🏦',card:'💳',giro:'🧾'};
+  let payRowsHtml='';
+  if(linkedPayments.length){
+    linkedPayments.forEach(pmt=>{
+      const ic=payMethodIcon[pmt.metode]||'💰';
+      const sharedCount=(pmt.linkedeFakturaer||[]).length-1;
+      const sharedNote=sharedCount>0?`<div style="font-size:10px;opacity:.55;margin-top:2px">delt med ${sharedCount} andre faktura${sharedCount===1?'':'er'}</div>`:'';
+      payRowsHtml+=`<div style="background:rgba(255,255,255,.08);border-radius:10px;padding:11px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:13px">${ic} ${fmtDate(pmt.dato)}</div>
+          <div style="font-size:11px;opacity:.65">${escapeHtml(pmt.referanse||pmt.arkivref||'–')}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-weight:700;font-size:13px">${fmtNOK(+pmt.belop||0)}</div>
+          ${sharedNote}
+        </div>
+      </div>`;
+    });
+  } else {
+    payRowsHtml=`<div style="background:rgba(255,255,255,.06);border-radius:10px;padding:11px 12px;text-align:center;font-size:12.5px;color:rgba(255,255,255,.55)">Ingen betalinger lenket ennå.</div>`;
+  }
+  const betalingerHtml=`<div style="margin-bottom:14px">
+    <div class="stitle" style="color:#fff;opacity:.7;margin-top:0">BETALINGER</div>
+    <div style="background:rgba(255,255,255,.08);border-radius:10px;padding:11px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;font-size:12.5px">
+      <span style="opacity:.85">Betalt: ${fmtNOK(pay.paidAmount)} · Utestående: ${fmtNOK(pay.outstanding)}</span>
+      <span style="font-size:11px;opacity:.6">${linkedPayments.length} betaling${linkedPayments.length===1?'':'er'}</span>
+    </div>
+    ${payRowsHtml}
+  </div>`;
   let linesHtml='';
   (p.lines||[]).forEach((l,idx)=>{
     const prod=dbFind('products',l.productId);if(!prod)return;
@@ -1731,9 +1837,13 @@ function showInvoiceDetail(id){
           <div class="mt" style="color:#fff;margin-bottom:5px">${p.fakturanr||'Faktura'}</div>
           <div style="font-size:12px;opacity:.7">${p.lev||'Ukjent lev.'} · ${fmtDate(p.dato)}${p.notes?' · '+p.notes:''}</div>
         </div>
-        <button class="btn btn-s" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3);padding:6px 12px;font-size:11.5px;flex-shrink:0" onclick="showEditHeaderForm('${id}')" title="Rediger faktura-hode">✏️ Rediger</button>
+        <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
+          ${statusPill}
+          <button class="btn btn-s" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3);padding:6px 12px;font-size:11.5px" onclick="showEditHeaderForm('${id}')" title="Rediger faktura-hode">✏️ Rediger</button>
+        </div>
       </div>
       ${reellHtml}
+      ${betalingerHtml}
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;margin-bottom:6px">
         <div class="stitle" style="color:#fff;opacity:.7;margin:0">PRODUKTLINJER</div>
         <button class="btn btn-s" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3);padding:6px 12px;font-size:11px" onclick="showAddLineForm('${id}')">➕ Legg til linje</button>
@@ -2653,6 +2763,232 @@ async function migrateLeverandorer(){
     });
   }
   showToast(`${unmigrated.length} leverandør${unmigrated.length===1?'':'er'} opprettet`);
+}
+
+// ─────────────────────────────────────────
+// BETALINGER PAGE
+// ─────────────────────────────────────────
+let betFilter='mnd';
+let betLevFilter='alle';
+function renderBetalinger(){
+  const el=document.getElementById('pg-betalinger');
+  const all=dbAll('payments').slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
+  const todayStr=today(),monthStr=todayStr.slice(0,7);
+  let filtered=all;
+  if(betFilter==='dag')filtered=filtered.filter(p=>p.dato===todayStr);
+  else if(betFilter==='mnd')filtered=filtered.filter(p=>(p.dato||'').startsWith(monthStr));
+  else if(betFilter==='uke'){const w=getWeekStart();filtered=filtered.filter(p=>(p.dato||'')>=w)}
+  if(betLevFilter!=='alle')filtered=filtered.filter(p=>p.leverandorId===betLevFilter);
+  const levs=dbAll('leverandorer').slice().sort((a,b)=>(a.navn||'').localeCompare(b.navn||'','no'));
+  let html=`<div class="tabs">
+    <button class="tab ${betFilter==='dag'?'active':''}" onclick="betFilter='dag';renderBetalinger()">I dag</button>
+    <button class="tab ${betFilter==='uke'?'active':''}" onclick="betFilter='uke';renderBetalinger()">Denne uken</button>
+    <button class="tab ${betFilter==='mnd'?'active':''}" onclick="betFilter='mnd';renderBetalinger()">Denne måneden</button>
+    <button class="tab ${betFilter==='alle'?'active':''}" onclick="betFilter='alle';renderBetalinger()">Alle</button>
+  </div>
+  <div style="margin:8px 0 12px"><select class="fi" onchange="betLevFilter=this.value;renderBetalinger()" style="font-size:13px">
+    <option value="alle"${betLevFilter==='alle'?' selected':''}>Alle leverandører</option>
+    ${levs.map(l=>`<option value="${l.id}"${betLevFilter===l.id?' selected':''}>${escapeHtml(l.navn)}</option>`).join('')}
+  </select></div>`;
+  if(!filtered.length){
+    const msg=all.length===0
+      ?'Ingen betalinger registrert.<br>Trykk + for å legge til din første betaling.'
+      :'Ingen betalinger i perioden.';
+    html+=`<div class="empty"><div class="ei">🏦</div><p>${msg}</p></div>`;
+  } else {
+    const methodIcon={transfer:'🏦',card:'💳',giro:'🧾'};
+    html+=`<div class="card" style="padding:0 14px">`;
+    filtered.forEach(p=>{
+      const lev=p.leverandorId?dbFind('leverandorer',p.leverandorId):null;
+      const supplierName=lev?escapeHtml(lev.navn):escapeHtml(p.levTekstRaa||'Ukjent');
+      const supplierBadge=lev?'':' <span style="font-size:10.5px;color:#c98a00;font-weight:600">⚠️ ikke i register</span>';
+      const linked=(p.linkedeFakturaer||[]).length>0;
+      const linkBadge=linked
+        ?'<span style="background:rgba(45,122,74,.15);color:var(--ok);padding:2px 7px;border-radius:10px;font-size:10.5px;font-weight:600">🔗 lenket</span>'
+        :'<span style="background:rgba(224,144,37,.12);color:var(--warn);padding:2px 7px;border-radius:10px;font-size:10.5px;font-weight:600">ulenket</span>';
+      const ic=methodIcon[p.metode]||'💰';
+      html+=`<div class="li">
+        <div style="width:40px;flex-shrink:0;text-align:center"><div style="font-size:12px;font-weight:700;color:var(--muted)">${fmtDate(p.dato).slice(0,5)}</div></div>
+        <div class="lim">
+          <div class="lit">${ic} ${supplierName}${supplierBadge}</div>
+          <div class="lis">${escapeHtml(p.referanse||p.arkivref||'–')}</div>
+          <div style="margin-top:4px;display:flex;gap:7px;flex-wrap:wrap">${linkBadge}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-weight:700;font-size:14px">${fmtNOK(+p.belop||0)}</div>
+        </div>
+      </div>`;
+    });
+    html+=`</div>`;
+    const tot=filtered.reduce((s,p)=>s+(+p.belop||0),0);
+    html+=`<div style="text-align:center;padding:14px 0;font-size:13px;color:var(--muted);font-weight:600">Total ${fmtNOK(tot)} (${filtered.length} betaling${filtered.length===1?'':'er'})</div>`;
+  }
+  el.innerHTML=html;
+}
+// ─────────────────────────────────────────
+// BETALING MODAL — Phase 1 (data) + Phase 2 (link to invoices)
+// ─────────────────────────────────────────
+let betSelectedInvoices=new Set();
+
+function openBetalingModal(){
+  betSelectedInvoices=new Set();
+  document.getElementById('bet-id').value='';
+  document.getElementById('bet-dato').value=today();
+  document.getElementById('bet-booking').value=today();
+  document.getElementById('bet-belop').value='';
+  document.getElementById('bet-metode').value='transfer';
+  document.getElementById('bet-bankkonto').value='';
+  document.getElementById('bet-referanse').value='';
+  document.getElementById('bet-arkivref').value='';
+  document.getElementById('bet-notat').value='';
+  document.getElementById('bet-lev-tekst').value='';
+  fillLevDropdown('bet-lev-id','');
+  document.getElementById('bet-phase-1').style.display='block';
+  document.getElementById('bet-phase-2').style.display='none';
+  openModal('ov-betaling');
+}
+
+function onBetLevChange(){
+  const sel=document.getElementById('bet-lev-id');
+  if(sel.value==='__new__'){
+    sel.value='';
+    showToast('Opprett ny leverandør fra Lev.-fanen først','err');
+    return;
+  }
+  const lev=sel.value?dbFind('leverandorer',sel.value):null;
+  if(lev)document.getElementById('bet-lev-tekst').value=lev.navn||'';
+}
+
+function goToBetPhase2(){
+  const dato=document.getElementById('bet-dato').value;
+  const belop=parseFloat(document.getElementById('bet-belop').value)||0;
+  const levId=document.getElementById('bet-lev-id').value;
+  const levTekst=document.getElementById('bet-lev-tekst').value.trim();
+  if(!dato){showToast('Velg dato','err');return}
+  if(belop<=0){showToast('Beløp må være større enn 0','err');return}
+  if(!levId&&!levTekst){showToast('Velg leverandør eller skriv navn','err');return}
+  if(!levId){saveBetaling();return}
+  renderBetPhase2Invoices(levId,belop);
+  document.getElementById('bet-phase-1').style.display='none';
+  document.getElementById('bet-phase-2').style.display='block';
+}
+
+function goToBetPhase1(){
+  document.getElementById('bet-phase-2').style.display='none';
+  document.getElementById('bet-phase-1').style.display='block';
+}
+
+function renderBetPhase2Invoices(levId,paymentAmount){
+  const lev=dbFind('leverandorer',levId);
+  const invoices=dbAll('purchases')
+    .filter(p=>p.leverandorId===levId)
+    .map(p=>{
+      const stats=calcPurchaseStats(p);
+      const pay=getInvoicePaymentStatus(p.id);
+      return{p,total:stats.buyInklTotal,paid:pay.paidAmount,outstanding:Math.max(0,stats.buyInklTotal-pay.paidAmount),status:pay.status};
+    })
+    .filter(x=>x.status!=='paid')
+    .sort((a,b)=>(a.p.dato||'').localeCompare(b.p.dato||''));
+  document.getElementById('bet-summary').textContent=`Leverandør: ${lev?.navn||'—'} · Beløp: ${fmtNOK(paymentAmount)}`;
+  const list=document.getElementById('bet-invoices-list');
+  if(!invoices.length){
+    list.innerHTML=`<div class="empty"><div class="ei">📭</div><p>Ingen ulenkede fakturaer for ${escapeHtml(lev?.navn||'')}.<br>Du kan lagre betalingen uten lenking.</p></div>`;
+    document.getElementById('bet-link-status').textContent='';
+    return;
+  }
+  let html='';
+  invoices.forEach(({p,total,paid,outstanding})=>{
+    const checked=betSelectedInvoices.has(p.id);
+    const partialNote=paid>0?`<div style="font-size:10.5px;color:var(--muted)">Allerede betalt: ${fmtNOK(paid)} · Utestående: ${fmtNOK(outstanding)}</div>`:'';
+    html+=`<div class="li" onclick="toggleBetInvoice('${p.id}')" style="cursor:pointer;${checked?'background:rgba(77,184,118,.1)':''}">
+      <div style="width:28px;flex-shrink:0;text-align:center;font-size:18px">${checked?'☑':'☐'}</div>
+      <div class="lim">
+        <div class="lit">${escapeHtml(p.fakturanr||'Uten fakturanr')}</div>
+        <div class="lis">${fmtDate(p.dato)}</div>
+        ${partialNote}
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-weight:700">${fmtNOK(outstanding)}</div>
+        <div style="font-size:10.5px;color:var(--muted)">av ${fmtNOK(total)}</div>
+      </div>
+    </div>`;
+  });
+  list.innerHTML=`<div class="card" style="padding:0 14px">${html}</div>`;
+  updateBetLinkStatus(paymentAmount,invoices);
+}
+
+function toggleBetInvoice(invId){
+  if(betSelectedInvoices.has(invId))betSelectedInvoices.delete(invId);
+  else betSelectedInvoices.add(invId);
+  const levId=document.getElementById('bet-lev-id').value;
+  const belop=parseFloat(document.getElementById('bet-belop').value)||0;
+  renderBetPhase2Invoices(levId,belop);
+}
+
+function updateBetLinkStatus(paymentAmount,invoices){
+  const status=document.getElementById('bet-link-status');
+  if(!betSelectedInvoices.size){status.textContent='';status.style.color='';return}
+  let sumOutstanding=0;
+  invoices.forEach(({p,outstanding})=>{if(betSelectedInvoices.has(p.id))sumOutstanding+=outstanding});
+  const diff=paymentAmount-sumOutstanding;
+  if(Math.abs(diff)<0.005){
+    status.textContent=`✓ Beløp matcher ${betSelectedInvoices.size} faktura${betSelectedInvoices.size===1?'':'er'} (${fmtNOK(sumOutstanding)})`;
+    status.style.color='var(--ok)';
+  } else if(diff>0){
+    status.textContent=`⚠ Differanse ${fmtNOK(diff)} — betaling er større enn sum av valgte fakturaer.`;
+    status.style.color='var(--warn)';
+  } else {
+    status.textContent=`⚠ Beløp er ${fmtNOK(-diff)} mindre enn sum av valgte fakturaer.`;
+    status.style.color='var(--warn)';
+  }
+}
+
+async function saveBetaling(){
+  const dato=document.getElementById('bet-dato').value;
+  const booking=document.getElementById('bet-booking').value||dato;
+  const belop=parseFloat(document.getElementById('bet-belop').value)||0;
+  const levId=document.getElementById('bet-lev-id').value;
+  const levTekst=document.getElementById('bet-lev-tekst').value.trim();
+  if(!dato){showToast('Velg dato','err');return}
+  if(belop<=0){showToast('Beløp må være større enn 0','err');return}
+  if(!levId&&!levTekst){showToast('Velg leverandør eller skriv navn','err');return}
+  const arkivref=document.getElementById('bet-arkivref').value.trim();
+  if(arkivref){
+    const dup=dbAll('payments').find(p=>(p.arkivref||'').trim()===arkivref);
+    if(dup){
+      const choice=confirm(
+        'En betaling med samme arkivref finnes allerede:\n\n'+
+        'Dato: '+fmtDate(dup.dato)+'\n'+
+        'Beløp: '+fmtNOK(+dup.belop||0)+'\n'+
+        'Arkivref: '+arkivref+'\n\n'+
+        'Trykk OK for å LAGRE LIKEVEL (oppretter duplikat).\n'+
+        'Trykk Avbryt for å stoppe.'
+      );
+      if(!choice)return;
+    }
+  }
+  const newId=uid();
+  const payment={
+    id:newId,
+    tenantId:'fourseason',
+    dato,
+    bookingDato:booking,
+    leverandorId:levId||'',
+    levTekstRaa:levTekst,
+    belop:+belop.toFixed(2),
+    valuta:'NOK',
+    bankkonto:document.getElementById('bet-bankkonto').value.trim(),
+    referanse:document.getElementById('bet-referanse').value.trim(),
+    arkivref,
+    metode:document.getElementById('bet-metode').value||'transfer',
+    linkedeFakturaer:Array.from(betSelectedInvoices),
+    opprettetAv:currentUser?.name||'ukjent',
+    opprettet:new Date().toISOString(),
+    notat:document.getElementById('bet-notat').value.trim()
+  };
+  await db.collection('payments').doc(newId).set(payment);
+  showToast(`Betaling lagret · ${fmtNOK(belop)}`);
+  closeModal('ov-betaling');
 }
 
 // ─────────────────────────────────────────
@@ -3905,12 +4241,14 @@ function exportCSV(type){
 // LOGIN SYSTEM
 // ─────────────────────────────────────────
 const USERS = {
-  'Herish':  {pin:'162026', role:'admin',    label:'👤 Herish'},
+  'Herish':  {pin:'162026', role:'admin',    label:'👤 Hasher'},
   'Admin':   {pin:'222026', role:'admin',    label:'🔧 Admin'},
   'Regnskap':{pin:'732026', role:'regnskap', label:'📊 Regnskap'},
   'Sormena': {pin:'052026', role:'staff',    label:'👤 Sormena'}
 };
 // Roles: admin=full access, regnskap=view only, staff=register only (no delete)
+
+function displayUserName(name){return name==='Herish'?'Hasher':name}
 
 let currentUser = null;
 let pinEntry = '';
@@ -3955,7 +4293,7 @@ function checkPin(){
     btn.textContent = user.label + ' · Logg ut';
     btn.style.display = 'flex';
     applyRoleRestrictions();
-    showToast('Velkommen, ' + username + '! 👋');
+    showToast('Velkommen, ' + displayUserName(username) + '! 👋');
   } else {
     errEl.textContent = 'Feil PIN-kode. Prøv igjen.';
     pinEntry = '';
@@ -3968,7 +4306,7 @@ function checkPin(){
 }
 
 function logoutUser(){
-  if(!confirm('Logg ut ' + (currentUser?.name||'') + '?')) return;
+  if(!confirm('Logg ut ' + displayUserName(currentUser?.name||'') + '?')) return;
   currentUser = null;
   sessionStorage.removeItem('fs_user');
   pinEntry = '';
