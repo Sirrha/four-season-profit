@@ -170,6 +170,11 @@ select.fi:focus{background-color:#fff}
 
 /* ── PLINE ── */
 .pline{background:var(--bg);border-radius:10px;padding:12px;margin-bottom:8px;border:1.5px solid var(--border)}
+.pline.ekskludert{background-color:rgba(180,180,180,.08);border-color:rgba(180,180,180,.3)}
+.pline.ekskludert .kbox{opacity:.7}
+.ekskluder-badge{display:inline-block;font-size:9.5px;padding:2px 7px;border-radius:8px;color:#888;background:rgba(180,180,180,.2);font-weight:700;letter-spacing:.4px;margin-left:6px;vertical-align:middle}
+.krow.kekskluder{color:#aaa}
+.reell-row.rekskluder{color:#aaa}
 .pline-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px}
 .pline-title{font-weight:700;font-size:13px;color:var(--primary)}
 .rmline{background:none;border:none;color:var(--danger);font-size:16px;cursor:pointer;padding:3px 6px;border-radius:6px}
@@ -280,6 +285,11 @@ select.fi:focus{background-color:#fff}
 .scantbl tr.row-stable:hover td{background:#f8f8f5}
 .scantbl tr.row-draft td{background:#fff3ec}
 .scantbl tr.row-skipped td{opacity:.35;text-decoration:line-through}
+.scantbl tr.row-ekskludert td{background:rgba(180,180,180,.1);color:#888}
+.scantbl .ekskl-x{color:var(--muted);background:none;border:none;cursor:pointer;font-size:14px;padding:4px 6px;line-height:1;margin-right:2px}
+.scantbl .ekskl-x.active{color:#666;background:rgba(180,180,180,.25);border-radius:5px;font-weight:700}
+.scan-ekskl-row{display:flex;justify-content:space-between;align-items:center;padding:6px 12px;font-size:12px;background:rgba(180,180,180,.1);border-radius:6px;margin-top:6px;color:#666}
+.scan-ekskl-row.inkluder{background:rgba(141,225,158,.1);color:#2d5a40;font-weight:600}
 .scantbl .cat-marker{display:inline-block;width:22px;text-align:center;font-size:14px}
 .scantbl .status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
 .scantbl .status-dot.ok{background:#2e7d32}
@@ -1076,13 +1086,22 @@ function calcKolliLine(antall,vektPerKolli,prisPerKolliInkl,vatRate,bonusKolli){
 }
 function calcPurchaseStats(purchase){
   let buyEksTotal=0,buyInklTotal=0,forvSalgEks=0;
+  let inkludertEks=0,inkludertInkl=0,ekskludertEks=0,ekskludertInkl=0;
   for(const l of(purchase.lines||[])){
     const p=dbFind('products',l.productId);
-    buyEksTotal+=(l.totalEks||0);buyInklTotal+=(l.totalInkl||0);
-    if(p){forvSalgEks+=(l.totalVekt||l.antallKolli||0)*(p.salgEks||0);}
+    const lineEks=l.totalEks||0,lineInkl=l.totalInkl||0;
+    // Paper invoice contract: ALL lines summed, including excluded.
+    buyEksTotal+=lineEks;buyInklTotal+=lineInkl;
+    if(l.ekskluderFraBeregning===true){
+      ekskludertEks+=lineEks;ekskludertInkl+=lineInkl;
+    } else {
+      inkludertEks+=lineEks;inkludertInkl+=lineInkl;
+      if(p){forvSalgEks+=(l.totalVekt||l.antallKolli||0)*(p.salgEks||0);}
+    }
   }
-  const{gmKr,gmPct,paaslagPct}=calcGM(buyEksTotal,forvSalgEks);
-  return{buyEksTotal,buyInklTotal,forvSalgEks,gmKr,gmPct,paaslagPct};
+  // GM is computed against included lines only (excluded items won't be sold).
+  const{gmKr,gmPct,paaslagPct}=calcGM(inkludertEks,forvSalgEks);
+  return{buyEksTotal,buyInklTotal,forvSalgEks,gmKr,gmPct,paaslagPct,inkludertEks,inkludertInkl,ekskludertEks,ekskludertInkl};
 }
 function calcInvoiceReelStats(invoiceId){
   const purchase=dbFind('purchases',invoiceId);if(!purchase)return null;
@@ -1105,7 +1124,7 @@ function calcInvoiceReelStats(invoiceId){
     return a+(w.kostverdi||(p?(w.qty||0)*(p.buyEks||0):0));
   },0);
   const hasSales=faktiskSalgEks>0;
-  const reellGmKr=hasSales?faktiskSalgEks-base.buyEksTotal-svinnKost:null;
+  const reellGmKr=hasSales?faktiskSalgEks-base.inkludertEks-svinnKost:null;
   const reellGmPct=(hasSales&&faktiskSalgEks>0)?(reellGmKr/faktiskSalgEks)*100:null;
   return{...base,faktiskSalgEks,svinnKost,reellGmKr,reellGmPct,hasSales,wasteCount:wasteAll.length,salesCount:linkedSales.length};
 }
@@ -1591,8 +1610,9 @@ function renderPLines(){
     const enhetLbl=isKg?'kg':'stk/enhet';
     const{totalVekt,totalInkl,totalEks,prPerEnhetInkl,prPerEnhetEks}=calcKolliLine(l.antall||0,l.vektPerKolli||0,l.prisPerKolliInkl||0,l.vatRate||15);
     const gm=p&&prPerEnhetEks>0?calcGM(prPerEnhetEks,p.salgEks||0):{gmKr:0,gmPct:0,paaslagPct:0};
-    html+=`<div class="pline">
-      <div class="pline-hdr"><span class="pline-title">${p?`${CATS[p.kategori]?.emoji||''} ${p.navn}`:'Linje '+(i+1)}</span><button class="rmline" onclick="removePLine(${i})">✕</button></div>
+    const isEksk=l.ekskluderFraBeregning===true;
+    html+=`<div class="pline${isEksk?' ekskludert':''}">
+      <div class="pline-hdr"><span class="pline-title">${p?`${CATS[p.kategori]?.emoji||''} ${p.navn}`:'Linje '+(i+1)}${isEksk?'<span class="ekskluder-badge">EKSKLUDERT</span>':''}</span><button class="rmline" onclick="removePLine(${i})">✕</button></div>
       <div class="fg" style="grid-column:1/-1"><label class="fl">Produkt</label>
         <select class="fi" onchange="setPLinePrd(${i},this.value)">
           <option value="">Velg produkt…</option>
@@ -1617,6 +1637,10 @@ function renderPLines(){
           <option value="0" ${l.vatRate==0?'selected':''}>0%</option>
         </select>
       </div>
+      <label style="display:flex;align-items:flex-start;gap:8px;font-size:11.5px;color:var(--muted);margin:10px 0 6px;cursor:pointer;user-select:none;line-height:1.35">
+        <input type="checkbox" ${isEksk?'checked':''} onchange="setPLineEkskluder(${i},this.checked)" style="width:16px;height:16px;cursor:pointer;flex-shrink:0;margin-top:1px">
+        <span><strong style="color:var(--text)">Ekskluder fra beregning</strong> — linjen lagres på fakturaen (revisjonsspor) men telles ikke i profitt/GM. For pant, IFCO, kreditnota-korreksjoner.</span>
+      </label>
       ${(l.antall>0&&l.vektPerKolli>0&&l.prisPerKolliInkl>0)?`
       <div class="kbox">
         <div class="krow"><span>Total ${isKg?'vekt':'antall'}</span><span class="kv">${fmtN(totalVekt,isKg?2:0)} ${enhetLbl}</span></div>
@@ -1636,27 +1660,36 @@ function renderPLines(){
   container.innerHTML=html;
   updateKalkulator();
 }
-function addPLine(){pLines.push({productId:'',antall:0,vektPerKolli:0,prisPerKolliInkl:0,vatRate:15});renderPLines()}
+function addPLine(){pLines.push({productId:'',antall:0,vektPerKolli:0,prisPerKolliInkl:0,vatRate:15,ekskluderFraBeregning:false});renderPLines()}
 function removePLine(i){pLines.splice(i,1);renderPLines()}
 function setPLinePrd(i,val){pLines[i].productId=val;const p=dbFind('products',val);if(p)pLines[i].vatRate=p.mva||15;renderPLines()}
 function setPLineVal(i,field,val){pLines[i][field]=parseFloat(val)||0;renderPLines()}
+function setPLineEkskluder(i,checked){pLines[i].ekskluderFraBeregning=!!checked;renderPLines()}
 function updateKalkulator(){
-  let tBuyEks=0,tBuyInkl=0,tForvSalg=0;
+  let tBuyEks=0,tBuyInkl=0,tForvSalg=0,tInkludertEks=0,tInkludertInkl=0,tEkskludertEks=0,tEkskludertInkl=0;
   for(const l of pLines){
     const p=dbFind('products',l.productId);
     const{totalVekt,totalInkl,totalEks}=calcKolliLine(l.antall||0,l.vektPerKolli||0,l.prisPerKolliInkl||0,l.vatRate||15);
     tBuyEks+=totalEks;tBuyInkl+=totalInkl;
-    if(p)tForvSalg+=(totalVekt||0)*(p.salgEks||0);
+    if(l.ekskluderFraBeregning===true){
+      tEkskludertEks+=totalEks;tEkskludertInkl+=totalInkl;
+    } else {
+      tInkludertEks+=totalEks;tInkludertInkl+=totalInkl;
+      if(p)tForvSalg+=(totalVekt||0)*(p.salgEks||0);
+    }
   }
   const kalk=document.getElementById('inn-kalkulator');
   const box=document.getElementById('inn-kalk-box');
   if(tBuyEks<=0){kalk.style.display='none';return}
   kalk.style.display='block';
-  const{gmKr,gmPct,paaslagPct}=calcGM(tBuyEks,tForvSalg);
+  const{gmKr,gmPct,paaslagPct}=calcGM(tInkludertEks,tForvSalg);
   box.innerHTML=`
     <div class="krow"><span>Total innkjøp eks. MVA</span><span class="kv" style="color:var(--accent)">${fmtNOK(tBuyEks)}</span></div>
     <div class="krow"><span>MVA (innkjøp)</span><span class="kv">${fmtNOK(tBuyInkl-tBuyEks)}</span></div>
     <div class="krow"><span>Total innkjøp inkl. MVA</span><span class="kv">${fmtNOK(tBuyInkl)}</span></div>
+    ${tEkskludertInkl>0?`<div class="kdiv"></div>
+    <div class="krow kekskluder"><span>Ekskludert fra beregning</span><span class="kv">-${fmtNOK(tEkskludertInkl)}</span></div>
+    <div class="krow"><span>Inkludert i beregning</span><span class="kv">${fmtNOK(tInkludertInkl)}</span></div>`:''}
     <div class="kdiv"></div>
     <div class="krow"><span>Forventet salgsinntekt eks. MVA</span><span class="kv">${fmtNOK(tForvSalg)}</span></div>
     <div class="krow ktot" style="color:${gmKr>=0?'var(--accent)':'#f88'}"><span>GM kr (total)</span><span class="kv">${fmtNOK(gmKr)}</span></div>
@@ -1782,9 +1815,10 @@ function showInvoiceDetail(id){
     const isKg=prod.enhet==='kg',isFrukt=prod.kategori==='frukt';
     const enhetLbl=isKg?'kg':'stk';
     const gm=l.prPerEnhetEks>0?calcGM(l.prPerEnhetEks,prod.salgEks||0):{gmKr:0,gmPct:0,paaslagPct:0};
-    linesHtml+=`<div style="background:rgba(255,255,255,.08);border-radius:10px;padding:12px;margin-bottom:8px" id="line-${id}-${idx}">
+    const isEksk=l.ekskluderFraBeregning===true;
+    linesHtml+=`<div style="background:rgba(255,255,255,.08);border-radius:10px;padding:12px;margin-bottom:8px${isEksk?';opacity:.65;border:1.5px dashed rgba(200,200,200,.4)':''}" id="line-${id}-${idx}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;gap:10px">
-        <div style="flex:1;min-width:0"><strong style="font-size:13px">${CATS[prod.kategori]?.emoji||''} ${prod.navn}</strong>
+        <div style="flex:1;min-width:0"><strong style="font-size:13px">${CATS[prod.kategori]?.emoji||''} ${prod.navn}</strong>${isEksk?'<span class="ekskluder-badge">EKSKLUDERT</span>':''}
         ${isFrukt?`<span class="frukt-tag" style="margin-left:6px">🥦 Svinn trekkes</span>`:''}</div>
         <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
           <span style="font-family:'DM Mono',monospace;font-size:12px;color:${gm.gmPct>=20?'var(--accent)':'#f88'}">${fmtPct(gm.gmPct)}</span>
@@ -1816,15 +1850,19 @@ function showInvoiceDetail(id){
         <div class="reell-hdr">Teoretisk resultat ${reel.wasteCount>0?`<span style="font-size:11px;background:rgba(255,255,255,.15);padding:2px 7px;border-radius:5px">⚠️ ${reel.wasteCount} svinnpost${reel.wasteCount!==1?'er':''}</span>`:''}</div>
         <div class="reell-row"><span class="rk">Innkjøp inkl. MVA</span><span class="rv">${fmtNOK(reel.buyInklTotal)}</span></div>
         <div class="reell-row"><span class="rk">Innkjøp eks. MVA</span><span class="rv b">${fmtNOK(reel.buyEksTotal)}</span></div>
+        ${(reel.ekskludertEks||0)>0?`<div class="reell-row rekskluder"><span class="rk">Ekskludert fra beregning</span><span class="rv">- ${fmtNOK(reel.ekskludertEks)}</span></div>
+        <div class="reell-row"><span class="rk">Inkludert i beregning eks. MVA</span><span class="rv b">${fmtNOK(reel.inkludertEks)}</span></div>`:''}
         <div class="reell-row"><span class="rk">Forv. salgsinntekt eks. MVA</span><span class="rv">${fmtNOK(reel.forvSalgEks)}</span></div>
         <div class="reell-row"><span class="rk">Svinnkostnad (${reel.wasteCount} poster)</span><span class="rv" style="color:var(--danger)">${reel.svinnKost>0?'− '+fmtNOK(reel.svinnKost):'kr 0,00'}</span></div>
         <div class="reell-row rtot"><span class="rk">Forv. GM kr</span><span class="rv ${reel.gmKr>=0?'g':'r'}">${fmtNOK(reel.gmKr)}</span></div>
-        <div class="reell-row rtot"><span class="rk">GM% · Påslag%</span><span class="rv"><span class="mlbl ${marginCls(reel.gmPct)}">${fmtPct(reel.gmPct)}</span> · ${fmtPct(reel.buyEksTotal>0?(reel.gmKr/reel.buyEksTotal)*100:0)}</span></div>
+        <div class="reell-row rtot"><span class="rk">GM% · Påslag%</span><span class="rv"><span class="mlbl ${marginCls(reel.gmPct)}">${fmtPct(reel.gmPct)}</span> · ${fmtPct(reel.paaslagPct||0)}</span></div>
       </div>
       ${reel.hasSales?`<div class="reell-box" style="margin-top:8px">
         <div class="reell-hdr">Reelt resultat (${reel.salesCount} salgsreg.)</div>
         <div class="reell-row"><span class="rk">Faktisk salg eks. MVA</span><span class="rv g">${fmtNOK(reel.faktiskSalgEks)}</span></div>
         <div class="reell-row"><span class="rk">Innkjøpskost eks. MVA</span><span class="rv">${fmtNOK(reel.buyEksTotal)}</span></div>
+        ${(reel.ekskludertEks||0)>0?`<div class="reell-row rekskluder"><span class="rk">Ekskludert fra beregning</span><span class="rv">- ${fmtNOK(reel.ekskludertEks)}</span></div>
+        <div class="reell-row"><span class="rk">Inkludert i beregning eks. MVA</span><span class="rv b">${fmtNOK(reel.inkludertEks)}</span></div>`:''}
         <div class="reell-row"><span class="rk">Svinnkostnad</span><span class="rv r">${reel.svinnKost>0?'− '+fmtNOK(reel.svinnKost):'kr 0,00'}</span></div>
         <div class="reell-row rtot"><span class="rk">Reell GM kr</span><span class="rv ${(reel.reellGmKr||0)>=0?'g':'r'}">${fmtNOK(reel.reellGmKr)}</span></div>
         <div class="reell-row rtot"><span class="rk">Reell GM%</span><span class="rv"><span class="mlbl ${marginCls(reel.reellGmPct||0)}">${fmtPct(reel.reellGmPct)}</span></span></div>
@@ -1969,6 +2007,10 @@ function showEditLineForm(purchaseId,lineIdx){
             <option value="25" ${(l.vatRate||15)===25?'selected':''}>25 %</option>
           </select>
         </label>
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:11px;color:var(--muted);font-weight:600;cursor:pointer;padding:4px 0">
+          <input type="checkbox" id="editl-ekskluder" ${l.ekskluderFraBeregning===true?'checked':''} style="width:16px;height:16px;cursor:pointer;flex-shrink:0;margin-top:1px">
+          <span style="line-height:1.4">EKSKLUDER FRA BEREGNING<div style="font-size:10.5px;color:var(--muted);margin-top:3px;font-weight:400">Linjen lagres på fakturaen (revisjonsspor) men telles ikke i beregning av profitt/GM. Brukes for pant, IFCO, kreditnota-korreksjoner, returer.</div></span>
+        </label>
         <div style="border-top:1px solid var(--border);padding-top:10px;margin-top:4px">
           <label style="font-size:11px;color:var(--muted);font-weight:600">UTSALGSPRIS EKS. MVA (per ${enhetShort})
             <input id="editl-utsalg" type="number" step="0.01" value="${currentSalgEks}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:13px;margin-top:4px">
@@ -1993,10 +2035,11 @@ async function saveEditLine(purchaseId,lineIdx){
   const pris=parseFloat(document.getElementById('editl-pris').value)||0;
   const mva=parseFloat(document.getElementById('editl-mva').value)||15;
   const utsalgEks=parseFloat(document.getElementById('editl-utsalg').value)||0;
+  const ekskluder=document.getElementById('editl-ekskluder').checked;
   const kl=calcKolliLine(antall,vekt,pris,mva,bonus);
   lines[lineIdx]={
     ...lines[lineIdx],
-    antall,vektPerKolli:vekt,prisPerKolliInkl:pris,vatRate:mva,bonusKolli:bonus,
+    antall,vektPerKolli:vekt,prisPerKolliInkl:pris,vatRate:mva,bonusKolli:bonus,ekskluderFraBeregning:ekskluder,
     ...kl
   };
   try{
@@ -2083,6 +2126,10 @@ function showAddLineForm(purchaseId){
             <option value="0">0 %</option>
           </select>
         </label>
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:11px;color:var(--muted);font-weight:600;cursor:pointer;padding:4px 0">
+          <input type="checkbox" id="addl-ekskluder" style="width:16px;height:16px;cursor:pointer;flex-shrink:0;margin-top:1px">
+          <span style="line-height:1.4">EKSKLUDER FRA BEREGNING<div style="font-size:10.5px;color:var(--muted);margin-top:3px;font-weight:400">Linjen lagres på fakturaen (revisjonsspor) men telles ikke i beregning av profitt/GM. Brukes for pant, IFCO, kreditnota-korreksjoner, returer.</div></span>
+        </label>
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
         <button class="btn btn-g" onclick="showInvoiceDetail('${purchaseId}')">Avbryt</button>
@@ -2101,9 +2148,11 @@ async function saveNewLine(purchaseId){
   const pris=parseFloat(document.getElementById('addl-pris').value)||0;
   const mva=parseFloat(document.getElementById('addl-mva').value)||15;
   if(antall<=0||pris<=0){showToast('Antall og pris må være større enn 0','err');return}
+  const ekskluder=document.getElementById('addl-ekskluder').checked;
   const kl=calcKolliLine(antall,vekt,pris,mva,bonus);
   const newLine={
     productId,antall,vektPerKolli:vekt,prisPerKolliInkl:pris,vatRate:mva,bonusKolli:bonus,
+    ekskluderFraBeregning:ekskluder,
     ...kl
   };
   const lines=(p.lines||[]).slice();
@@ -3935,6 +3984,7 @@ function rapKategorier(){
   const purchases=dbAll('purchases');
   const cats={};Object.keys(CATS).forEach(k=>cats[k]={buyEks:0,buyInkl:0,salgEks:0});
   for(const p of purchases){for(const l of(p.lines||[])){
+    if(l.ekskluderFraBeregning===true)continue;
     const prod=dbFind('products',l.productId);if(!prod)continue;
     const k=prod.kategori;if(!cats[k])cats[k]={buyEks:0,buyInkl:0,salgEks:0};
     cats[k].buyEks+=(l.totalEks||0);cats[k].buyInkl+=(l.totalInkl||0);
@@ -5081,6 +5131,7 @@ function showScanResults(data){
       matchType:match.type,
       utsalgEks:p?(p.salgEks||0):0,
       skipped:false,
+      ekskluder:false,
       isNew:!p,
       newCategory:catGuess,
       newEnhet:selgesSom||'stk'
@@ -5220,7 +5271,7 @@ function renderScanRows(){
   let html='';
   scanRows.forEach((row,idx)=>{
     const rowCat=row.isNew?row.newCategory:(row.productId?(dbFind('products',row.productId)?.kategori||''):'');
-    const rowClass=row.skipped?'row-skipped':(row.isNew?'row-draft':categoryRowClass(rowCat));
+    const rowClass=row.skipped?'row-skipped':((row.isNew?'row-draft':categoryRowClass(rowCat))+(row.ekskluder?' row-ekskludert':''));
     const mva=row.mva||15;
     // Convert scanned price per kolli to eks. MVA based on rule
     const prisPerKolliEks=rule==='eks'?row.prisPerKolli:row.prisPerKolli/(1+mva/100);
@@ -5260,11 +5311,11 @@ function renderScanRows(){
       nameBody='<div class="pname">'+escapeHtml(row.raw)+'</div><div class="raw">hoppet over</div>';
     } else if(row.productId){
       const p=dbFind('products',row.productId);
-      nameBody='<div class="pname">'+dot+escapeHtml(p?.navn||row.raw)+'</div>'+
+      nameBody='<div class="pname">'+dot+escapeHtml(p?.navn||row.raw)+(row.ekskluder?' <span class="ekskluder-badge">EKSKLUDERT</span>':'')+'</div>'+
         '<div class="raw">Skannet: '+escapeHtml(row.raw)+(row.varenr?' · Varenr: '+escapeHtml(row.varenr):'')+'</div>';
     } else {
       // Not found — inline registration form
-      nameBody='<div class="pname">'+dot+escapeHtml(row.raw)+'</div>'+
+      nameBody='<div class="pname">'+dot+escapeHtml(row.raw)+(row.ekskluder?' <span class="ekskluder-badge">EKSKLUDERT</span>':'')+'</div>'+
         '<div class="raw">Ikke i register'+(row.varenr?' · Varenr: '+escapeHtml(row.varenr):'')+'</div>'+
         '<div class="inline-new">'+
           '<div style="font-size:10.5px;color:#8b6c3f;font-weight:600">Registrer som nytt produkt:</div>'+
@@ -5312,7 +5363,8 @@ function renderScanRows(){
       '<td class="c"><span class="gm-badge '+gmClass(gmPct)+'">'+(gmPct!==null?fmtPct(gmPct):'–')+'</span></td>'+
       '<td class="c">'+(row.skipped
         ?'<button class="skip-x" title="Gjenopprett" onclick="updScanRow('+idx+',\'skipped\',false)">↻</button>'
-        :'<button class="skip-x" title="Hopp over" onclick="updScanRow('+idx+',\'skipped\',true)">×</button>')+'</td>'+
+        :'<button class="ekskl-x'+(row.ekskluder?' active':'')+'" title="'+(row.ekskluder?'Ekskludert fra beregning — klikk for å inkludere':'Ekskluder fra beregning (pant, kreditnota, IFCO)')+'" onclick="updScanRow('+idx+',\'ekskluder\','+(!row.ekskluder)+')">⊘</button>'+
+         '<button class="skip-x" title="Hopp over" onclick="updScanRow('+idx+',\'skipped\',true)">×</button>')+'</td>'+
     '</tr>';
   });
   tbody.innerHTML=html;
@@ -5327,6 +5379,8 @@ function updScanRow(idx,field,value){
     scanRows[idx][field]=parseFloat(value)||0;
   } else if(field==='skipped'){
     scanRows[idx].skipped=!!value;
+  } else if(field==='ekskluder'){
+    scanRows[idx].ekskluder=!!value;
   } else if(field==='productId'){
     // v24: User manually overrode AI match. Offer to save scanned name as alias.
     const oldId=scanRows[idx].productId;
@@ -5394,7 +5448,8 @@ function renderScanSummary(){
   const chipBar=document.getElementById('scan-chipbar');
   if(!el)return;
   const rule=getScanRule();
-  let totalKjopEks=0,totalKjopInkl=0,totalForvSalg=0,missingInnhold=0,missingPrice=0,newProd=0,skipped=0,matched=0,maybe=0,unmatched=0;
+  let totalKjopEks=0,totalKjopInkl=0,totalForvSalg=0,inkludertEks=0,inkludertInkl=0,ekskludertEks=0,ekskludertInkl=0;
+  let missingInnhold=0,missingPrice=0,newProd=0,skipped=0,matched=0,maybe=0,unmatched=0;
   scanRows.forEach(r=>{
     if(r.skipped){skipped++;return}
     if(r.isNew)newProd++;
@@ -5406,8 +5461,10 @@ function renderScanSummary(){
     const prisPerKolliInkl=rule==='inkl'?r.prisPerKolli:r.prisPerKolli*(1+mva/100);
     const kjopEks=prisPerKolliEks*r.antallKolli;
     const kjopInkl=prisPerKolliInkl*r.antallKolli;
-    totalKjopEks+=kjopEks;
-    totalKjopInkl+=kjopInkl;
+    // Paper invoice contract: ALL non-skipped rows in totalKjop (kontrollsum vs faktura.totalInkl).
+    totalKjopEks+=kjopEks;totalKjopInkl+=kjopInkl;
+    if(r.ekskluder){ekskludertEks+=kjopEks;ekskludertInkl+=kjopInkl;return}
+    inkludertEks+=kjopEks;inkludertInkl+=kjopInkl;
     const innhold=parseFloat(r.innholdPerKolli)||0;
     const totaltAntall=r.antallKolli*innhold;
     if(innhold<=0)missingInnhold++;
@@ -5417,8 +5474,9 @@ function renderScanSummary(){
       missingPrice++;
     }
   });
-  const fortj=totalForvSalg-totalKjopEks;
-  const gmPct=totalForvSalg>0?((totalForvSalg-totalKjopEks)/totalForvSalg)*100:null;
+  // GM math against included only (excluded items won't be sold).
+  const fortj=totalForvSalg-inkludertEks;
+  const gmPct=totalForvSalg>0?((totalForvSalg-inkludertEks)/totalForvSalg)*100:null;
   // ─── Kontrollsum: app-total vs faktura-total ───
   const fakturaTotalInkl=parseFloat(scanResults?.totalInkl)||0;
   let kontrollHtml='';
@@ -5445,11 +5503,18 @@ function renderScanSummary(){
   let warnHtml='';
   if(missingInnhold>0)warnHtml+='<div style="font-size:10.5px;color:#ffd54f;font-weight:600;margin-top:2px">⚠️ '+missingInnhold+' mangler «Innhold/kolli»</div>';
   if(missingPrice>0)warnHtml+='<div style="font-size:10.5px;color:#ffd54f;font-weight:600;margin-top:2px">⚠️ '+missingPrice+' mangler utsalgspris</div>';
+  let ekskluderHtml='';
+  if(ekskludertInkl>0){
+    ekskluderHtml=
+      '<div class="scan-ekskl-row"><span>Ekskludert fra beregning</span><span>-'+fmtNOK(ekskludertInkl)+'</span></div>'+
+      '<div class="scan-ekskl-row inkluder"><span>Inkludert i beregning</span><span>'+fmtNOK(inkludertInkl)+'</span></div>';
+  }
   el.innerHTML=
     '<div class="sumcell"><div class="sl">Totalt innkjøp eks. MVA</div><div class="sv">'+fmtNOK(totalKjopEks)+'</div></div>'+
     '<div class="sumcell"><div class="sl">Forventet salg eks. MVA</div><div class="sv">'+(totalForvSalg>0?fmtNOK(totalForvSalg):'–')+warnHtml+'</div></div>'+
     '<div class="sumcell"><div class="sl">Forventet fortjeneste</div><div class="sv '+(fortj>=0?'pos':'neg')+'">'+(totalForvSalg>0?fmtNOK(fortj,true):'–')+'</div></div>'+
     '<div class="sumcell"><div class="sl">Gjennomsnittlig GM</div><div class="sv">'+(gmPct!==null?fmtPct(gmPct):'–')+'</div></div>'+
+    ekskluderHtml+
     kontrollHtml;
   if(chipBar){
     let chips='';
@@ -5569,7 +5634,8 @@ async function confirmScanToInnkjop(){
       prisPerKolliEks:+prisPerKolliEks.toFixed(4),
       prisPerEnhetEks:+prisPerEnhetEks.toFixed(4),
       vatRate:mva,
-      selgesSom:r.selgesSom
+      selgesSom:r.selgesSom,
+      ekskluderFraBeregning:r.ekskluder===true
     });
     if(r.utsalgEks>0){
       const p=dbFind('products',r.productId);

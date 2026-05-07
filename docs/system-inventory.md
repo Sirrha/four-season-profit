@@ -1,47 +1,48 @@
 # System-inventar — Four Season AS
 
-**Last updated**: 2026-04-26, after STEP 1 of DNB-skanner (payments → bankTransactions migration).
+**Last updated**: 2026-05-07, after Ekskluder fra beregning V1 (universal line-flag for pant, kreditnota, returer).
 
 Dette dokumentet kartlegger hva som faktisk finnes i `index.html` (produksjon, sormena.no). Mål: at Soren (chat) og Claude Code skal jobbe ut fra samme bilde av systemet og slippe å duplikere arbeid eller spørre om ting som allerede er bygget.
 
-- **Filer kartlagt**: `index.html` (~5744 linjer)
-- **Siste store endring**: STEP 1 av DNB-skanner-bygget (2026-04-26) — `payments` → `bankTransactions`-migrasjon med engelske tilleggsfelter (`type`, `direction`, `period`). `payments` er nå cold archive — ingen nye writes dit.
-- **Tidligere milestone**: v27 ble cutoveret til produksjon i kommit `95e308d` (2026-04-26). Tidligere `four-season-v27.html` er slettet — det er nå én produksjonsfil.
+- **Filer kartlagt**: `index.html` (~5810 linjer)
+- **Siste store endring**: Ekskluder fra beregning V1 (2026-05-07) — boolean flagg `ekskluderFraBeregning` per linje på `purchases.lines[]`. Linjen lagres FULLT på fakturaen (audit trail) men telles ikke i profitt/GM-beregning. Universal handler for pant, IFCO, kreditnota-korreksjoner, returer, leverandørfeil. UI: checkbox i 4 steder (manuell pline, edit-line, add-line, scanner-rad) + EKSKLUDERT-badge + gråtonet visuell. Faktura totalt (`buyEksTotal`/`buyInklTotal`) summerer fortsatt ALLE linjer — paper-faktura-kontrakt sakrosankt. Profit/GM regnes mot `inkludertEks` (ny return-felt fra `calcPurchaseStats`).
+- **Tidligere milestone**: STEP 1 av DNB-skanner-bygget (2026-04-26) — `payments` → `bankTransactions`-migrasjon. `payments` er cold archive.
+- **Tidligere milestone**: v27 ble cutoveret til produksjon i kommit `95e308d` (2026-04-26).
 
-**Språkpolicy (parked decision #9)**: Som av 2026-04-26: Engelsk for all ny kode (feltnavn, funksjonsnavn, identifiers). Eksisterende norske feltnavn (`dato`, `belop`, `linkedeFakturaer`, etc.) beholdes bakoverkompatibelt inntil en dedikert språkmigrasjon. Resultatet er midlertidig hybrid skjema i `bankTransactions`. UI-strenger forblir norske.
+**Språkpolicy (parked decision #9)**: Som av 2026-04-26: Engelsk for all ny kode (feltnavn, funksjonsnavn, identifiers). Eksisterende norske feltnavn (`dato`, `belop`, `linkedeFakturaer`, etc.) beholdes bakoverkompatibelt inntil en dedikert språkmigrasjon. Resultatet er midlertidig hybrid skjema i `bankTransactions` og `purchases.lines` (ny `ekskluderFraBeregning` følger samme hybrid-konvensjon). UI-strenger forblir norske.
 
-Linjenumre er ferske per 2026-04-26 (etter STEP 1). Filen vokser fort, så verifiser med `Grep` før du redigerer rundt en gitt linje.
+Linjenumre er ferske per 2026-05-07 (etter Ekskluder V1). Filen vokser fort, så verifiser med `Grep` før du redigerer rundt en gitt linje.
 
 ---
 
 ## Arkitektur i ett blikk
 - **Én fil**, ingen build, ingen tester. HTML + CSS + JS inline.
-- **Datalag**: Firebase v8 compat. **12 Firestore-kolleksjoner totalt** — 11 mirroret til `LOCAL`-objektet (line 894), pluss `_meta` som er system-only (migrasjons-sentinels) og IKKE i `cols`-listener. Listener pr. data-kolleksjon i `startListeners()` (line 962). `dbAdd/dbUpdate/dbDelete/dbFind/dbAll` (line 1020–1035) er eneste tilgang for data-kolleksjoner.
-- **Sider**: 10 stk, bytte via `goTo(pg)` → `renderPage(pg)` (line 1149–1187). Hver render rebuildes fra `LOCAL` ved hvert kall.
-- **Auth**: PIN-basert mot hardkodet `USERS`-map (line 4252). Lagres i `sessionStorage.fs_user`. Roller: `admin`, `regnskap`, `staff`. Firestore-rules er åpne — kun klientside-restriksjoner via `applyRoleRestrictions()`.
-- **Boot**: IIFE `boot()` (line 4365) hardkoder Firebase-config og hopper over setup-skjermen. `showApp()` kaller `migratePaymentsToBankTransactions()` (fire-and-forget) før UI vises.
+- **Datalag**: Firebase v8 compat. **12 Firestore-kolleksjoner totalt** — 11 mirroret til `LOCAL`-objektet (line ~901), pluss `_meta` som er system-only (migrasjons-sentinels) og IKKE i `cols`-listener. Listener pr. data-kolleksjon i `startListeners()` (line ~969). `dbAdd/dbUpdate/dbDelete/dbFind/dbAll` (line ~1027–1042) er eneste tilgang for data-kolleksjoner.
+- **Sider**: 10 stk, bytte via `goTo(pg)` → `renderPage(pg)` (line ~1156). Hver render rebuildes fra `LOCAL` ved hvert kall.
+- **Auth**: PIN-basert mot hardkodet `USERS`-map (line 4302). Lagres i `sessionStorage.fs_user`. Roller: `admin`, `regnskap`, `staff`. Firestore-rules er åpne — kun klientside-restriksjoner via `applyRoleRestrictions()`.
+- **Boot**: IIFE `boot()` (line ~4415) hardkoder Firebase-config og hopper over setup-skjermen. `showApp()` kaller `migratePaymentsToBankTransactions()` (fire-and-forget) før UI vises.
 
 ## Konstanter
-- `CATS` (line 868): 19 produktkategorier med navn, emoji, CSS-klasse.
-- `ARSAK` (line 889): svinn-årsaker.
-- `SUSOFT_CAT_MAP` (line 4435) + `normalizeSusoftCategory()` (line 4456): mapper Susofts rare kategorinavn ("Mat3", "Grønnskar", "None-food7") til interne `CATS`-nøkler.
-- `USERS` (line 4252): 4 brukere — Herish (admin), Admin (admin), Regnskap (regnskap), Sormena (staff). PIN-koder hardkodet. **`displayUserName(name)` (line 4260)** mapper `'Herish'` → `'Hasher'` for visning. Underliggende navn `'Herish'` er uendret i sessionStorage, PIN-tabell og `opprettetAv`-felter.
-- `AVG_ARBEIDSGIVER` 14,1%, `AVG_FERIEPENGER` 10,2%, sum 24,3% (line 3346–3348) — brukt i lønnskost.
+- `CATS` (line 878): 19 produktkategorier med navn, emoji, CSS-klasse.
+- `ARSAK` (line 899): svinn-årsaker.
+- `SUSOFT_CAT_MAP` (line 4485) + `normalizeSusoftCategory()` (line ~4506): mapper Susofts rare kategorinavn ("Mat3", "Grønnskar", "None-food7") til interne `CATS`-nøkler.
+- `USERS` (line 4302): 4 brukere — Herish (admin), Admin (admin), Regnskap (regnskap), Sormena (staff). PIN-koder hardkodet. **`displayUserName(name)` (line ~4310)** mapper `'Herish'` → `'Hasher'` for visning. Underliggende navn `'Herish'` er uendret i sessionStorage, PIN-tabell og `opprettetAv`-felter.
+- `AVG_ARBEIDSGIVER` 14,1%, `AVG_FERIEPENGER` 10,2%, sum 24,3% (line ~3395) — brukt i lønnskost.
 
 ## Sider (bunnav-orden)
 
 | # | UI-navn | Render-funksjon | Page ID | Linje | Bruker kolleksjon(er) | Status |
 |---|---------|----------------|---------|-------|------------------------|--------|
-| 1 | Oversikt | `renderOversikt` | `pg-oversikt` | 1192 | `purchases`, `svinn`, `products`, `vakter`, `ansatte` | OK |
-| 2 | Produkter | `renderProdukter` | `pg-produkter` | 1280 | `products` | OK |
-| 3 | Lev. (Leverandører) | `renderLeverandorer` | `pg-leverandorer` | 2630 | `leverandorer`, `products`, `purchases` | OK |
-| 4 | Innboks | `renderInnboks` | `pg-innboks` | 3073 | `innboks` | OK |
-| 5 | Innkjøp | `renderInnkjop` | `pg-innkjop` | 1493 | `purchases`, `products`, `bankTransactions` | OK |
-| 6 | Salg | `renderSalg` | `pg-salg` | 2128 | `dagsalg`, `sales`, `purchases` | OK |
-| 7 | Svinn | `renderSvinn` | `pg-svinn` | 2547 | `svinn`, `products`, `purchases` | OK |
-| 8 | Betalinger | `renderBetalinger` | `pg-betalinger` | 2776 | `bankTransactions`, `leverandorer`, `purchases` | OK (view + create) |
-| 9 | Timeliste | `renderTimeliste` | `pg-timeliste` | 3408 | `ansatte`, `vakter`, `dagsalg` | OK |
-| 10 | Rapporter | `renderRapporter` | `pg-rapporter` | 3328 | alle | OK |
+| 1 | Oversikt | `renderOversikt` | `pg-oversikt` | 1214 | `purchases`, `svinn`, `products`, `vakter`, `ansatte` | OK |
+| 2 | Produkter | `renderProdukter` | `pg-produkter` | 1302 | `products` | OK |
+| 3 | Lev. (Leverandører) | `renderLeverandorer` | `pg-leverandorer` | 2679 | `leverandorer`, `products`, `purchases` | OK |
+| 4 | Innboks | `renderInnboks` | `pg-innboks` | 3122 | `innboks` | OK |
+| 5 | Innkjøp | `renderInnkjop` | `pg-innkjop` | 1512 | `purchases`, `products`, `bankTransactions` | OK + ekskluder V1 |
+| 6 | Salg | `renderSalg` | `pg-salg` | 2177 | `dagsalg`, `sales`, `purchases` | OK |
+| 7 | Svinn | `renderSvinn` | `pg-svinn` | 2596 | `svinn`, `products`, `purchases` | OK |
+| 8 | Betalinger | `renderBetalinger` | `pg-betalinger` | 2825 | `bankTransactions`, `leverandorer`, `purchases` | OK (view + create) |
+| 9 | Timeliste | `renderTimeliste` | `pg-timeliste` | 3457 | `ansatte`, `vakter`, `dagsalg` | OK |
+| 10 | Rapporter | `renderRapporter` | `pg-rapporter` | 3377 | alle | OK |
 
 ## Brukersidens funksjoner
 
@@ -57,15 +58,15 @@ Linjenumre er ferske per 2026-04-26 (etter STEP 1). Filen vokser fort, så verif
 - Modal `ov-produkt` (linje 514): navn, aliaser (komma-sep, brukt for AI-matching), kategori, enhet, leverandør, MVA, priser (auto-syncet eks↔inkl).
 - CSV-eksport.
 
-### Innkjøp (linje 1493)
+### Innkjøp (linje 1512)
 - Tabs: I dag / Denne uken / Denne måneden / Alle. Stats-kort + GM-panel pr. periode.
-- Liste over fakturaer → `showInvoiceDetail(id)` (linje 1738) som viser:
+- Liste over fakturaer → `showInvoiceDetail(id)` (linje 1771) som viser:
   - Faktura-hode med leverandør, fakturanr, dato, **betalingsstatus-pill** (✓ Betalt / ⚠ Delvis / ● Ikke betalt) og "✏️ Rediger"-knapp.
   - **Betalinger-seksjon**: sammendrag (betalt/utestående/antall) + liste pr. lenket betaling med dato, metode-emoji, referanse, beløp. Hvis betalingen er delt med andre fakturaer: "delt med N andre fakturaer". Leser fra `bankTransactions` med filter `type==='supplier_payment'||!type` (STEP 1).
-  - **Reell-boks**: teoretisk resultat (innkjøp, forv. salg, svinnkost, GM) + reelt resultat hvis salg er knyttet (`calcInvoiceReelStats`, linje 1087).
-  - Produktlinjer med all kolli-info, rediger/slett pr. linje (`showEditLineForm`, `deleteInvoiceLine`, `showAddLineForm`).
+  - **Reell-boks**: teoretisk resultat (innkjøp, forv. salg, svinnkost, GM) + reelt resultat hvis salg er knyttet (`calcInvoiceReelStats`, linje 1106). **Hvis ekskluderte linjer**: viser ekstra rader "Ekskludert fra beregning" og "Inkludert i beregning eks. MVA" mellom Innkjøp og Forv. salg, både i Teoretisk- og Reelt-resultat-boksen.
+  - Produktlinjer med all kolli-info inkludert EKSKLUDERT-badge + dashed-border + opacity .65 når `ekskluderFraBeregning===true`. Rediger/slett pr. linje (`showEditLineForm` linje 1975, `deleteInvoiceLine`, `showAddLineForm` linje 2095).
   - Slett hele fakturaen.
-- Modal `ov-innkjop` (linje 581): manuell faktura med kolli-linjer + AI-skanner-knapp.
+- Modal `ov-innkjop` (linje 581): manuell faktura med kolli-linjer + AI-skanner-knapp. **Ekskluder V1 (2026-05-07)**: hver linje har "Ekskluder fra beregning"-checkbox under MVA-sats, med EKSKLUDERT-badge på pline-tittel og lett gråtonet bakgrunn når aktiv. Kalkulator-boks viser "Ekskludert fra beregning" og "Inkludert i beregning" når `tEkskludertInkl > 0`. `setPLineEkskluder(i,checked)` (linje ~1666) toggler flagget. Edit-line- og add-line-modaler har samme checkbox med samme beskrivelse.
 
 ### Salg (linje 2128)
 - Tabs: uke/mnd/alle.
@@ -133,21 +134,21 @@ Linjenumre er ferske per 2026-04-26 (etter STEP 1). Filen vokser fort, så verif
 | `ov-vakt` | Legg til vakt | 744 | Timeliste (v22) |
 | `ov-leverandor` | Ny/Rediger leverandør | 766 | Leverandører |
 | `ov-betaling` | Ny betaling (2-fase) | 804 | Betalinger (v27) |
-| `ov-scanner` | AI-skanner | 5633 | Faktura + Z-rapport |
+| `ov-scanner` | AI-skanner | 5708 | Faktura + Z-rapport |
 
-## Kalkulasjons-motor (linje 1056–1135)
-- `calcGM(buyEks, sellEks)` (linje 1056) → `{gmKr, gmPct, paaslagPct}`.
-- `calcKolliLine(antall, vektPerKolli, prisPerKolliInkl, vatRate, bonusKolli)` (linje 1062) — håndterer "kjøp 20, få 10 gratis" via bonus.
-- `calcPurchaseStats(purchase)` (linje 1077) — summerer fakturaens linjer, regner forventet salg fra `products[].salgEks`.
-- `calcInvoiceReelStats(invoiceId)` (linje 1087) — krysser med `sales` og `svinn` for reelt resultat. Auto-attribuerer frukt/grønt-svinn ±14 dager.
-- `getInvoicePaymentStatus(invoiceId)` (linje 1112, v27) — leser fra `bankTransactions` med type-filter `type==='supplier_payment'||!type`. **Even-split attribusjon**: 1/N pr. lenket faktura. Returnerer `{paid, paymentIds, paidAmount, status, total, outstanding}` der `status ∈ {'paid', 'partial', 'unpaid'}`. Kommentar i kode flagger at split skal raffineres hvis regnskap trenger per-faktura splits.
-- `marginCls(m)` / `marginBadge(m)` (linje 1124–1125) — fargeskala: ≥30% grønn, ≥20% oransje, <20% rød.
-- `gmPanelHtml(gmKr, gmPct, paaslagPct)` (linje 1126) — gjenbrukbar 3-korts visning.
+## Kalkulasjons-motor (linje 1066–1153)
+- `calcGM(buyEks, sellEks)` (linje 1066) → `{gmKr, gmPct, paaslagPct}`.
+- `calcKolliLine(antall, vektPerKolli, prisPerKolliInkl, vatRate, bonusKolli)` (linje 1072) — håndterer "kjøp 20, få 10 gratis" via bonus. Uendret signatur — eksklusjons-logikk sitter på linje-objekt-nivå, ikke i denne funksjonen.
+- `calcPurchaseStats(purchase)` (linje 1087) — summerer fakturaens linjer. **Faktura totalt (`buyEksTotal`/`buyInklTotal`) summerer ALLE linjer including ekskluderte** — paper-faktura-kontrakt sakrosankt. Nye totals: `inkludertEks/Inkl` (sum av ikke-ekskluderte) og `ekskludertEks/Inkl` (sum av ekskluderte). `forvSalgEks` skipper ekskluderte linjer (ekskluderte selges ikke). **GM regnet mot `inkludertEks`** (post-ekskluder kost), ikke `buyEksTotal`. Defensive `===true`-sjekk: linjer uten flagget behandles som inkludert.
+- `calcInvoiceReelStats(invoiceId)` (linje 1106) — krysser med `sales` og `svinn` for reelt resultat. Auto-attribuerer frukt/grønt-svinn ±14 dager. **`reellGmKr` bruker `base.inkludertEks`** (ikke `buyEksTotal`) — ellers ville reell GM overdrive kost for fakturaer med ekskluderte linjer.
+- `getInvoicePaymentStatus(invoiceId)` (linje 1131, v27) — leser fra `bankTransactions` med type-filter `type==='supplier_payment'||!type`. **Even-split attribusjon**: 1/N pr. lenket faktura. Returnerer `{paid, paymentIds, paidAmount, status, total, outstanding}` der `status ∈ {'paid', 'partial', 'unpaid'}`. Bruker `buyInklTotal` (paper-faktura) som total — riktig fordi du betaler hele paper-fakturaen, ekskluderte linjer er fortsatt fakturert.
+- `marginCls(m)` / `marginBadge(m)` (linje ~1144) — fargeskala: ≥30% grønn, ≥20% oransje, <20% rød.
+- `gmPanelHtml(gmKr, gmPct, paaslagPct)` (linje ~1145) — gjenbrukbar 3-korts visning.
 
 ## Migrasjoner (linje 4385–4429)
 One-shot data-transformasjoner gated av Firestore `_meta/migrations`-dokumentet. Kjøres fra `showApp()` rett før UI vises (fire-and-forget; idempotent via sentinel + per-doc `existingIds`-skip).
 
-- `migratePaymentsToBankTransactions()` (linje 4387, STEP 1 av DNB-skanner) — kopierer alle records fra `payments` → `bankTransactions`, beholder source-ID og alle norske felter (`...p` spread), legger til engelske `type:'supplier_payment'`, `direction:'out'`, `period` (YYYY-MM), `migratedFromPayments:true`, `migratedAt`. Sentinel-felt: `paymentsToBankTransactions` (ISO-timestamp). Ved feil: sentinel ikke satt, toast vises, retry på neste boot.
+- `migratePaymentsToBankTransactions()` (linje ~4437, STEP 1 av DNB-skanner) — kopierer alle records fra `payments` → `bankTransactions`, beholder source-ID og alle norske felter (`...p` spread), legger til engelske `type:'supplier_payment'`, `direction:'out'`, `period` (YYYY-MM), `migratedFromPayments:true`, `migratedAt`. Sentinel-felt: `paymentsToBankTransactions` (ISO-timestamp). Ved feil: sentinel ikke satt, toast vises, retry på neste boot.
 
 ## AI-skanner (linje 4429–5624)
 
@@ -157,7 +158,7 @@ One-shot data-transformasjoner gated av Firestore `_meta/migrations`-dokumentet.
 - Sender til Cloudflare Worker `https://fourseason.herishhashemi.workers.dev` med `claude-sonnet-4-6`. API-nøkkel i `localStorage.fs_anthropic_key` (`saveApiKey`, linje 4471).
 - Prompt definert i `runAIScan()` (linje 4661), legger ved bilder/PDF som `image`/`document`-content-blokker.
 - `autoDetectScanRule(scanData)` (linje 5468, v25): regner ut om priser er eks/inkl. MVA basert på fakturatotal vs. linjesum. Matematikken slår lagret leverandør-regel når avvik <5%.
-- `showScanResults` (linje 4994) → tabell med 16 kolonner. `scanRows` har all state. Bruker kan justere antall, innhold/kolli, MVA, utsalgspris pr. linje.
+- `showScanResults` (linje ~5044) → tabell med 16 kolonner. `scanRows` har all state. Bruker kan justere antall, innhold/kolli, MVA, utsalgspris pr. linje. Hver scanRow har `skipped` (hopp over helt) og **`ekskluder`** (Ekskluder V1, 2026-05-07 — lagres på faktura men teller ikke i GM). Action-cell har to knapper: `⊘` (ekskluder-toggle) og `×` (skip). Skipped-rader når aldri pLines (`confirmScanToInnkjop`); ekskluderte rader når pLines med `ekskluderFraBeregning:true`. `renderScanSummary` (linje ~5442) viser eksplisitt "Ekskludert fra beregning" og "Inkludert i beregning"-rader når noen linjer er ekskludert.
 - Inline produktregistrering for ukjente produkter (`registerScanRowProduct`, linje 5361) — det finnes ingen separat "produktskanner"; dette er produktskanneren.
 - Duplikat-sjekk på fakturanr + lev (i `runAIScan`, v22): tidlig avbryt hvis faktura allerede finnes.
 - Lagring av utkast (`saveScanAsDraft`, linje 3253): hvis filen ikke ligger i Innboks, tilbyr å først lagre der.
@@ -176,7 +177,7 @@ One-shot data-transformasjoner gated av Firestore `_meta/migrations`-dokumentet.
 | Kolleksjon | Lagrer hva | Sentrale felter |
 |------------|-----------|-----------------|
 | `products` | Produktregister | `navn`, `kategori`, `enhet`, `leverandorId`, `lev` (legacy text), `mva`, `aliaser[]`, `buyEks`, `buyInkl`, `salgEks`, `salgInkl`, `aktiv` |
-| `purchases` | Fakturaer/innkjøp | `dato`, `fakturanr`, `leverandorId`, `lev`, `lines[]` (med `productId`, `antall`, `vektPerKolli`/`innholdPerKolli`, `prisPerKolliInkl`, `vatRate`, `bonusKolli`, kalkulerte `totalEks`/`totalInkl`/`prPerEnhetEks`/`prPerEnhetInkl`/`totalVekt`), `notes` |
+| `purchases` | Fakturaer/innkjøp | `dato`, `fakturanr`, `leverandorId`, `lev`, `lines[]` (med `productId`, `antall`, `vektPerKolli`/`innholdPerKolli`, `prisPerKolliInkl`, `vatRate`, `bonusKolli`, **`ekskluderFraBeregning`** (boolean, default false — Ekskluder V1, 2026-05-07), kalkulerte `totalEks`/`totalInkl`/`prPerEnhetEks`/`prPerEnhetInkl`/`totalVekt`/`effAntall`), `notes`. **Ekskluder V1**: linjer med `ekskluderFraBeregning===true` lagres fullt på fakturaen (audit trail) men telles ikke i profitt/GM-math. Faktura totalt (`buyEksTotal`/`buyInklTotal` fra `calcPurchaseStats`) summerer ALLE linjer including ekskluderte — paper-faktura-kontrakt. Eksisterende fakturaer uten flagget behandles som inkludert (strict `===true`-sjekk). |
 | `sales` | Linje-nivå salg (manuell) | `dato`, `ref`, `fakturaId` (link), `lines[]` med `productId`, `qty`, `sellPriceEks` |
 | `dagsalg` | Daglig salgs-total fra POS | `dato`, `totalInkl`, `totalEks`, `mva`, `kilde`, `antallTrans`, `ref`, + Z-skann: `nummer`, `klokke`, `mvaTotal`, `mvaBreakdown`, `kategoriSalg[]`, `antallOrdre`, `rabattTotal`, `vareuttak`, `slettetTotal`, `retur` |
 | `svinn` | Svinn-poster | `dato`, `productId`, `qty`, `arsak`, `komm`, `fakturaId` (eksplisitt link), `kostverdi` |
