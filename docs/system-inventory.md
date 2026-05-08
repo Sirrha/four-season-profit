@@ -1,17 +1,18 @@
 # System-inventar — Four Season AS
 
-**Last updated**: 2026-05-07, after Ekskluder fra beregning V1 (universal line-flag for pant, kreditnota, returer).
+**Last updated**: 2026-05-08, after V0.5 forfallsdato (overdue awareness on purchases).
 
 Dette dokumentet kartlegger hva som faktisk finnes i `index.html` (produksjon, sormena.no). Mål: at Soren (chat) og Claude Code skal jobbe ut fra samme bilde av systemet og slippe å duplikere arbeid eller spørre om ting som allerede er bygget.
 
-- **Filer kartlagt**: `index.html` (~5810 linjer)
-- **Siste store endring**: Ekskluder fra beregning V1 (2026-05-07) — boolean flagg `ekskluderFraBeregning` per linje på `purchases.lines[]`. Linjen lagres FULLT på fakturaen (audit trail) men telles ikke i profitt/GM-beregning. Universal handler for pant, IFCO, kreditnota-korreksjoner, returer, leverandørfeil. UI: checkbox i 4 steder (manuell pline, edit-line, add-line, scanner-rad) + EKSKLUDERT-badge + gråtonet visuell. Faktura totalt (`buyEksTotal`/`buyInklTotal`) summerer fortsatt ALLE linjer — paper-faktura-kontrakt sakrosankt. Profit/GM regnes mot `inkludertEks` (ny return-felt fra `calcPurchaseStats`).
+- **Filer kartlagt**: `index.html` (~5866 linjer)
+- **Siste store endring**: V0.5 forfallsdato (2026-05-08) — top-level `forfallsdato` (string YYYY-MM-DD eller null) på `purchases`-skjema. AI-skanner ekstraherer fra "Forfall"/"Betalingsfrist N dager" (Strategy 2: explicit OR calculated fra `dato + N`). `getInvoicePaymentStatus` utvidet med `forfallsdato`, `isOverdue` (boolean), `daysOverdue` (int). UI: ny `.fr` 2-col rad i manuell-modal (linje ~604-610) + `edith-forfall`-input i edit-header-modal, betinget chip i Innkjøp-liste (rød/oransje/muted etter status), Forfall-segment i fakturaheader, rød "Forfalt med X dager"-banner over Reell-boks når aktivt. CSV: `Forfallsdato`-kolonne etter `Dato`. Ingen migrasjon — eksisterende fakturaer uten flagget behandles som "no due date" (`isOverdue=false`).
+- **Tidligere milestone**: Ekskluder fra beregning V1 (2026-05-07) — boolean flagg `ekskluderFraBeregning` per linje på `purchases.lines[]`. Universal handler for pant, IFCO, kreditnota-korreksjoner. Faktura totalt sakrosankt; profit/GM mot `inkludertEks`.
 - **Tidligere milestone**: STEP 1 av DNB-skanner-bygget (2026-04-26) — `payments` → `bankTransactions`-migrasjon. `payments` er cold archive.
 - **Tidligere milestone**: v27 ble cutoveret til produksjon i kommit `95e308d` (2026-04-26).
 
-**Språkpolicy (parked decision #9)**: Som av 2026-04-26: Engelsk for all ny kode (feltnavn, funksjonsnavn, identifiers). Eksisterende norske feltnavn (`dato`, `belop`, `linkedeFakturaer`, etc.) beholdes bakoverkompatibelt inntil en dedikert språkmigrasjon. Resultatet er midlertidig hybrid skjema i `bankTransactions` og `purchases.lines` (ny `ekskluderFraBeregning` følger samme hybrid-konvensjon). UI-strenger forblir norske.
+**Språkpolicy (parked decision #9)**: Som av 2026-04-26: Engelsk for all ny kode (feltnavn, funksjonsnavn, identifiers). Eksisterende norske feltnavn (`dato`, `belop`, `linkedeFakturaer`, etc.) beholdes bakoverkompatibelt inntil en dedikert språkmigrasjon. Nye norske feltnavn (f.eks. `forfallsdato`) brukes kun når de matcher eksisterende norske naboer på samme record (purchases har allerede `dato`/`fakturanr`). Resultatet er midlertidig hybrid skjema i `bankTransactions` og `purchases.lines` (`ekskluderFraBeregning` følger samme hybrid-konvensjon). UI-strenger forblir norske.
 
-Linjenumre er ferske per 2026-05-07 (etter Ekskluder V1). Filen vokser fort, så verifiser med `Grep` før du redigerer rundt en gitt linje.
+Linjenumre er ferske per 2026-05-08 (etter V0.5 forfallsdato). Filen vokser fort, så verifiser med `Grep` før du redigerer rundt en gitt linje.
 
 ---
 
@@ -33,16 +34,16 @@ Linjenumre er ferske per 2026-05-07 (etter Ekskluder V1). Filen vokser fort, så
 
 | # | UI-navn | Render-funksjon | Page ID | Linje | Bruker kolleksjon(er) | Status |
 |---|---------|----------------|---------|-------|------------------------|--------|
-| 1 | Oversikt | `renderOversikt` | `pg-oversikt` | 1214 | `purchases`, `svinn`, `products`, `vakter`, `ansatte` | OK |
-| 2 | Produkter | `renderProdukter` | `pg-produkter` | 1302 | `products` | OK |
-| 3 | Lev. (Leverandører) | `renderLeverandorer` | `pg-leverandorer` | 2679 | `leverandorer`, `products`, `purchases` | OK |
-| 4 | Innboks | `renderInnboks` | `pg-innboks` | 3122 | `innboks` | OK |
-| 5 | Innkjøp | `renderInnkjop` | `pg-innkjop` | 1512 | `purchases`, `products`, `bankTransactions` | OK + ekskluder V1 |
-| 6 | Salg | `renderSalg` | `pg-salg` | 2177 | `dagsalg`, `sales`, `purchases` | OK |
-| 7 | Svinn | `renderSvinn` | `pg-svinn` | 2596 | `svinn`, `products`, `purchases` | OK |
-| 8 | Betalinger | `renderBetalinger` | `pg-betalinger` | 2825 | `bankTransactions`, `leverandorer`, `purchases` | OK (view + create) |
-| 9 | Timeliste | `renderTimeliste` | `pg-timeliste` | 3457 | `ansatte`, `vakter`, `dagsalg` | OK |
-| 10 | Rapporter | `renderRapporter` | `pg-rapporter` | 3377 | alle | OK |
+| 1 | Oversikt | `renderOversikt` | `pg-oversikt` | 1231 | `purchases`, `svinn`, `products`, `vakter`, `ansatte` | OK |
+| 2 | Produkter | `renderProdukter` | `pg-produkter` | 1319 | `products` | OK |
+| 3 | Lev. (Leverandører) | `renderLeverandorer` | `pg-leverandorer` | 2726 | `leverandorer`, `products`, `purchases` | OK |
+| 4 | Innboks | `renderInnboks` | `pg-innboks` | 3169 | `innboks` | OK |
+| 5 | Innkjøp | `renderInnkjop` | `pg-innkjop` | 1529 | `purchases`, `products`, `bankTransactions` | OK + ekskluder V1 + forfallsdato V0.5 |
+| 6 | Salg | `renderSalg` | `pg-salg` | 2224 | `dagsalg`, `sales`, `purchases` | OK |
+| 7 | Svinn | `renderSvinn` | `pg-svinn` | 2643 | `svinn`, `products`, `purchases` | OK |
+| 8 | Betalinger | `renderBetalinger` | `pg-betalinger` | 2872 | `bankTransactions`, `leverandorer`, `purchases` | OK (view + create) |
+| 9 | Timeliste | `renderTimeliste` | `pg-timeliste` | 3504 | `ansatte`, `vakter`, `dagsalg` | OK |
+| 10 | Rapporter | `renderRapporter` | `pg-rapporter` | 3424 | alle | OK |
 
 ## Brukersidens funksjoner
 
@@ -58,15 +59,18 @@ Linjenumre er ferske per 2026-05-07 (etter Ekskluder V1). Filen vokser fort, så
 - Modal `ov-produkt` (linje 514): navn, aliaser (komma-sep, brukt for AI-matching), kategori, enhet, leverandør, MVA, priser (auto-syncet eks↔inkl).
 - CSV-eksport.
 
-### Innkjøp (linje 1512)
+### Innkjøp (linje 1529)
 - Tabs: I dag / Denne uken / Denne måneden / Alle. Stats-kort + GM-panel pr. periode.
-- Liste over fakturaer → `showInvoiceDetail(id)` (linje 1771) som viser:
-  - Faktura-hode med leverandør, fakturanr, dato, **betalingsstatus-pill** (✓ Betalt / ⚠ Delvis / ● Ikke betalt) og "✏️ Rediger"-knapp.
+- Liste over fakturaer → `showInvoiceDetail(id)` (linje 1799) som viser:
+  - Faktura-hode med leverandør, fakturanr, dato, **forfall-segment** (V0.5: `· Forfall: DD.MM.YYYY` etter dato — rød `⚠ Forfall:` hvis `pay.isOverdue`), **betalingsstatus-pill** (✓ Betalt / ⚠ Delvis / ● Ikke betalt) og "✏️ Rediger"-knapp.
+  - **V0.5 forfall-banner** (rett før Reell-boks når `pay.isOverdue && p.forfallsdato`): rød boks med "⚠ Forfalt med X dag(er) — Forfallsdato var DD.MM.YYYY".
   - **Betalinger-seksjon**: sammendrag (betalt/utestående/antall) + liste pr. lenket betaling med dato, metode-emoji, referanse, beløp. Hvis betalingen er delt med andre fakturaer: "delt med N andre fakturaer". Leser fra `bankTransactions` med filter `type==='supplier_payment'||!type` (STEP 1).
   - **Reell-boks**: teoretisk resultat (innkjøp, forv. salg, svinnkost, GM) + reelt resultat hvis salg er knyttet (`calcInvoiceReelStats`, linje 1106). **Hvis ekskluderte linjer**: viser ekstra rader "Ekskludert fra beregning" og "Inkludert i beregning eks. MVA" mellom Innkjøp og Forv. salg, både i Teoretisk- og Reelt-resultat-boksen.
-  - Produktlinjer med all kolli-info inkludert EKSKLUDERT-badge + dashed-border + opacity .65 når `ekskluderFraBeregning===true`. Rediger/slett pr. linje (`showEditLineForm` linje 1975, `deleteInvoiceLine`, `showAddLineForm` linje 2095).
+  - Produktlinjer med all kolli-info inkludert EKSKLUDERT-badge + dashed-border + opacity .65 når `ekskluderFraBeregning===true`. Rediger/slett pr. linje (`showEditLineForm` linje ~2002, `deleteInvoiceLine`, `showAddLineForm` linje ~2122).
   - Slett hele fakturaen.
-- Modal `ov-innkjop` (linje 581): manuell faktura med kolli-linjer + AI-skanner-knapp. **Ekskluder V1 (2026-05-07)**: hver linje har "Ekskluder fra beregning"-checkbox under MVA-sats, med EKSKLUDERT-badge på pline-tittel og lett gråtonet bakgrunn når aktiv. Kalkulator-boks viser "Ekskludert fra beregning" og "Inkludert i beregning" når `tEkskludertInkl > 0`. `setPLineEkskluder(i,checked)` (linje ~1666) toggler flagget. Edit-line- og add-line-modaler har samme checkbox med samme beskrivelse.
+- Liste-rader på siden viser betinget Forfall-chip i flex-wrap-rad: muted hvis fremtidig, oransje hvis i dag, rød `⚠ Forfalt:` hvis `pay.isOverdue` (V0.5).
+- Modal `ov-innkjop` (linje 581): manuell faktura med kolli-linjer + AI-skanner-knapp. **V0.5 forfallsdato**: ny `.fr` 2-col rad under Dato/Fakturanr med `inn-forfall`-input (date) + helper "La stå tom hvis ukjent — kan settes senere". Tom verdi = `null` ved lagring. **Ekskluder V1 (2026-05-07)**: hver linje har "Ekskluder fra beregning"-checkbox under MVA-sats, med EKSKLUDERT-badge på pline-tittel og lett gråtonet bakgrunn når aktiv. Kalkulator-boks viser "Ekskludert fra beregning" og "Inkludert i beregning" når `tEkskludertInkl > 0`. `setPLineEkskluder(i,checked)` toggler flagget. Edit-line/add-line-modaler har samme checkbox.
+- Edit-header-modal (`showEditHeaderForm` linje 1958): har `edith-forfall`-input under DATO med "La stå tom for å fjerne"-helper. `saveEditHeader` (linje 1998) tolker tom verdi som `null`.
 
 ### Salg (linje 2128)
 - Tabs: uke/mnd/alle.
@@ -134,14 +138,14 @@ Linjenumre er ferske per 2026-05-07 (etter Ekskluder V1). Filen vokser fort, så
 | `ov-vakt` | Legg til vakt | 744 | Timeliste (v22) |
 | `ov-leverandor` | Ny/Rediger leverandør | 766 | Leverandører |
 | `ov-betaling` | Ny betaling (2-fase) | 804 | Betalinger (v27) |
-| `ov-scanner` | AI-skanner | 5708 | Faktura + Z-rapport |
+| `ov-scanner` | AI-skanner | 5755 | Faktura + Z-rapport |
 
 ## Kalkulasjons-motor (linje 1066–1153)
 - `calcGM(buyEks, sellEks)` (linje 1066) → `{gmKr, gmPct, paaslagPct}`.
 - `calcKolliLine(antall, vektPerKolli, prisPerKolliInkl, vatRate, bonusKolli)` (linje 1072) — håndterer "kjøp 20, få 10 gratis" via bonus. Uendret signatur — eksklusjons-logikk sitter på linje-objekt-nivå, ikke i denne funksjonen.
 - `calcPurchaseStats(purchase)` (linje 1087) — summerer fakturaens linjer. **Faktura totalt (`buyEksTotal`/`buyInklTotal`) summerer ALLE linjer including ekskluderte** — paper-faktura-kontrakt sakrosankt. Nye totals: `inkludertEks/Inkl` (sum av ikke-ekskluderte) og `ekskludertEks/Inkl` (sum av ekskluderte). `forvSalgEks` skipper ekskluderte linjer (ekskluderte selges ikke). **GM regnet mot `inkludertEks`** (post-ekskluder kost), ikke `buyEksTotal`. Defensive `===true`-sjekk: linjer uten flagget behandles som inkludert.
 - `calcInvoiceReelStats(invoiceId)` (linje 1106) — krysser med `sales` og `svinn` for reelt resultat. Auto-attribuerer frukt/grønt-svinn ±14 dager. **`reellGmKr` bruker `base.inkludertEks`** (ikke `buyEksTotal`) — ellers ville reell GM overdrive kost for fakturaer med ekskluderte linjer.
-- `getInvoicePaymentStatus(invoiceId)` (linje 1131, v27) — leser fra `bankTransactions` med type-filter `type==='supplier_payment'||!type`. **Even-split attribusjon**: 1/N pr. lenket faktura. Returnerer `{paid, paymentIds, paidAmount, status, total, outstanding}` der `status ∈ {'paid', 'partial', 'unpaid'}`. Bruker `buyInklTotal` (paper-faktura) som total — riktig fordi du betaler hele paper-fakturaen, ekskluderte linjer er fortsatt fakturert.
+- `getInvoicePaymentStatus(invoiceId)` (linje 1143, v27 + V0.5) — leser fra `bankTransactions` med type-filter `type==='supplier_payment'||!type`. **Even-split attribusjon**: 1/N pr. lenket faktura. Returnerer `{paid, paymentIds, paidAmount, status, total, outstanding, forfallsdato, isOverdue, daysOverdue}` der `status ∈ {'paid', 'partial', 'unpaid'}`. Bruker `buyInklTotal` (paper-faktura) som total — riktig fordi du betaler hele paper-fakturaen, ekskluderte linjer er fortsatt fakturert. **V0.5 forfallsdato (2026-05-08)**: `isOverdue=true` når `forfallsdato && status!=='paid' && today() > forfallsdato`. ISO `YYYY-MM-DD`-format gjør string comparison gyldig. `daysOverdue=Math.floor((Date.parse(today)-Date.parse(forfallsdato))/86400000)` når `isOverdue`, ellers 0. Eksisterende fakturaer uten flagget: `forfallsdato=null`, `isOverdue=false`.
 - `marginCls(m)` / `marginBadge(m)` (linje ~1144) — fargeskala: ≥30% grønn, ≥20% oransje, <20% rød.
 - `gmPanelHtml(gmKr, gmPct, paaslagPct)` (linje ~1145) — gjenbrukbar 3-korts visning.
 
@@ -156,7 +160,7 @@ One-shot data-transformasjoner gated av Firestore `_meta/migrations`-dokumentet.
 - Inngang: `openScanner('faktura')` (linje 4483) eller via knapp i innkjøp-modal eller "Skann som faktura" i Innboks (`scanInnboksAsFaktura`, linje 3198).
 - Multi-fil støtte: opp til 10 filer, 20MB total — alle blir én faktura.
 - Sender til Cloudflare Worker `https://fourseason.herishhashemi.workers.dev` med `claude-sonnet-4-6`. API-nøkkel i `localStorage.fs_anthropic_key` (`saveApiKey`, linje 4471).
-- Prompt definert i `runAIScan()` (linje 4661), legger ved bilder/PDF som `image`/`document`-content-blokker.
+- Prompt definert i `runAIScan()` (linje 4758), legger ved bilder/PDF som `image`/`document`-content-blokker. **V0.5 (2026-05-08)**: schema utvidet med `forfallsdato:"YYYY-MM-DD eller null"`. Extraction-regler: explicit "Forfall"/"Forfallsdato"/"Due date" → bruk direkte; "Betalingsfrist N dager"/"N dager netto"/"Net N days"/"Betalingsbetingelser N dager" → kalkuler `dato + N`; ingenting synlig → `null`. Eksisterende kontrollsum-regel (sum av linjer = sum eks. MVA) bevart urørt. Propageres til `inn-forfall`-input (manual modal) i 3 sites: line ~5615 (direct), ~5670/5677 (savedForfall via openInnkjopModal-restore).
 - `autoDetectScanRule(scanData)` (linje 5468, v25): regner ut om priser er eks/inkl. MVA basert på fakturatotal vs. linjesum. Matematikken slår lagret leverandør-regel når avvik <5%.
 - `showScanResults` (linje ~5044) → tabell med 16 kolonner. `scanRows` har all state. Bruker kan justere antall, innhold/kolli, MVA, utsalgspris pr. linje. Hver scanRow har `skipped` (hopp over helt) og **`ekskluder`** (Ekskluder V1, 2026-05-07 — lagres på faktura men teller ikke i GM). Action-cell har to knapper: `⊘` (ekskluder-toggle) og `×` (skip). Skipped-rader når aldri pLines (`confirmScanToInnkjop`); ekskluderte rader når pLines med `ekskluderFraBeregning:true`. `renderScanSummary` (linje ~5442) viser eksplisitt "Ekskludert fra beregning" og "Inkludert i beregning"-rader når noen linjer er ekskludert.
 - Inline produktregistrering for ukjente produkter (`registerScanRowProduct`, linje 5361) — det finnes ingen separat "produktskanner"; dette er produktskanneren.
@@ -177,7 +181,7 @@ One-shot data-transformasjoner gated av Firestore `_meta/migrations`-dokumentet.
 | Kolleksjon | Lagrer hva | Sentrale felter |
 |------------|-----------|-----------------|
 | `products` | Produktregister | `navn`, `kategori`, `enhet`, `leverandorId`, `lev` (legacy text), `mva`, `aliaser[]`, `buyEks`, `buyInkl`, `salgEks`, `salgInkl`, `aktiv` |
-| `purchases` | Fakturaer/innkjøp | `dato`, `fakturanr`, `leverandorId`, `lev`, `lines[]` (med `productId`, `antall`, `vektPerKolli`/`innholdPerKolli`, `prisPerKolliInkl`, `vatRate`, `bonusKolli`, **`ekskluderFraBeregning`** (boolean, default false — Ekskluder V1, 2026-05-07), kalkulerte `totalEks`/`totalInkl`/`prPerEnhetEks`/`prPerEnhetInkl`/`totalVekt`/`effAntall`), `notes`. **Ekskluder V1**: linjer med `ekskluderFraBeregning===true` lagres fullt på fakturaen (audit trail) men telles ikke i profitt/GM-math. Faktura totalt (`buyEksTotal`/`buyInklTotal` fra `calcPurchaseStats`) summerer ALLE linjer including ekskluderte — paper-faktura-kontrakt. Eksisterende fakturaer uten flagget behandles som inkludert (strict `===true`-sjekk). |
+| `purchases` | Fakturaer/innkjøp | `dato`, **`forfallsdato`** (string YYYY-MM-DD eller null — V0.5, 2026-05-08), `fakturanr`, `leverandorId`, `lev`, `lines[]` (med `productId`, `antall`, `vektPerKolli`/`innholdPerKolli`, `prisPerKolliInkl`, `vatRate`, `bonusKolli`, **`ekskluderFraBeregning`** (boolean, default false — Ekskluder V1, 2026-05-07), kalkulerte `totalEks`/`totalInkl`/`prPerEnhetEks`/`prPerEnhetInkl`/`totalVekt`/`effAntall`), `notes`. **V0.5 forfallsdato**: top-level field. AI-skanner ekstraherer fra explicit "Forfall"-felt eller kalkulerer fra "Betalingsfrist N dager + dato". Returneres som `null` hvis ikke synlig på fakturaen. Brukes av `getInvoicePaymentStatus` for `isOverdue/daysOverdue`-felt. **Ekskluder V1**: linjer med `ekskluderFraBeregning===true` lagres fullt på fakturaen (audit trail) men telles ikke i profitt/GM-math. Faktura totalt (`buyEksTotal`/`buyInklTotal` fra `calcPurchaseStats`) summerer ALLE linjer including ekskluderte — paper-faktura-kontrakt. Eksisterende fakturaer uten flagget behandles som inkludert (strict `===true`-sjekk). |
 | `sales` | Linje-nivå salg (manuell) | `dato`, `ref`, `fakturaId` (link), `lines[]` med `productId`, `qty`, `sellPriceEks` |
 | `dagsalg` | Daglig salgs-total fra POS | `dato`, `totalInkl`, `totalEks`, `mva`, `kilde`, `antallTrans`, `ref`, + Z-skann: `nummer`, `klokke`, `mvaTotal`, `mvaBreakdown`, `kategoriSalg[]`, `antallOrdre`, `rabattTotal`, `vareuttak`, `slettetTotal`, `retur` |
 | `svinn` | Svinn-poster | `dato`, `productId`, `qty`, `arsak`, `komm`, `fakturaId` (eksplisitt link), `kostverdi` |

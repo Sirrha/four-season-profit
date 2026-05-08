@@ -290,6 +290,11 @@ select.fi:focus{background-color:#fff}
 .scantbl .ekskl-x.active{color:#666;background:rgba(180,180,180,.25);border-radius:5px;font-weight:700}
 .scan-ekskl-row{display:flex;justify-content:space-between;align-items:center;padding:6px 12px;font-size:12px;background:rgba(180,180,180,.1);border-radius:6px;margin-top:6px;color:#666}
 .scan-ekskl-row.inkluder{background:rgba(141,225,158,.1);color:#2d5a40;font-weight:600}
+.forfallsdato-overdue{color:var(--danger);font-weight:600}
+.forfallsdato-today{color:#f5a623;font-weight:600}
+.forfallsdato-soon{color:var(--muted)}
+.forfallsdato-future{color:var(--muted)}
+.forfallsdato-banner{background:rgba(244,67,54,.12);color:var(--danger);padding:10px 12px;border-radius:8px;margin-bottom:10px;font-size:12.5px;font-weight:500}
 .scantbl .cat-marker{display:inline-block;width:22px;text-align:center;font-size:14px}
 .scantbl .status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
 .scantbl .status-dot.ok{background:#2e7d32}
@@ -599,6 +604,13 @@ service cloud.firestore {
   <div class="fr">
     <div class="fg"><label class="fl">Dato *</label><input class="fi" id="inn-dato" type="date"></div>
     <div class="fg"><label class="fl">Fakturanr.</label><input class="fi" id="inn-faktura" placeholder="F-2024-001" autocomplete="off"></div>
+  </div>
+  <div class="fr">
+    <div class="fg"><label class="fl">Forfallsdato</label>
+      <input class="fi" id="inn-forfall" type="date">
+      <div style="font-size:10.5px;color:var(--muted);margin-top:4px">La stå tom hvis ukjent — kan settes senere</div>
+    </div>
+    <div class="fg"></div>
   </div>
   <div class="fg"><label class="fl">Leverandør</label>
     <select class="fi" id="inn-lev-id" onchange="onInnkjopLevChange()">
@@ -1138,7 +1150,12 @@ function getInvoicePaymentStatus(invoiceId){
   for(const p of linked){const n=(p.linkedeFakturaer||[]).length||1;paidAmount+=(+p.belop||0)/n}
   const paid=linked.length>0;
   const status=!paid?'unpaid':(paidAmount+0.005<total?'partial':'paid');
-  return{paid,paymentIds:linked.map(p=>p.id),paidAmount,status,total,outstanding:Math.max(0,total-paidAmount)};
+  // V0.5 forfallsdato awareness: ISO YYYY-MM-DD format makes string comparison valid.
+  const forfallsdato=purchase?.forfallsdato||null;
+  const todayStr=today();
+  const isOverdue=!!(forfallsdato&&status!=='paid'&&todayStr>forfallsdato);
+  const daysOverdue=isOverdue?Math.floor((Date.parse(todayStr)-Date.parse(forfallsdato))/86400000):0;
+  return{paid,paymentIds:linked.map(p=>p.id),paidAmount,status,total,outstanding:Math.max(0,total-paidAmount),forfallsdato,isOverdue,daysOverdue};
 }
 function marginCls(m){return m>=30?'g':m>=20?'o':'r'}
 function marginBadge(m){const c=m>=30?'b-g':m>=20?'b-o':'b-r';return`<span class="b ${c}">${fmtPct(m)}</span>`}
@@ -1536,6 +1553,15 @@ function renderInnkjop(){
     html+=`<div class="card" style="padding:0 14px">`;
     filtered.forEach(p=>{
       const s=calcPurchaseStats(p);
+      const pay=getInvoicePaymentStatus(p.id);
+      const todayStr=today();
+      let forfallChip='';
+      if(p.forfallsdato){
+        let cls='forfallsdato-future',prefix='Forfall: ';
+        if(pay.isOverdue){cls='forfallsdato-overdue';prefix='⚠ Forfalt: ';}
+        else if(p.forfallsdato===todayStr)cls='forfallsdato-today';
+        forfallChip=`<span class="${cls}" style="font-size:11px">${prefix}${fmtDate(p.forfallsdato)}</span>`;
+      }
       html+=`<div class="li" onclick="showInvoiceDetail('${p.id}')" style="cursor:pointer">
         <div style="width:40px;flex-shrink:0;text-align:center"><div style="font-size:12px;font-weight:700;color:var(--muted)">${fmtDate(p.dato).slice(0,5)}</div></div>
         <div class="lim"><div class="lit">${s.gmPct<20?'⚠️ ':''}${p.fakturanr||'Uten fakturanr'}</div>
@@ -1544,6 +1570,7 @@ function renderInnkjop(){
           <span style="font-size:11px;color:var(--muted)">Inkl: ${fmtNOK(s.buyInklTotal)}</span>
           <span style="font-size:11px;color:var(--muted)">Eks: ${fmtNOK(s.buyEksTotal)}</span>
           <span style="font-size:11px;color:${s.gmKr>=0?'var(--ok)':'var(--danger)'}">GM: ${fmtNOK(s.gmKr)}</span>
+          ${forfallChip}
         </div></div>
         <div style="text-align:right;flex-shrink:0">${marginBadge(s.gmPct)}
         <div style="margin-top:5px"><button class="del-btn" onclick="event.stopPropagation();deleteInnkjop('${p.id}')">🗑️</button></div></div>
@@ -1563,7 +1590,7 @@ let pLines=[];
 function openInnkjopModal(){
   pLines=[];
   document.getElementById('inn-dato').value=today();
-  ['inn-faktura','inn-notes'].forEach(id=>document.getElementById(id).value='');
+  ['inn-faktura','inn-forfall','inn-notes'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('inn-lev-legacy').value='';
   // Pre-selected lev (set by scanner confirm). Do this before fillLevDropdown so selected value is honored.
   const preLev=window._innkjopPreLevId||'';
@@ -1699,6 +1726,7 @@ function updateKalkulator(){
 async function saveInnkjop(){
   const dato=document.getElementById('inn-dato').value;
   if(!dato){showToast('Velg dato','err');return}
+  const forfall=document.getElementById('inn-forfall').value||null;
   const validLines=pLines.filter(l=>l.productId&&(l.antall>0||l.prisPerKolliInkl>0));
   if(!validLines.length){showToast('Legg til minst én produktlinje','err');return}
   const lines=validLines.map(l=>{
@@ -1734,7 +1762,7 @@ async function saveInnkjop(){
   }
   const newId=uid();
   await db.collection('purchases').doc(newId).set({
-    id:newId,dato,fakturanr,
+    id:newId,dato,fakturanr,forfallsdato:forfall,
     leverandorId:levId||'',lev:levText,lines,
     notes:document.getElementById('inn-notes').value.trim(),opprettet:new Date().toISOString()
   });
@@ -1773,6 +1801,19 @@ function showInvoiceDetail(id){
   const stats=calcPurchaseStats(p);
   const reel=calcInvoiceReelStats(id);
   const pay=getInvoicePaymentStatus(id);
+  // V0.5 forfallsdato — header-segment + overdue banner
+  let forfallSegment='';
+  if(p.forfallsdato){
+    if(pay.isOverdue){
+      forfallSegment=` · <span style="color:#ffbcbc;font-weight:600">⚠ Forfall: ${fmtDate(p.forfallsdato)}</span>`;
+    } else {
+      forfallSegment=` · Forfall: ${fmtDate(p.forfallsdato)}`;
+    }
+  }
+  let overdueBanner='';
+  if(pay.isOverdue&&p.forfallsdato){
+    overdueBanner=`<div class="forfallsdato-banner">⚠ Forfalt med ${pay.daysOverdue} dag${pay.daysOverdue===1?'':'er'} — Forfallsdato var ${fmtDate(p.forfallsdato)}</div>`;
+  }
   const linkedPayments=dbAll('bankTransactions').filter(x=>(x.type==='supplier_payment'||!x.type)&&(x.linkedeFakturaer||[]).includes(id)).sort((a,b)=>(a.dato||'').localeCompare(b.dato||''));
   const pillStyle={
     paid:{bg:'rgba(45,122,74,.25)',color:'#9eddb1',label:'✓ Betalt'},
@@ -1876,13 +1917,14 @@ function showInvoiceDetail(id){
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px">
         <div style="flex:1;min-width:0">
           <div class="mt" style="color:#fff;margin-bottom:5px">${p.fakturanr||'Faktura'}</div>
-          <div style="font-size:12px;opacity:.7">${p.lev||'Ukjent lev.'} · ${fmtDate(p.dato)}${p.notes?' · '+p.notes:''}</div>
+          <div style="font-size:12px;opacity:.7">${p.lev||'Ukjent lev.'} · ${fmtDate(p.dato)}${forfallSegment}${p.notes?' · '+p.notes:''}</div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
           ${statusPill}
           <button class="btn btn-s" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3);padding:6px 12px;font-size:11.5px" onclick="showEditHeaderForm('${id}')" title="Rediger faktura-hode">✏️ Rediger</button>
         </div>
       </div>
+      ${overdueBanner}
       ${reellHtml}
       ${betalingerHtml}
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;margin-bottom:6px">
@@ -1937,6 +1979,10 @@ function showEditHeaderForm(id){
         <label style="font-size:11px;color:var(--muted);font-weight:600">DATO
           <input id="edith-dato" type="date" value="${p.dato||''}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:13px;margin-top:4px">
         </label>
+        <label style="font-size:11px;color:var(--muted);font-weight:600">FORFALLSDATO
+          <input id="edith-forfall" type="date" value="${p.forfallsdato||''}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:13px;margin-top:4px">
+          <div style="font-size:10.5px;color:var(--muted);margin-top:4px">La stå tom for å fjerne</div>
+        </label>
         <label style="font-size:11px;color:var(--muted);font-weight:600">NOTAT
           <input id="edith-notes" value="${escapeHtml(p.notes||'')}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:13px;margin-top:4px">
         </label>
@@ -1957,13 +2003,14 @@ async function saveEditHeader(id){
   const lev=levObj?levObj.navn:levTxt;
   const fakturanr=document.getElementById('edith-faktura').value.trim();
   const dato=document.getElementById('edith-dato').value;
+  const forfall=document.getElementById('edith-forfall').value||null;
   const notes=document.getElementById('edith-notes').value.trim();
   if(!dato){showToast('Dato kreves','err');return}
   try{
     await dbUpdate('purchases',id,{
       leverandorId:levId||'',
       lev:lev||'',
-      fakturanr,dato,notes
+      fakturanr,dato,forfallsdato:forfall,notes
     });
     showToast('Faktura-hode oppdatert');
     showInvoiceDetail(id);
@@ -4280,12 +4327,12 @@ function exportCSV(type){
     });
   }else if(type==='purchases'){
     fn='innkjop.csv';
-    csv='Dato,Fakturanr,Leverandor,Produkt,Kolli,Vekt/kolli,TotalVekt,Pris/kolli.inkl,Total.inkl,Total.eks,Pris/kg.inkl,Pris/kg.eks,Salg.eks,GM.kr,GM%,Paaslag%\n';
+    csv='Dato,Forfallsdato,Fakturanr,Leverandor,Produkt,Kolli,Vekt/kolli,TotalVekt,Pris/kolli.inkl,Total.inkl,Total.eks,Pris/kg.inkl,Pris/kg.eks,Salg.eks,GM.kr,GM%,Paaslag%\n';
     dbAll('purchases').forEach(p=>{
       (p.lines||[]).forEach(l=>{
         const prod=dbFind('products',l.productId);
         const gm=l.prPerEnhetEks>0&&prod?calcGM(l.prPerEnhetEks,prod.salgEks||0):{gmKr:0,gmPct:0,paaslagPct:0};
-        csv+=`${p.dato},"${p.fakturanr||''}","${p.lev||''}","${prod?.navn||''}",${l.antall||0},${l.vektPerKolli||0},${l.totalVekt||0},${(l.prisPerKolliInkl||0).toFixed(4)},${(l.totalInkl||0).toFixed(4)},${(l.totalEks||0).toFixed(4)},${(l.prPerEnhetInkl||0).toFixed(4)},${(l.prPerEnhetEks||0).toFixed(4)},${prod?.salgEks||0},${gm.gmKr.toFixed(4)},${gm.gmPct.toFixed(2)},${gm.paaslagPct.toFixed(2)}\n`;
+        csv+=`${p.dato},${p.forfallsdato||''},"${p.fakturanr||''}","${p.lev||''}","${prod?.navn||''}",${l.antall||0},${l.vektPerKolli||0},${l.totalVekt||0},${(l.prisPerKolliInkl||0).toFixed(4)},${(l.totalInkl||0).toFixed(4)},${(l.totalEks||0).toFixed(4)},${(l.prPerEnhetInkl||0).toFixed(4)},${(l.prPerEnhetEks||0).toFixed(4)},${prod?.salgEks||0},${gm.gmKr.toFixed(4)},${gm.gmPct.toFixed(2)},${gm.paaslagPct.toFixed(2)}\n`;
       });
     });
   }
@@ -4758,7 +4805,7 @@ async function runAIScan(){
     prompt = 'Analyser denne fakturaen for Four Season AS, en matbutikk i Norge. Returner KUN et JSON-objekt, ingen annen tekst.\n\n'
     +'Hvis flere sider/bilder er lastet opp, er de alle del av SAMME faktura — samle alle linjer fra alle sider i én samlet liste. Leverandør, fakturanr og dato er det samme for hele fakturaen.\n\n'
     +'Format:\n'
-    +'{"leverandor":"navn","fakturanr":"nummer","dato":"YYYY-MM-DD","totalInkl":0.00,"linjer":[{"beskrivelse":"produktnavn","varenr":"nr","antallKolli":1,"prisPerKolli":0.00,"totalLinje":0.00,"mva":15,"selgesSom":"pakke","innholdPerKolli":12}]}\n\n'
+    +'{"leverandor":"navn","fakturanr":"nummer","dato":"YYYY-MM-DD","forfallsdato":"YYYY-MM-DD eller null","totalInkl":0.00,"linjer":[{"beskrivelse":"produktnavn","varenr":"nr","antallKolli":1,"prisPerKolli":0.00,"totalLinje":0.00,"mva":15,"selgesSom":"pakke","innholdPerKolli":12}]}\n\n'
     +'Regler:\n'
     +'- antallKolli: antall esker/kasser/kolli på denne linjen (fakturaens "antall")\n'
     +'- prisPerKolli: EFFEKTIV pris per kolli etter rabatt. Hvis fakturaen har en "Rabatt"-kolonne med prosent (f.eks. "3%", "30%"), skal du IKKE bruke "Pris"-kolonnen som står før rabatten. Bruk i stedet: "Beløp"/"Sum"/"Total linje"-kolonnen (som allerede har rabatt trukket fra) delt på antallKolli. Hvis antallKolli=1, er prisPerKolli lik "Beløp".\n'
@@ -4779,7 +4826,13 @@ async function runAIScan(){
     +'   * "MANGO FERSK 5-7 Stk" med selgesSom="stk" → innholdPerKolli = 6 (6 stk, snitt av 5-7)\n'
     +'   * Hvis beskrivelsen ikke viser det tydelig (f.eks. "BULLET CHILLI" uten tall) → la stå null\n'
     +'   * PALL: innholdPerKolli = 1\n'
-    +'   * VIKTIG: innholdPerKolli er tallet per ÉN kolli, ikke totalt på linjen';
+    +'   * VIKTIG: innholdPerKolli er tallet per ÉN kolli, ikke totalt på linjen\n'
+    +'- Forfallsdato (due date) — extract following these rules in order:\n'
+    +'   1. If invoice shows explicit "Forfallsdato" or "Forfall" or "Due date": use that date as YYYY-MM-DD.\n'
+    +'   2. If invoice shows "Betalingsfrist: N dager" or "N dager netto" or "Net N days": calculate as invoice date + N days, return as YYYY-MM-DD.\n'
+    +'   3. If invoice shows "Betalingsbetingelser: N dager": same as #2 — calculate from invoice date + N days.\n'
+    +'   4. If neither is visible: return null.\n'
+    +'   Do NOT guess. Do NOT use a default value like 14 days. Only return a date if you can determine it from the invoice content.';
   }
 
   // Build content with all uploaded files (multi-page faktura support)
@@ -5073,7 +5126,7 @@ function showScanResults(data){
   }
   document.getElementById('scan-result-header').innerHTML=
     '<div style="display:flex;justify-content:space-between;margin-bottom:4px">'+levLabel+'<span>'+(data.fakturanr||'Uten nr')+'</span></div>'+
-    '<div style="display:flex;justify-content:space-between;opacity:.8;font-size:12px"><span>Dato: '+(fmtDate(data.dato)||'')+'</span><span>Totalt på faktura: '+fmtNOK(data.totalInkl||0)+'</span></div>'+
+    '<div style="display:flex;justify-content:space-between;opacity:.8;font-size:12px"><span>Dato: '+(fmtDate(data.dato)||'')+(data.forfallsdato?' · Forfall: '+fmtDate(data.forfallsdato):'')+'</span><span>Totalt på faktura: '+fmtNOK(data.totalInkl||0)+'</span></div>'+
     '<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.2)">'+
       '<div style="font-size:11px;color:rgba(255,255,255,.7);margin-bottom:6px">💡 '+ruleNote+'</div>'+
       '<input type="hidden" id="scan-effective-rule" value="'+initial+'">'+
@@ -5613,6 +5666,7 @@ async function confirmScanToInnkjop(){
   else if(data.leverandor){document.getElementById('inn-lev-legacy').value=data.leverandor}
   // Transfer dato/fakturanr
   if(data.dato)document.getElementById('inn-dato').value=data.dato;
+  if(data.forfallsdato)document.getElementById('inn-forfall').value=data.forfallsdato;
   if(data.fakturanr)document.getElementById('inn-faktura').value=data.fakturanr;
   // Build pLines for existing innkjop form
   // Storage: save BOTH legacy fields (antall, vektPerKolli, prisPerKolliInkl) AND v8 fields (innholdPerKolli, prisPerEnhetEks, prisPerKolliEks)
@@ -5668,6 +5722,7 @@ async function confirmScanToInnkjop(){
     const savedPLines=pLines;
     const savedLevId=matchedLev?matchedLev.id:'';
     const savedDato=data.dato||today();
+    const savedForfall=data.forfallsdato||'';
     const savedFakturanr=data.fakturanr||'';
     const savedLegacy=(!matchedLev&&data.leverandor)?data.leverandor:'';
     window._innkjopPreLevId=savedLevId;
@@ -5675,6 +5730,7 @@ async function confirmScanToInnkjop(){
     // Restore data after the modal opens
     pLines=savedPLines;
     document.getElementById('inn-dato').value=savedDato;
+    document.getElementById('inn-forfall').value=savedForfall;
     document.getElementById('inn-faktura').value=savedFakturanr;
     if(savedLegacy){
       document.getElementById('inn-lev-legacy').value=savedLegacy;
