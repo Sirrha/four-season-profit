@@ -1,18 +1,19 @@
 # System-inventar — Four Season AS
 
-**Last updated**: 2026-05-08, after V0.5 forfallsdato (overdue awareness on purchases).
+**Last updated**: 2026-05-10, after Bank Scanner V1 Session 1 (extract + bulk save, no matching yet).
 
 Dette dokumentet kartlegger hva som faktisk finnes i `index.html` (produksjon, sormena.no). Mål: at Soren (chat) og Claude Code skal jobbe ut fra samme bilde av systemet og slippe å duplikere arbeid eller spørre om ting som allerede er bygget.
 
-- **Filer kartlagt**: `index.html` (~5866 linjer)
-- **Siste store endring**: V0.5 forfallsdato (2026-05-08) — top-level `forfallsdato` (string YYYY-MM-DD eller null) på `purchases`-skjema. AI-skanner ekstraherer fra "Forfall"/"Betalingsfrist N dager" (Strategy 2: explicit OR calculated fra `dato + N`). `getInvoicePaymentStatus` utvidet med `forfallsdato`, `isOverdue` (boolean), `daysOverdue` (int). UI: ny `.fr` 2-col rad i manuell-modal (linje ~604-610) + `edith-forfall`-input i edit-header-modal, betinget chip i Innkjøp-liste (rød/oransje/muted etter status), Forfall-segment i fakturaheader, rød "Forfalt med X dager"-banner over Reell-boks når aktivt. CSV: `Forfallsdato`-kolonne etter `Dato`. Ingen migrasjon — eksisterende fakturaer uten flagget behandles som "no due date" (`isOverdue=false`).
+- **Filer kartlagt**: `index.html` (~6033 linjer)
+- **Siste store endring**: Bank Scanner V1 Session 1 (2026-05-10) — AI-skanner for kontoutskrift (DNB). Tre scanner-modes: `faktura` / `z-rapport` / `bank_statement`. Innboks får 3. knapp "🏦 Skann som kontoutskrift" som dispatcher til `openScannerFromInnboks(id,'bank_statement')`. `runAIScan` har ny prompt-gren som ekstraherer transaksjoner-array. `showBankStatementResults` (linje 5137) viser stacked-card-liste m/ Inn/Ut-totaler + dup-deteksjon. `confirmBankStatementImport` (linje 5196) lagrer alle til `bankTransactions` med dedup-sjekk på `arkivref || bankReference` (Strategy B — beskytter mot kryss-kanal-duplikater). 4 nye opt-felter på AI-records: `bankReference`, `importBatchId`, `rawDescription`, `aiExtracted`. Alle records får placeholder `type:'supplier_payment'`; reklassifisering kommer i Session 2. INGEN matching-logikk i Session 1 — `linkedeFakturaer:[]` på alle imports. INGEN utkast-system — bank statement er one-shot extract.
+- **Tidligere milestone**: V0.5 forfallsdato (2026-05-08) — top-level `forfallsdato` på `purchases`. AI-skanner ekstraherer. `getInvoicePaymentStatus` utvidet med `isOverdue`/`daysOverdue`.
 - **Tidligere milestone**: Ekskluder fra beregning V1 (2026-05-07) — boolean flagg `ekskluderFraBeregning` per linje på `purchases.lines[]`. Universal handler for pant, IFCO, kreditnota-korreksjoner. Faktura totalt sakrosankt; profit/GM mot `inkludertEks`.
 - **Tidligere milestone**: STEP 1 av DNB-skanner-bygget (2026-04-26) — `payments` → `bankTransactions`-migrasjon. `payments` er cold archive.
 - **Tidligere milestone**: v27 ble cutoveret til produksjon i kommit `95e308d` (2026-04-26).
 
-**Språkpolicy (parked decision #9)**: Som av 2026-04-26: Engelsk for all ny kode (feltnavn, funksjonsnavn, identifiers). Eksisterende norske feltnavn (`dato`, `belop`, `linkedeFakturaer`, etc.) beholdes bakoverkompatibelt inntil en dedikert språkmigrasjon. Nye norske feltnavn (f.eks. `forfallsdato`) brukes kun når de matcher eksisterende norske naboer på samme record (purchases har allerede `dato`/`fakturanr`). Resultatet er midlertidig hybrid skjema i `bankTransactions` og `purchases.lines` (`ekskluderFraBeregning` følger samme hybrid-konvensjon). UI-strenger forblir norske.
+**Språkpolicy (parked decision #9)**: Som av 2026-04-26: Engelsk for all ny kode (feltnavn, funksjonsnavn, identifiers). Eksisterende norske feltnavn (`dato`, `belop`, `linkedeFakturaer`, etc.) beholdes bakoverkompatibelt inntil en dedikert språkmigrasjon. Nye norske feltnavn (f.eks. `forfallsdato`) brukes kun når de matcher eksisterende norske naboer på samme record. Bank scanner Session 1 introduserer engelske felt: `bankReference`, `importBatchId`, `rawDescription`, `aiExtracted` — alle på `bankTransactions` (som allerede er hybrid). UI-strenger forblir norske.
 
-Linjenumre er ferske per 2026-05-08 (etter V0.5 forfallsdato). Filen vokser fort, så verifiser med `Grep` før du redigerer rundt en gitt linje.
+Linjenumre er ferske per 2026-05-10 (etter Bank Scanner V1 Session 1). Filen vokser fort, så verifiser med `Grep` før du redigerer rundt en gitt linje.
 
 ---
 
@@ -34,16 +35,16 @@ Linjenumre er ferske per 2026-05-08 (etter V0.5 forfallsdato). Filen vokser fort
 
 | # | UI-navn | Render-funksjon | Page ID | Linje | Bruker kolleksjon(er) | Status |
 |---|---------|----------------|---------|-------|------------------------|--------|
-| 1 | Oversikt | `renderOversikt` | `pg-oversikt` | 1231 | `purchases`, `svinn`, `products`, `vakter`, `ansatte` | OK |
-| 2 | Produkter | `renderProdukter` | `pg-produkter` | 1319 | `products` | OK |
-| 3 | Lev. (Leverandører) | `renderLeverandorer` | `pg-leverandorer` | 2726 | `leverandorer`, `products`, `purchases` | OK |
-| 4 | Innboks | `renderInnboks` | `pg-innboks` | 3169 | `innboks` | OK |
-| 5 | Innkjøp | `renderInnkjop` | `pg-innkjop` | 1529 | `purchases`, `products`, `bankTransactions` | OK + ekskluder V1 + forfallsdato V0.5 |
-| 6 | Salg | `renderSalg` | `pg-salg` | 2224 | `dagsalg`, `sales`, `purchases` | OK |
-| 7 | Svinn | `renderSvinn` | `pg-svinn` | 2643 | `svinn`, `products`, `purchases` | OK |
-| 8 | Betalinger | `renderBetalinger` | `pg-betalinger` | 2872 | `bankTransactions`, `leverandorer`, `purchases` | OK (view + create) |
-| 9 | Timeliste | `renderTimeliste` | `pg-timeliste` | 3504 | `ansatte`, `vakter`, `dagsalg` | OK |
-| 10 | Rapporter | `renderRapporter` | `pg-rapporter` | 3424 | alle | OK |
+| 1 | Oversikt | `renderOversikt` | `pg-oversikt` | 1242 | `purchases`, `svinn`, `products`, `vakter`, `ansatte` | OK |
+| 2 | Produkter | `renderProdukter` | `pg-produkter` | 1330 | `products` | OK |
+| 3 | Lev. (Leverandører) | `renderLeverandorer` | `pg-leverandorer` | 2737 | `leverandorer`, `products`, `purchases` | OK |
+| 4 | Innboks | `renderInnboks` | `pg-innboks` | 3180 | `innboks` | OK + bank statement scan trigger (V1 Session 1) |
+| 5 | Innkjøp | `renderInnkjop` | `pg-innkjop` | 1540 | `purchases`, `products`, `bankTransactions` | OK + ekskluder V1 + forfallsdato V0.5 |
+| 6 | Salg | `renderSalg` | `pg-salg` | 2235 | `dagsalg`, `sales`, `purchases` | OK |
+| 7 | Svinn | `renderSvinn` | `pg-svinn` | 2654 | `svinn`, `products`, `purchases` | OK |
+| 8 | Betalinger | `renderBetalinger` | `pg-betalinger` | 2883 | `bankTransactions`, `leverandorer`, `purchases` | OK (view + create + AI-import via bank scanner) |
+| 9 | Timeliste | `renderTimeliste` | `pg-timeliste` | 3517 | `ansatte`, `vakter`, `dagsalg` | OK |
+| 10 | Rapporter | `renderRapporter` | `pg-rapporter` | 3437 | alle | OK |
 
 ## Brukersidens funksjoner
 
@@ -91,12 +92,13 @@ Linjenumre er ferske per 2026-05-08 (etter V0.5 forfallsdato). Filen vokser fort
 - Modal `ov-leverandor` (linje 766): navn, org, konto, kontaktperson, prisregel, aliaser.
 - `findLeverandorByName` (linje 2620) + `normName` (linje 2618): brukes til å matche fakturalev mot register.
 
-### Innboks (linje 3073)
-**Hva den gjør (sett fra brukerens side)**: holder PDF-er og bilder av fakturaer/Z-rapporter klare for skanning. Filer dras inn (eller velges via filplukker), lagres som base64 i `innboks`-kolleksjonen i Firestore (max 700KB pr. fil, da Firestore docs maks er 1MiB), og venter til brukeren trykker "Skann som faktura" eller "Skann som Z-rapport".
+### Innboks (linje 3180)
+**Hva den gjør (sett fra brukerens side)**: holder PDF-er og bilder av fakturaer/Z-rapporter/kontoutskrifter klare for skanning. Filer dras inn (eller velges via filplukker), lagres som base64 i `innboks`-kolleksjonen i Firestore (max 700KB pr. fil, da Firestore docs maks er 1MiB), og venter til brukeren trykker en av tre skann-knapper.
 - Pending-liste viser filnavn, alder, og "💾 Utkast"-badge hvis skanning er påbegynt.
-- Utkast-system (`saveScanAsDraft`, linje 3253 og `openScannerFromInnboks`, linje 3201): `it.utkast` har `scanResults` + `scanRows` + `savedAt`. "Fortsett utkast (X/Y)" laster det inn i scanneren igjen.
+- **Tre skann-knapper per pending-rad** (V1 Session 1, 2026-05-10): "🛒 Skann som faktura", "💰 Skann som Z-rapport", "🏦 Skann som kontoutskrift". Triggers: `scanInnboksAsFaktura`/`scanInnboksAsZRapport`/`scanInnboksAsBankStatement` (linje ~3305-3307) — alle dispatcher til `openScannerFromInnboks(id, mode)` med mode-string `faktura`/`z-rapport`/`bank_statement`.
+- Utkast-system: kun for faktura-mode. Z-rapport og bank statement har ikke utkast — one-shot extract.
 - "Ferdig"-mark eller slett pr. fil.
-- Når faktura er lagret kalles `markInnboksLinkedDone()` (linje 3314) automatisk — fjerner utkastet og setter `status:'done'`.
+- Når faktura/Z-rapport/bank statement er lagret kalles `markInnboksLinkedDone()` automatisk — setter `status:'done'`.
 
 ### Betalinger (linje 2776)
 **Hva den gjør (sett fra brukerens side)**: registrer hver betaling Four Season gjør (bankoverføring, kort, giro), valgfritt lenket til én eller flere ulenkede fakturaer fra samme leverandør. Lar brukeren se hvilke fakturaer som er betalt, delvis betalt, eller venter på betaling. **STEP 1 lager grunnlag for DNB-skanner**: data går nå til `bankTransactions`-kolleksjonen, ikke `payments`. UI viser fortsatt "Betalinger" — rename til "Banktransaksjoner" kommer i STEP 2.
@@ -138,7 +140,7 @@ Linjenumre er ferske per 2026-05-08 (etter V0.5 forfallsdato). Filen vokser fort
 | `ov-vakt` | Legg til vakt | 744 | Timeliste (v22) |
 | `ov-leverandor` | Ny/Rediger leverandør | 766 | Leverandører |
 | `ov-betaling` | Ny betaling (2-fase) | 804 | Betalinger (v27) |
-| `ov-scanner` | AI-skanner | 5755 | Faktura + Z-rapport |
+| `ov-scanner` | AI-skanner | 5919 | Faktura + Z-rapport + Bank statement (V1 Session 1) |
 
 ## Kalkulasjons-motor (linje 1066–1153)
 - `calcGM(buyEks, sellEks)` (linje 1066) → `{gmKr, gmPct, paaslagPct}`.
@@ -160,7 +162,7 @@ One-shot data-transformasjoner gated av Firestore `_meta/migrations`-dokumentet.
 - Inngang: `openScanner('faktura')` (linje 4483) eller via knapp i innkjøp-modal eller "Skann som faktura" i Innboks (`scanInnboksAsFaktura`, linje 3198).
 - Multi-fil støtte: opp til 10 filer, 20MB total — alle blir én faktura.
 - Sender til Cloudflare Worker `https://fourseason.herishhashemi.workers.dev` med `claude-sonnet-4-6`. API-nøkkel i `localStorage.fs_anthropic_key` (`saveApiKey`, linje 4471).
-- Prompt definert i `runAIScan()` (linje 4758), legger ved bilder/PDF som `image`/`document`-content-blokker. **V0.5 (2026-05-08)**: schema utvidet med `forfallsdato:"YYYY-MM-DD eller null"`. Extraction-regler: explicit "Forfall"/"Forfallsdato"/"Due date" → bruk direkte; "Betalingsfrist N dager"/"N dager netto"/"Net N days"/"Betalingsbetingelser N dager" → kalkuler `dato + N`; ingenting synlig → `null`. Eksisterende kontrollsum-regel (sum av linjer = sum eks. MVA) bevart urørt. Propageres til `inn-forfall`-input (manual modal) i 3 sites: line ~5615 (direct), ~5670/5677 (savedForfall via openInnkjopModal-restore).
+- Prompt definert i `runAIScan()` (linje 4777), legger ved bilder/PDF som `image`/`document`-content-blokker. **3 prompt-grener** (mode-dispatch via `scanMode`-variabel): `faktura` (default), `z-rapport`, `bank_statement` (V1 Session 1, 2026-05-10). **V0.5 (2026-05-08)**: faktura-schema utvidet med `forfallsdato:"YYYY-MM-DD eller null"`. Extraction-regler: explicit "Forfall"/"Forfallsdato"/"Due date" → bruk direkte; "Betalingsfrist N dager"/"N dager netto"/"Net N days"/"Betalingsbetingelser N dager" → kalkuler `dato + N`; ingenting synlig → `null`. Eksisterende kontrollsum-regel (sum av linjer = sum eks. MVA) bevart urørt.
 - `autoDetectScanRule(scanData)` (linje 5468, v25): regner ut om priser er eks/inkl. MVA basert på fakturatotal vs. linjesum. Matematikken slår lagret leverandør-regel når avvik <5%.
 - `showScanResults` (linje ~5044) → tabell med 16 kolonner. `scanRows` har all state. Bruker kan justere antall, innhold/kolli, MVA, utsalgspris pr. linje. Hver scanRow har `skipped` (hopp over helt) og **`ekskluder`** (Ekskluder V1, 2026-05-07 — lagres på faktura men teller ikke i GM). Action-cell har to knapper: `⊘` (ekskluder-toggle) og `×` (skip). Skipped-rader når aldri pLines (`confirmScanToInnkjop`); ekskluderte rader når pLines med `ekskluderFraBeregning:true`. `renderScanSummary` (linje ~5442) viser eksplisitt "Ekskludert fra beregning" og "Inkludert i beregning"-rader når noen linjer er ekskludert.
 - Inline produktregistrering for ukjente produkter (`registerScanRowProduct`, linje 5361) — det finnes ingen separat "produktskanner"; dette er produktskanneren.
@@ -170,11 +172,19 @@ One-shot data-transformasjoner gated av Firestore `_meta/migrations`-dokumentet.
 - **Lagres til**: `purchases`-kolleksjonen som vanlig faktura. Innboks-fil markeres `done`. Produkter får oppdatert `buyEks`/`buyInkl` automatisk (v21 Fix 2). Hvis utsalgspriser er endret: tilbyr å oppdatere `salgEks`/`salgInkl` på produktene.
 
 ### Z-rapport-skanner
-- Inngang: `openZRapportScanner()` (linje 4512) — kalles fra "📷 Skann Z-rapport"-knapp på Salg-siden, eller "Skann som Z-rapport" i Innboks (`scanInnboksAsZRapport`, linje 3199).
+- Inngang: `openZRapportScanner()` (linje 4627) — kalles fra "📷 Skann Z-rapport"-knapp på Salg-siden, eller "Skann som Z-rapport" i Innboks (`scanInnboksAsZRapport`).
 - Bruker samme `runAIScan()` med `scanMode='z-rapport'` — egen prompt som ber om totalbeløp, MVA-fordeling, kategorisalg, ordretall, rabatt/uttak/slettet/retur.
-- `showZRapportResults` (linje 4842) → forhåndsvisning med MVA-tabell + kategorisalg (med Susoft→intern matching) + meta.
-- `confirmZRapportScan` (linje 4934) lagrer/oppdaterer i `dagsalg`-kolleksjonen med `kilde:'z-rapport-skann'`. Felter: `mvaBreakdown`, `kategoriSalg[]` med `internalKey` for matchede kategorier, `antallOrdre/Kvittering`, `rabattTotal`, `vareuttak`, `slettetTotal`, `retur`.
-- **Lagres til**: `dagsalg`-kolleksjonen — vises på Salg-siden. Detalj-visning (`showDagsalgDetail`, linje 2386) viser MVA-fordeling og kategorisalg som tabell.
+- `showZRapportResults` (linje 4982) → forhåndsvisning med MVA-tabell + kategorisalg (med Susoft→intern matching) + meta.
+- `confirmZRapportScan` (linje 5074) lagrer/oppdaterer i `dagsalg`-kolleksjonen med `kilde:'z-rapport-skann'`. Felter: `mvaBreakdown`, `kategoriSalg[]` med `internalKey` for matchede kategorier, `antallOrdre/Kvittering`, `rabattTotal`, `vareuttak`, `slettetTotal`, `retur`.
+- **Lagres til**: `dagsalg`-kolleksjonen — vises på Salg-siden. Detalj-visning (`showDagsalgDetail`) viser MVA-fordeling og kategorisalg som tabell.
+
+### Bank statement-skanner (V1 Session 1, 2026-05-10)
+- Inngang: `openBankStatementScanner()` (linje 4628) — kalles fra "🏦 Skann som kontoutskrift" i Innboks (`scanInnboksAsBankStatement` linje ~3307).
+- Bruker samme `runAIScan()` med `scanMode='bank_statement'` — egen prompt som ber om kontonummer/eier/periode + transaksjoner-array (`{dato, bookingDato, belop signert, direction, beskrivelse, bankReference, motpart}`). Prompt har eksplisitt error-handling: hvis PDF ikke lesbar, returnér `{"transaksjoner":[],"feil":"PDF kunne ikke leses"}`.
+- `showBankStatementResults` (linje 5137) → stacked-card-liste med Inn/Ut-totaler, dup-deteksjon (sjekker `arkivref || bankReference` mot eksisterende records — Strategy B for kryss-kanal-beskyttelse), big "💾 Importer N transaksjoner"-knapp. Fanger `data.feil` før liste-rendering.
+- `confirmBankStatementImport` (linje 5196) lagrer alle ikke-duplikate transaksjoner til `bankTransactions` via async loop. Setter `aiExtracted:true`, `importBatchId` (én per import), `rawDescription`, `bankReference` (= AI-ekstrahert ref, også speilet til `arkivref`-feltet for cross-channel-dedup). Placeholder `type:'supplier_payment'`, `linkedeFakturaer:[]`. Reklassifisering + matching kommer i Session 2.
+- **Lagres til**: `bankTransactions`-kolleksjonen — synlig på Betalinger-siden. Innboks-fil markeres `done`. Etter import navigeres bruker til Betalinger-siden via `goTo('betalinger')`.
+- **Worker-pass-through**: Cloudflare Worker (`fourseason.herishhashemi.workers.dev`) er antatt å passere prompten til Anthropic uendret. Ikke 100% verifiserbar uten Worker-kode (separat repo). Hvis Worker-en avviser bank_statement-prompt: feilmelding vises i scanner-UI via `showScanError`.
 
 ## Datafelter — hva ligger i hver Firestore-kolleksjon
 
@@ -190,7 +200,7 @@ One-shot data-transformasjoner gated av Firestore `_meta/migrations`-dokumentet.
 | `ansatte` | Ansatte (v22) | `navn`, `stilling`, `timelonn`, `adresse`, `epost`, `bankkonto`, `personnummer`, `notater`, `aktiv` |
 | `vakter` | Vakter (v22) | `dato`, `ansattId`, `fra`, `til`, `timer` (alternativ til fra/til), `notat` |
 | `payments` | **Cold archive** — replaced by `bankTransactions` via migration 2026-04-26 (STEP 1 av DNB-skanner). **Do not write.** Beholdes urørt for rollback-mulighet. | (uendret skjema fra v27): `tenantId:'fourseason'`, `dato`, `bookingDato`, `leverandorId`, `levTekstRaa`, `belop`, `valuta:'NOK'`, `bankkonto`, `referanse`, `arkivref` (DNB unik), `metode` (`transfer`/`card`/`giro`), `linkedeFakturaer[]`, `opprettetAv`, `opprettet`, `notat` |
-| `bankTransactions` | Banktransaksjoner — kun `supplier_payment` i STEP 1, utvides med lønn/drift/POS-innskudd i STEP 4 av DNB-skanner | **Mixed Norwegian (legacy from `payments`) and English (new) field names. Full English migration parked as decision #9.** Legacy NO felter: `tenantId`, `dato`, `bookingDato`, `leverandorId`, `levTekstRaa`, `belop`, `valuta`, `bankkonto`, `referanse`, `arkivref`, `metode`, `linkedeFakturaer[]`, `opprettetAv`, `opprettet`, `notat`. Nye EN felter: `type` (i dag bare `'supplier_payment'`), `direction` (`'out'`), `period` (YYYY-MM derived fra dato). Migration-only marker: `migratedFromPayments:true`, `migratedAt` (ISO-timestamp). |
+| `bankTransactions` | Banktransaksjoner — kun `supplier_payment` i Session 1, utvides med lønn/drift/POS-innskudd i Session 2-4 | **Mixed Norwegian (legacy from `payments`) and English (new) field names. Full English migration parked as decision #9.** Legacy NO felter: `tenantId`, `dato`, `bookingDato`, `leverandorId`, `levTekstRaa`, `belop`, `valuta`, `bankkonto`, `referanse`, `arkivref`, `metode`, `linkedeFakturaer[]`, `opprettetAv`, `opprettet`, `notat`. EN felter (V0.4 STEP 1): `type` (i dag bare `'supplier_payment'`), `direction` (`'in'`/`'out'`), `period` (YYYY-MM derived fra dato). Migration-only marker: `migratedFromPayments:true`, `migratedAt` (ISO-timestamp). **V1 Session 1 (2026-05-10) AI-skanner felter** (kun på AI-importerte records): `bankReference` (samme verdi som `arkivref` — Strategy B speiling for cross-channel dedup), `importBatchId` (én ID per skann-import-batch), `rawDescription` (uendret tekst-felt fra kontoutskriften), `aiExtracted:true`. Manuelt registrerte records har disse 4 felter `undefined` (defensive: alle dedup-/filter-sjekker bruker `||` eller `===true`). |
 | `_meta` | System-metadata. **IKKE i `cols`-listener** — leses on-demand fra Firestore. | I dag bare `migrations`-doc med felt `paymentsToBankTransactions: <ISO-timestamp>` (sentinel for STEP 1). Fremtidige migrasjoner legger til flere felter i samme doc. |
 
 ## Kjente "skjermer/funksjoner uten tydelig formål" eller halvferdige

@@ -290,6 +290,17 @@ select.fi:focus{background-color:#fff}
 .scantbl .ekskl-x.active{color:#666;background:rgba(180,180,180,.25);border-radius:5px;font-weight:700}
 .scan-ekskl-row{display:flex;justify-content:space-between;align-items:center;padding:6px 12px;font-size:12px;background:rgba(180,180,180,.1);border-radius:6px;margin-top:6px;color:#666}
 .scan-ekskl-row.inkluder{background:rgba(141,225,158,.1);color:#2d5a40;font-weight:600}
+.bank-tx-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+.bank-tx-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px}
+.bank-tx-card .btx-row{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.bank-tx-card .btx-date{font-size:11px;color:var(--muted);font-weight:600;margin-bottom:3px}
+.bank-tx-card .btx-desc{font-size:13px;color:var(--text);line-height:1.35;margin-bottom:3px;word-break:break-word}
+.bank-tx-card .btx-meta{font-size:10.5px;color:var(--muted);font-family:'DM Mono',monospace}
+.bank-tx-card .btx-amount{font-family:'DM Mono',monospace;font-weight:700;font-size:14px;flex-shrink:0}
+.bank-tx-card .btx-amount.out{color:var(--danger)}
+.bank-tx-card .btx-amount.in{color:var(--ok)}
+.bank-tx-dup{opacity:.55;border-style:dashed}
+.bank-tx-dup .btx-amount{text-decoration:line-through}
 .forfallsdato-overdue{color:var(--danger);font-weight:600}
 .forfallsdato-today{color:#f5a623;font-weight:600}
 .forfallsdato-soon{color:var(--muted)}
@@ -3223,6 +3234,7 @@ function renderInnboks(){
         <div style="display:flex;flex-direction:column;gap:5px;flex-shrink:0">
           ${mainBtn}
           <button class="btn btn-s" style="background:transparent;color:var(--primary);border:1.5px solid var(--border);padding:6px 12px;font-size:11.5px" onclick="scanInnboksAsZRapport('${it.id}')">💰 Skann som Z-rapport</button>
+          <button class="btn btn-s" style="background:transparent;color:var(--primary);border:1.5px solid var(--border);padding:6px 12px;font-size:11.5px" onclick="scanInnboksAsBankStatement('${it.id}')">🏦 Skann som kontoutskrift</button>
           <div style="display:flex;gap:4px">
             <button class="btn btn-s" style="background:transparent;color:var(--muted);border:1px solid var(--border);flex:1;padding:4px 8px;font-size:10.5px" onclick="markInnboksDone('${it.id}')">✓ Ferdig</button>
             <button class="btn btn-s" style="background:transparent;color:var(--danger);border:1px solid var(--border);flex:1;padding:4px 8px;font-size:10.5px" onclick="deleteInnboksItem('${it.id}')">🗑️</button>
@@ -3293,6 +3305,7 @@ async function deleteInnboksItem(id){
 // Scanner entry points from innboks
 function scanInnboksAsFaktura(id){openScannerFromInnboks(id,'faktura')}
 function scanInnboksAsZRapport(id){openScannerFromInnboks(id,'z-rapport')}
+function scanInnboksAsBankStatement(id){openScannerFromInnboks(id,'bank_statement')}
 
 function openScannerFromInnboks(innboksId,mode){
   const it=dbFind('innboks',innboksId);
@@ -4598,6 +4611,11 @@ function openScanner(mode){
     if(subEl)subEl.textContent='Last opp Z-rapport fra Susoft — AI leser dagens omsetning';
     if(uzText)uzText.textContent='Trykk for å laste opp Z-rapport';
     if(uzSub)uzSub.textContent='PDF eller bilde · f.eks. CashCount_xxx.pdf';
+  } else if(scanMode==='bank_statement'){
+    if(titleEl)titleEl.textContent='🏦 AI Kontoutskrift-skanner';
+    if(subEl)subEl.textContent='Last opp kontoutskrift fra DNB — AI ekstraherer alle transaksjoner';
+    if(uzText)uzText.textContent='Trykk for å laste opp kontoutskrift';
+    if(uzSub)uzSub.textContent='PDF · DNB månedlig kontoutskrift';
   } else {
     if(titleEl)titleEl.textContent='🤖 AI Fakturaskanner';
     if(subEl)subEl.textContent='Last opp faktura — AI leser og registrerer automatisk';
@@ -4607,13 +4625,14 @@ function openScanner(mode){
   document.getElementById('ov-scanner').classList.add('open');
 }
 function openZRapportScanner(){openScanner('z-rapport')}
+function openBankStatementScanner(){openScanner('bank_statement')}
 function closeScanner(){
   document.getElementById('ov-scanner').classList.remove('open');
 }
 
 function resetScanner(){
   scanFiles=[];scanFileData=null;scanFileType=null;scanResults=[];
-  ['scan-preview','scan-btn-area','scan-progress','scan-results','scan-error','scan-z-results'].forEach(id=>{
+  ['scan-preview','scan-btn-area','scan-progress','scan-results','scan-error','scan-z-results','scan-bank-results'].forEach(id=>{
     const el=document.getElementById(id);if(el)el.style.display='none';
   });
   const uz=document.getElementById('scan-upload-zone');if(uz)uz.style.display='block';
@@ -4801,6 +4820,24 @@ async function runAIScan(){
       +'- Kategorinavn i Susoft har ofte rare tall på slutten ("Mat3", "Kaffe1", "None-food7", "Grønnskar"). Behold navnet slik det står.\n'
       +'- Hvis et felt ikke finnes på rapporten, bruk null (for tall) eller utelat feltet.\n'
       +'- Datoformat på rapporten er ofte "DD/MM/YYYY" — konverter til "YYYY-MM-DD".';
+  } else if(scanMode==='bank_statement'){
+    prompt = 'Analyser denne kontoutskriften (bank statement) for Four Season AS, en matbutikk i Norge. Returner KUN et JSON-objekt, ingen annen tekst.\n\n'
+      +'Format:\n'
+      +'{"kontonummer":"1234.56.78901 eller null","kontoeier":"Four Season AS eller null","periode":"DD.MM.YYYY - DD.MM.YYYY eller null","transaksjoner":[{"dato":"YYYY-MM-DD","bookingDato":"YYYY-MM-DD","belop":-1234.56,"direction":"out eller in","beskrivelse":"hele teksten fra fakturatekst-feltet","bankReference":"unik DNB-id eller null","motpart":"leverandørnavn fra beskrivelse eller null"}]}\n\n'
+      +'Regler:\n'
+      +'- Kontoutskriften er typisk fra DNB. Hver transaksjon har «Bokført dato», «Rentedato», «Tekst/Forklaring», «Beløp» (eller separate «Ut»/«Inn»-kolonner), og en unik referanse (ofte kalt «Arkivnr», «Transaksjons-ID», eller bare et nummer).\n'
+      +'- transaksjoner: én entry per faktiske transaksjon. Hopp over inngående/utgående saldo-rader, sumrader, og overskrifter.\n'
+      +'- dato: bruk «Rentedato» (når pengene flyttet seg). Hvis bare én dato vises, bruk den.\n'
+      +'- bookingDato: bruk «Bokført dato». Hvis kun én dato finnes, sett bookingDato lik dato.\n'
+      +'- belop: SIGNERT desimal. Negativ for utgående (out), positiv for inngående (in). DNB viser ofte beløp i en «Ut»-kolonne (lag det negativt) eller «Inn»-kolonne (positivt). Hvis det er én signert «Beløp»-kolonne, behold tegnet som det er.\n'
+      +'- direction: «out» hvis belop<0, «in» hvis belop>=0. Sett eksplisitt.\n'
+      +'- beskrivelse: HELE tekst-feltet uendret, inkludert Vipps-prefix, fakturanr, motpart-navn — alt. Ikke trim eller tolke.\n'
+      +'- bankReference: unik per-transaksjon-ID fra DNB. Se etter felt som «Arkivnr», «Transaksjons-ID», «Referanse» (men IKKE KID — KID er vår ref, ikke bankens). Hvis ingen unik ref synlig, returnér null.\n'
+      +'- motpart: best-effort ekstraksjon av leverandør/avsender fra beskrivelse. F.eks. «Vipps AFFA AS 24.04 1500» → motpart=«AFFA AS». «Faktura 12345 NORDIC ENGROS AS» → motpart=«NORDIC ENGROS AS». «DNB Bank Gebyr» → motpart=«DNB». Hvis usikker → null. Ikke gjett ville.\n'
+      +'- Datoformat på utskriften er ofte «DD.MM.YYYY» eller «DD/MM/YYYY» — konverter til «YYYY-MM-DD».\n'
+      +'- VIKTIG: returnér transaksjoner i samme rekkefølge som de står på utskriften (typisk eldste først eller nyeste først — behold rekkefølgen).\n'
+      +'- Hvis kontoutskriften viser balanser/saldoer, ignorer disse — bare faktiske transaksjoner i transaksjoner-arrayet.\n'
+      +'- Hvis PDF er kryptert, billede-only uten tekst-lag, eller på annen måte ikke lesbar: returnér {"transaksjoner":[],"feil":"PDF kunne ikke leses"}.';
   } else {
     prompt = 'Analyser denne fakturaen for Four Season AS, en matbutikk i Norge. Returner KUN et JSON-objekt, ingen annen tekst.\n\n'
     +'Hvis flere sider/bilder er lastet opp, er de alle del av SAMME faktura — samle alle linjer fra alle sider i én samlet liste. Leverandør, fakturanr og dato er det samme for hele fakturaen.\n\n'
@@ -5094,10 +5131,137 @@ async function confirmZRapportScan(){
   }
 }
 
+// ─── Bank statement scan results (V1 Session 1) ───
+let bankScanData=null;
+
+function showBankStatementResults(data){
+  bankScanData=data;
+  const el=document.getElementById('scan-bank-results');
+  if(!el)return;
+  el.style.display='block';
+  if(data.feil){
+    el.innerHTML=`<div style="background:#fdecea;border:1.5px solid #f5a0a0;border-radius:10px;padding:14px;font-size:13px;color:var(--danger)">⚠ ${escapeHtml(data.feil)}</div>`;
+    return;
+  }
+  const txs=Array.isArray(data.transaksjoner)?data.transaksjoner:[];
+  if(txs.length===0){
+    el.innerHTML=`<div style="background:#fdecea;border:1.5px solid #f5a0a0;border-radius:10px;padding:14px;font-size:13px;color:var(--danger)">Ingen transaksjoner funnet. Sjekk at PDF er en kontoutskrift (ikke en faktura eller annen type dokument).</div>`;
+    return;
+  }
+  const all=dbAll('bankTransactions');
+  let dupCount=0,totalIn=0,totalOut=0;
+  const cards=txs.map(tx=>{
+    const ref=(tx.bankReference||'').trim();
+    const isDup=ref&&all.some(p=>(p.arkivref||'').trim()===ref||(p.bankReference||'').trim()===ref);
+    if(isDup)dupCount++;
+    const dir=tx.direction||((+tx.belop||0)<0?'out':'in');
+    const amt=Math.abs(parseFloat(tx.belop)||0);
+    if(!isDup){if(dir==='out')totalOut+=amt;else totalIn+=amt;}
+    const sign=dir==='out'?'-':'+';
+    return `<div class="bank-tx-card${isDup?' bank-tx-dup':''}">
+      <div class="btx-row">
+        <div style="flex:1;min-width:0">
+          <div class="btx-date">${fmtDate(tx.dato||'')||'–'}${tx.bookingDato&&tx.bookingDato!==tx.dato?' · bokf. '+fmtDate(tx.bookingDato):''}</div>
+          <div class="btx-desc">${escapeHtml(tx.beskrivelse||tx.motpart||'–')}</div>
+          <div class="btx-meta">${ref?'Ref: '+escapeHtml(ref):'Ingen ref'}${tx.motpart?' · '+escapeHtml(tx.motpart):''}${isDup?' · ⚠ DUPLIKAT (hopper over)':''}</div>
+        </div>
+        <div class="btx-amount ${dir}">${sign}${fmtNOK(amt)}</div>
+      </div>
+    </div>`;
+  }).join('');
+  const importable=txs.length-dupCount;
+  const headerInfo=[];
+  if(data.kontoeier)headerInfo.push(escapeHtml(data.kontoeier));
+  if(data.kontonummer)headerInfo.push(escapeHtml(data.kontonummer));
+  if(data.periode)headerInfo.push(escapeHtml(data.periode));
+  el.innerHTML=`
+    <div style="background:var(--primary);color:#fff;border-radius:10px;padding:14px 16px;margin-bottom:12px">
+      <div style="font-size:15px;font-weight:700;margin-bottom:4px">🏦 Kontoutskrift</div>
+      <div style="font-size:12px;opacity:.85">${headerInfo.join(' · ')||'Ingen meta-info ekstrahert'}</div>
+      <div style="margin-top:10px;display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px">
+        <span>${txs.length} transaksjon${txs.length===1?'':'er'}</span>
+        <span style="color:#9eddb1">↗ Inn: ${fmtNOK(totalIn)}</span>
+        <span style="color:#ffbcbc">↘ Ut: ${fmtNOK(totalOut)}</span>
+        ${dupCount>0?`<span style="color:#ffd29a">⚠ ${dupCount} duplikat${dupCount===1?'':'er'}</span>`:''}
+      </div>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:10px;flex-wrap:wrap">
+      <div style="font-size:12px;color:var(--muted)">${importable} klar${importable===1?'':'e'} for import. Duplikater hoppes over automatisk.</div>
+      <button class="btn btn-p" onclick="confirmBankStatementImport()" ${importable===0?'disabled':''}>💾 Importer ${importable} transaksjon${importable===1?'':'er'}</button>
+    </div>
+    <div class="bank-tx-list">${cards}</div>
+  `;
+}
+
+async function confirmBankStatementImport(){
+  const data=bankScanData;
+  if(!data||!Array.isArray(data.transaksjoner)||data.transaksjoner.length===0){
+    showToast('Ingen transaksjoner å importere','err');return;
+  }
+  const importBatchId=uid();
+  const all=dbAll('bankTransactions');
+  let saved=0,skipped=0,errors=0;
+  for(const tx of data.transaksjoner){
+    const ref=(tx.bankReference||'').trim();
+    if(ref){
+      const dup=all.find(p=>(p.arkivref||'').trim()===ref||(p.bankReference||'').trim()===ref);
+      if(dup){skipped++;continue;}
+    }
+    const dato=tx.dato||today();
+    const period=dato.length>=7?dato.slice(0,7):'';
+    const dir=tx.direction||((+tx.belop||0)<0?'out':'in');
+    const newId=uid();
+    const payload={
+      id:newId,
+      tenantId:'fourseason',
+      dato,
+      bookingDato:tx.bookingDato||dato,
+      leverandorId:'',
+      levTekstRaa:tx.motpart||'',
+      belop:+(Math.abs(parseFloat(tx.belop)||0)).toFixed(2),
+      valuta:'NOK',
+      bankkonto:data.kontonummer||'',
+      referanse:'',
+      arkivref:ref,
+      bankReference:ref,
+      metode:'transfer',
+      linkedeFakturaer:[],
+      opprettetAv:currentUser?.name||'ai-skann',
+      opprettet:new Date().toISOString(),
+      notat:'',
+      type:'supplier_payment',
+      direction:dir,
+      period,
+      // V1 Session 1 — bank scanner fields
+      importBatchId,
+      rawDescription:tx.beskrivelse||'',
+      aiExtracted:true
+    };
+    try{
+      await db.collection('bankTransactions').doc(newId).set(payload);
+      saved++;
+    } catch(e){
+      errors++;
+      console.error('[bank-import]',tx.beskrivelse,e);
+    }
+  }
+  let msg=`Importert ${saved} transaksjon${saved===1?'':'er'}`;
+  if(skipped>0)msg+=` · ${skipped} duplikat${skipped===1?'':'er'} hoppet over`;
+  if(errors>0)msg+=` · ${errors} feil`;
+  showToast(msg,errors>0?'err':'ok');
+  closeScanner();
+  try{await markInnboksLinkedDone();}catch(e){console.error('[bank-import] markInnboksLinkedDone failed',e);}
+  goTo('betalinger');
+}
+
 function showScanResults(data){
   document.getElementById('scan-progress').style.display='none';
   if(scanMode==='z-rapport'){
     showZRapportResults(data);
+    return;
+  }
+  if(scanMode==='bank_statement'){
+    showBankStatementResults(data);
     return;
   }
   document.getElementById('scan-results').style.display='block';
@@ -5811,6 +5975,9 @@ function showScanError(msg){
 
   <!-- Z-rapport Results -->
   <div id="scan-z-results" style="display:none"></div>
+
+  <!-- Bank statement Results (V1 Session 1) -->
+  <div id="scan-bank-results" style="display:none"></div>
 
   <!-- Results -->
   <div id="scan-results" style="display:none">
