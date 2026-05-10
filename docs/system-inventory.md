@@ -1,11 +1,12 @@
 # System-inventar — Four Season AS
 
-**Last updated**: 2026-05-10, after Bank Scanner V1 Session 1 (extract + bulk save, no matching yet).
+**Last updated**: 2026-05-12, after Bank Scanner V1 Session 1.5 (safety hardening — direction column rule + reconciliation guard).
 
 Dette dokumentet kartlegger hva som faktisk finnes i `index.html` (produksjon, sormena.no). Mål: at Soren (chat) og Claude Code skal jobbe ut fra samme bilde av systemet og slippe å duplikere arbeid eller spørre om ting som allerede er bygget.
 
-- **Filer kartlagt**: `index.html` (~6033 linjer)
-- **Siste store endring**: Bank Scanner V1 Session 1 (2026-05-10) — AI-skanner for kontoutskrift (DNB). Tre scanner-modes: `faktura` / `z-rapport` / `bank_statement`. Innboks får 3. knapp "🏦 Skann som kontoutskrift" som dispatcher til `openScannerFromInnboks(id,'bank_statement')`. `runAIScan` har ny prompt-gren som ekstraherer transaksjoner-array. `showBankStatementResults` (linje 5137) viser stacked-card-liste m/ Inn/Ut-totaler + dup-deteksjon. `confirmBankStatementImport` (linje 5196) lagrer alle til `bankTransactions` med dedup-sjekk på `arkivref || bankReference` (Strategy B — beskytter mot kryss-kanal-duplikater). 4 nye opt-felter på AI-records: `bankReference`, `importBatchId`, `rawDescription`, `aiExtracted`. Alle records får placeholder `type:'supplier_payment'`; reklassifisering kommer i Session 2. INGEN matching-logikk i Session 1 — `linkedeFakturaer:[]` på alle imports. INGEN utkast-system — bank statement er one-shot extract.
+- **Filer kartlagt**: `index.html` (~6086 linjer)
+- **Siste store endring**: Bank Scanner V1 Session 1.5 (2026-05-12) — safety hardening etter Session 1 real-world test (Telenor-refusjon ble feilklassifisert som utgående pga semantisk inferens fra leverandørnavn). **Direction-regel hardet** til absolutt kolonne-basert: AI bestemmer `direction` UTELUKKENDE fra hvilken kolonne (Ut/Inn/Beløp) på utskriften beløpet står i. ALDRI fra leverandørnavn, beskrivelse eller intuisjon. Hvis kolonneplassering tvetydig: `direction:"unknown", belop:0`. **Balance extraction**: AI ekstraherer nå `startsaldo` + `sluttsaldo` til schema-toppen (null hvis ikke synlig). **Reconciliation guard** i `showBankStatementResults` (linje 5152): regner ut `startsaldo + Inn − Ut`, sammenligner mot stated `sluttsaldo` med tolerance ±1.00 NOK. Tre tilstander: ✓ Stemmer (grønn) → import-knapp aktiv; ⚠ Avvik (rød) → import-knapp blokkert, krever override-confirm; ⚠ Saldoer ikke synlig (oransje) → advarsel synlig men import går. Override-path: `confirmBankStatementOverride` (linje 5305) viser modal-confirm med konkrete konsekvenser før proxy-kall til `confirmBankStatementImport`. Linje 4839 også presisert: saldorader skal IKKE inkluderes i transaksjoner-arrayet (de hører til startsaldo/sluttsaldo-feltene).
+- **Tidligere milestone**: Bank Scanner V1 Session 1 (2026-05-10) — AI-skanner for kontoutskrift. Tre scanner-modes (`faktura`/`z-rapport`/`bank_statement`). Innboks-knapp + stacked-card-display + bulk save til `bankTransactions` med Strategy B dedup. 4 nye opt-felter: `bankReference`, `importBatchId`, `rawDescription`, `aiExtracted`. Placeholder `type:'supplier_payment'`. INGEN matching i Session 1.
 - **Tidligere milestone**: V0.5 forfallsdato (2026-05-08) — top-level `forfallsdato` på `purchases`. AI-skanner ekstraherer. `getInvoicePaymentStatus` utvidet med `isOverdue`/`daysOverdue`.
 - **Tidligere milestone**: Ekskluder fra beregning V1 (2026-05-07) — boolean flagg `ekskluderFraBeregning` per linje på `purchases.lines[]`. Universal handler for pant, IFCO, kreditnota-korreksjoner. Faktura totalt sakrosankt; profit/GM mot `inkludertEks`.
 - **Tidligere milestone**: STEP 1 av DNB-skanner-bygget (2026-04-26) — `payments` → `bankTransactions`-migrasjon. `payments` er cold archive.
@@ -13,7 +14,7 @@ Dette dokumentet kartlegger hva som faktisk finnes i `index.html` (produksjon, s
 
 **Språkpolicy (parked decision #9)**: Som av 2026-04-26: Engelsk for all ny kode (feltnavn, funksjonsnavn, identifiers). Eksisterende norske feltnavn (`dato`, `belop`, `linkedeFakturaer`, etc.) beholdes bakoverkompatibelt inntil en dedikert språkmigrasjon. Nye norske feltnavn (f.eks. `forfallsdato`) brukes kun når de matcher eksisterende norske naboer på samme record. Bank scanner Session 1 introduserer engelske felt: `bankReference`, `importBatchId`, `rawDescription`, `aiExtracted` — alle på `bankTransactions` (som allerede er hybrid). UI-strenger forblir norske.
 
-Linjenumre er ferske per 2026-05-10 (etter Bank Scanner V1 Session 1). Filen vokser fort, så verifiser med `Grep` før du redigerer rundt en gitt linje.
+Linjenumre er ferske per 2026-05-12 (etter Bank Scanner V1 Session 1.5). Filen vokser fort, så verifiser med `Grep` før du redigerer rundt en gitt linje.
 
 ---
 
@@ -140,7 +141,7 @@ Linjenumre er ferske per 2026-05-10 (etter Bank Scanner V1 Session 1). Filen vok
 | `ov-vakt` | Legg til vakt | 744 | Timeliste (v22) |
 | `ov-leverandor` | Ny/Rediger leverandør | 766 | Leverandører |
 | `ov-betaling` | Ny betaling (2-fase) | 804 | Betalinger (v27) |
-| `ov-scanner` | AI-skanner | 5919 | Faktura + Z-rapport + Bank statement (V1 Session 1) |
+| `ov-scanner` | AI-skanner | 5972 | Faktura + Z-rapport + Bank statement (V1 Session 1+1.5) |
 
 ## Kalkulasjons-motor (linje 1066–1153)
 - `calcGM(buyEks, sellEks)` (linje 1066) → `{gmKr, gmPct, paaslagPct}`.
@@ -178,11 +179,13 @@ One-shot data-transformasjoner gated av Firestore `_meta/migrations`-dokumentet.
 - `confirmZRapportScan` (linje 5074) lagrer/oppdaterer i `dagsalg`-kolleksjonen med `kilde:'z-rapport-skann'`. Felter: `mvaBreakdown`, `kategoriSalg[]` med `internalKey` for matchede kategorier, `antallOrdre/Kvittering`, `rabattTotal`, `vareuttak`, `slettetTotal`, `retur`.
 - **Lagres til**: `dagsalg`-kolleksjonen — vises på Salg-siden. Detalj-visning (`showDagsalgDetail`) viser MVA-fordeling og kategorisalg som tabell.
 
-### Bank statement-skanner (V1 Session 1, 2026-05-10)
+### Bank statement-skanner (V1 Session 1+1.5, 2026-05-10/12)
 - Inngang: `openBankStatementScanner()` (linje 4628) — kalles fra "🏦 Skann som kontoutskrift" i Innboks (`scanInnboksAsBankStatement` linje ~3307).
-- Bruker samme `runAIScan()` med `scanMode='bank_statement'` — egen prompt som ber om kontonummer/eier/periode + transaksjoner-array (`{dato, bookingDato, belop signert, direction, beskrivelse, bankReference, motpart}`). Prompt har eksplisitt error-handling: hvis PDF ikke lesbar, returnér `{"transaksjoner":[],"feil":"PDF kunne ikke leses"}`.
-- `showBankStatementResults` (linje 5137) → stacked-card-liste med Inn/Ut-totaler, dup-deteksjon (sjekker `arkivref || bankReference` mot eksisterende records — Strategy B for kryss-kanal-beskyttelse), big "💾 Importer N transaksjoner"-knapp. Fanger `data.feil` før liste-rendering.
-- `confirmBankStatementImport` (linje 5196) lagrer alle ikke-duplikate transaksjoner til `bankTransactions` via async loop. Setter `aiExtracted:true`, `importBatchId` (én per import), `rawDescription`, `bankReference` (= AI-ekstrahert ref, også speilet til `arkivref`-feltet for cross-channel-dedup). Placeholder `type:'supplier_payment'`, `linkedeFakturaer:[]`. Reklassifisering + matching kommer i Session 2.
+- Bruker samme `runAIScan()` med `scanMode='bank_statement'` — egen prompt som ber om kontonummer/eier/periode + **startsaldo/sluttsaldo** (V1.5) + transaksjoner-array (`{dato, bookingDato, belop signert, direction, beskrivelse, bankReference, motpart}`). Prompt har eksplisitt error-handling: hvis PDF ikke lesbar, returnér `{"transaksjoner":[],"feil":"PDF kunne ikke leses"}`.
+- **V1.5 absolutt direction-regel**: prompt forbyr eksplisitt å utlede `direction` fra leverandørnavn, beskrivelse eller intuisjon. Direction skal kun bestemmes av kolonne-plassering (Ut/Inn/signert Beløp). Tvetydig kolonne → `direction:"unknown", belop:0`. Innført etter Session 1-feil der Telenor-refusjon ble feilklassifisert.
+- `showBankStatementResults` (linje 5152) → stacked-card-liste med Inn/Ut-totaler, dup-deteksjon (sjekker `arkivref || bankReference` mot eksisterende records — Strategy B for kryss-kanal-beskyttelse), big "💾 Importer N transaksjoner"-knapp. Fanger `data.feil` før liste-rendering.
+- **V1.5 reconciliation guard** i `showBankStatementResults`: når `startsaldo` og `sluttsaldo` er ekstrahert, regner ut `computed = startsaldo + totalIn − totalOut` og sammenligner mot stated `sluttsaldo` med tolerance ±1.00 NOK. Tre tilstander vist som banner over import-knappen: (1) ✓ Stemmer (grønn boks med beregning) → `canImport=true`; (2) ⚠ AVVIK (rød boks med diff-beløp) → `canImport=false`, knapp grå "⚠ Import blokkert — krever bekreftelse" som kaller `confirmBankStatementOverride` (linje 5305) — vises full-text confirm-dialog med konsekvenser før proxy-kall til `confirmBankStatementImport`; (3) ⚠ Saldoer ikke synlig (oransje boks) → `canImport=true`, advarsel om manuell sjekk men ikke blokkert.
+- `confirmBankStatementImport` (linje 5244) lagrer alle ikke-duplikate transaksjoner til `bankTransactions` via async loop. Setter `aiExtracted:true`, `importBatchId` (én per import), `rawDescription`, `bankReference` (= AI-ekstrahert ref, også speilet til `arkivref`-feltet for cross-channel-dedup). Placeholder `type:'supplier_payment'`, `linkedeFakturaer:[]`. Reklassifisering + matching kommer i Session 2.
 - **Lagres til**: `bankTransactions`-kolleksjonen — synlig på Betalinger-siden. Innboks-fil markeres `done`. Etter import navigeres bruker til Betalinger-siden via `goTo('betalinger')`.
 - **Worker-pass-through**: Cloudflare Worker (`fourseason.herishhashemi.workers.dev`) er antatt å passere prompten til Anthropic uendret. Ikke 100% verifiserbar uten Worker-kode (separat repo). Hvis Worker-en avviser bank_statement-prompt: feilmelding vises i scanner-UI via `showScanError`.
 

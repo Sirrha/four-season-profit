@@ -4823,20 +4823,35 @@ async function runAIScan(){
   } else if(scanMode==='bank_statement'){
     prompt = 'Analyser denne kontoutskriften (bank statement) for Four Season AS, en matbutikk i Norge. Returner KUN et JSON-objekt, ingen annen tekst.\n\n'
       +'Format:\n'
-      +'{"kontonummer":"1234.56.78901 eller null","kontoeier":"Four Season AS eller null","periode":"DD.MM.YYYY - DD.MM.YYYY eller null","transaksjoner":[{"dato":"YYYY-MM-DD","bookingDato":"YYYY-MM-DD","belop":-1234.56,"direction":"out eller in","beskrivelse":"hele teksten fra fakturatekst-feltet","bankReference":"unik DNB-id eller null","motpart":"leverandørnavn fra beskrivelse eller null"}]}\n\n'
+      +'{"kontonummer":"1234.56.78901 eller null","kontoeier":"Four Season AS eller null","periode":"DD.MM.YYYY - DD.MM.YYYY eller null","startsaldo":53421.00,"sluttsaldo":54863.80,"transaksjoner":[{"dato":"YYYY-MM-DD","bookingDato":"YYYY-MM-DD","belop":-1234.56,"direction":"out eller in","beskrivelse":"hele teksten fra fakturatekst-feltet","bankReference":"unik DNB-id eller null","motpart":"leverandørnavn fra beskrivelse eller null"}]}\n\n'
       +'Regler:\n'
       +'- Kontoutskriften er typisk fra DNB. Hver transaksjon har «Bokført dato», «Rentedato», «Tekst/Forklaring», «Beløp» (eller separate «Ut»/«Inn»-kolonner), og en unik referanse (ofte kalt «Arkivnr», «Transaksjons-ID», eller bare et nummer).\n'
       +'- transaksjoner: én entry per faktiske transaksjon. Hopp over inngående/utgående saldo-rader, sumrader, og overskrifter.\n'
       +'- dato: bruk «Rentedato» (når pengene flyttet seg). Hvis bare én dato vises, bruk den.\n'
       +'- bookingDato: bruk «Bokført dato». Hvis kun én dato finnes, sett bookingDato lik dato.\n'
       +'- belop: SIGNERT desimal. Negativ for utgående (out), positiv for inngående (in). DNB viser ofte beløp i en «Ut»-kolonne (lag det negativt) eller «Inn»-kolonne (positivt). Hvis det er én signert «Beløp»-kolonne, behold tegnet som det er.\n'
-      +'- direction: «out» hvis belop<0, «in» hvis belop>=0. Sett eksplisitt.\n'
+      +'\n=== DIRECTION — ABSOLUTT REGEL (HØYESTE PRIORITET) ===\n'
+      +'Direction og fortegn på beløp bestemmes UTELUKKENDE av hvilken kolonne på bankutskriften beløpet står i:\n'
+      +'- Beløp i kolonnen «Ut av konto» / «Beløp ut» / «Ut» → direction:"out", belop er NEGATIVT\n'
+      +'- Beløp i kolonnen «Inn på konto» / «Beløp inn» / «Inn» → direction:"in", belop er POSITIVT\n'
+      +'- Hvis utskriften har én signert «Beløp»-kolonne: behold tegnet som det står. Negativt → out. Positivt → in.\n'
+      +'\nABSOLUTT FORBUDT:\n'
+      +'- ALDRI utled direction fra leverandørnavn. En betaling FRA Telenor (refusjon) er INNGÅENDE selv om Telenor vanligvis er en utgående leverandør.\n'
+      +'- ALDRI utled direction fra beskrivelse eller transaksjonstype. «Vipps» kan være både inn og ut.\n'
+      +'- ALDRI gjett direction basert på "hva som virker logisk".\n'
+      +'\nHvis kolonneplassering er TVETYDIG:\n'
+      +'- Sett direction:"unknown" og belop:0\n'
+      +'- Brukeren håndterer manuelt på review-skjerm\n'
+      +'- Ikke gjett.\n'
       +'- beskrivelse: HELE tekst-feltet uendret, inkludert Vipps-prefix, fakturanr, motpart-navn — alt. Ikke trim eller tolke.\n'
       +'- bankReference: unik per-transaksjon-ID fra DNB. Se etter felt som «Arkivnr», «Transaksjons-ID», «Referanse» (men IKKE KID — KID er vår ref, ikke bankens). Hvis ingen unik ref synlig, returnér null.\n'
       +'- motpart: best-effort ekstraksjon av leverandør/avsender fra beskrivelse. F.eks. «Vipps AFFA AS 24.04 1500» → motpart=«AFFA AS». «Faktura 12345 NORDIC ENGROS AS» → motpart=«NORDIC ENGROS AS». «DNB Bank Gebyr» → motpart=«DNB». Hvis usikker → null. Ikke gjett ville.\n'
+      +'- startsaldo: Inngående saldo / Saldo forrige utskrift / Åpningssaldo. Tallet banken oppgir som startbalanse for perioden. Returnér som signert desimal (positivt hvis positiv saldo, negativt hvis kreditt).\n'
+      +'- sluttsaldo: Utgående saldo / Ny saldo / Sluttsaldo. Tallet banken oppgir som sluttbalanse for perioden.\n'
+      +'- Hvis startsaldo eller sluttsaldo ikke er synlig på utskriften, returnér null. Da blir reconciliation-sjekk hoppet over.\n'
       +'- Datoformat på utskriften er ofte «DD.MM.YYYY» eller «DD/MM/YYYY» — konverter til «YYYY-MM-DD».\n'
       +'- VIKTIG: returnér transaksjoner i samme rekkefølge som de står på utskriften (typisk eldste først eller nyeste først — behold rekkefølgen).\n'
-      +'- Hvis kontoutskriften viser balanser/saldoer, ignorer disse — bare faktiske transaksjoner i transaksjoner-arrayet.\n'
+      +'- Saldorader (åpningssaldo, sluttsaldo, mellomsaldo) skal IKKE inkluderes i transaksjoner-arrayet — de hører hjemme i startsaldo/sluttsaldo-feltene øverst. transaksjoner-arrayet skal kun inneholde faktiske bevegelser av penger.\n'
       +'- Hvis PDF er kryptert, billede-only uten tekst-lag, eller på annen måte ikke lesbar: returnér {"transaksjoner":[],"feil":"PDF kunne ikke leses"}.';
   } else {
     prompt = 'Analyser denne fakturaen for Four Season AS, en matbutikk i Norge. Returner KUN et JSON-objekt, ingen annen tekst.\n\n'
@@ -5170,6 +5185,38 @@ function showBankStatementResults(data){
     </div>`;
   }).join('');
   const importable=txs.length-dupCount;
+  // Reconciliation guard (V1 Session 1.5)
+  let reconcileBlock='';
+  let canImport=true;
+  if(data.startsaldo!=null&&data.sluttsaldo!=null){
+    const computed=+(parseFloat(data.startsaldo)+totalIn-totalOut).toFixed(2);
+    const stated=+parseFloat(data.sluttsaldo).toFixed(2);
+    const diff=+(computed-stated).toFixed(2);
+    const tolerance=1.00;
+    const reconciles=Math.abs(diff)<=tolerance;
+    canImport=reconciles;
+    reconcileBlock=`
+      <div style="background:${reconciles?'rgba(141,225,158,.12)':'rgba(244,67,54,.12)'};border:1.5px solid ${reconciles?'var(--ok)':'var(--danger)'};border-radius:10px;padding:12px;margin-bottom:12px;font-size:12.5px">
+        <div style="font-weight:700;margin-bottom:6px">📊 Avstemming</div>
+        <div style="font-family:'DM Mono',monospace;line-height:1.7">
+          Inngående saldo: ${fmtNOK(data.startsaldo)}<br>
+          + Inn: ${fmtNOK(totalIn)}<br>
+          − Ut: ${fmtNOK(totalOut)}<br>
+          = Beregnet saldo: <strong>${fmtNOK(computed)}</strong><br>
+          Utgående saldo (utskrift): <strong>${fmtNOK(stated)}</strong>
+          ${reconciles
+            ?'<br><br><span style="color:var(--ok);font-weight:700">✓ Stemmer med utskriften</span>'
+            :`<br><br><span style="color:var(--danger);font-weight:700">⚠ AVVIK: ${fmtNOK(Math.abs(diff))}</span><br><span style="color:var(--danger)">Kontroller om transaksjoner mangler eller har feil retning før import.</span>`}
+        </div>
+      </div>`;
+  } else {
+    reconcileBlock=`
+      <div style="background:rgba(245,166,35,.12);border:1.5px solid #f5a623;border-radius:10px;padding:12px;margin-bottom:12px;font-size:12.5px">
+        <div style="font-weight:700;color:#f5a623;margin-bottom:4px">⚠ Avstemming ikke mulig</div>
+        <div>AI fant ikke startsaldo eller sluttsaldo på utskriften. Kontroller transaksjonene manuelt før import.</div>
+      </div>`;
+    // canImport stays true but warning is visible
+  }
   const headerInfo=[];
   if(data.kontoeier)headerInfo.push(escapeHtml(data.kontoeier));
   if(data.kontonummer)headerInfo.push(escapeHtml(data.kontonummer));
@@ -5185,9 +5232,10 @@ function showBankStatementResults(data){
         ${dupCount>0?`<span style="color:#ffd29a">⚠ ${dupCount} duplikat${dupCount===1?'':'er'}</span>`:''}
       </div>
     </div>
+    ${reconcileBlock}
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:10px;flex-wrap:wrap">
       <div style="font-size:12px;color:var(--muted)">${importable} klar${importable===1?'':'e'} for import. Duplikater hoppes over automatisk.</div>
-      <button class="btn btn-p" onclick="confirmBankStatementImport()" ${importable===0?'disabled':''}>💾 Importer ${importable} transaksjon${importable===1?'':'er'}</button>
+      <button class="btn btn-p" onclick="${canImport?'confirmBankStatementImport()':'confirmBankStatementOverride()'}" ${importable===0?'disabled':''} style="${!canImport?'background:#999;color:#fff':''}">${canImport?`💾 Importer ${importable} transaksjon${importable===1?'':'er'}`:`⚠ Import blokkert — krever bekreftelse`}</button>
     </div>
     <div class="bank-tx-list">${cards}</div>
   `;
@@ -5252,6 +5300,11 @@ async function confirmBankStatementImport(){
   closeScanner();
   try{await markInnboksLinkedDone();}catch(e){console.error('[bank-import] markInnboksLinkedDone failed',e);}
   goTo('betalinger');
+}
+
+async function confirmBankStatementOverride(){
+  const ok=confirm('AVSTEMMING FEILER.\n\nDet er avvik mellom utskriftens utgående saldo og det Sormena beregner fra transaksjonene. Dette betyr at minst én transaksjon mangler eller har feil retning.\n\nHvis du importerer nå, vil bankdataene i Sormena IKKE stemme med banken. Det kan ødelegge betalingsstatus på fakturaer.\n\nAnbefalt: Avbryt og kontroller transaksjonene først.\n\nVil du importere likevel?');
+  if(ok)await confirmBankStatementImport();
 }
 
 function showScanResults(data){
