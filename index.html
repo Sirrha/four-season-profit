@@ -4902,7 +4902,7 @@ async function runAIScan(){
     +'- VIKTIG OM RABATT: Mange fakturaer har kolonner som "Pris" og "Beløp" ved siden av hverandre, med en "Rabatt %" i mellom. Eksempel: "485,98 | 3% | 471,40" — her er 485,98 før-rabatt og 471,40 etter-rabatt. Bruk ALLTID det tallet som ER ETTER rabatt (471,40), fordi det er det som faktisk faktureres.\n'
     +'- KONTROLL: Summen av alle totalLinje skal stemme med fakturaens sum eks. MVA, ikke inkl. MVA. Hvis det finnes en "Sum" nederst som f.eks. 28 752,37 og en "Total" på 33 208,00, så er 28 752,37 sum eks. MVA — og dette skal summen av dine totalLinje være lik.\n'
     +'- MVA: 15% for matvarer, 25% for non-food/tobakk/paller, 0% kun hvis nullsats vises\n'
-    +'- lineKind: "pant" hvis beskrivelsen matcher "Pant", "Emballasje", "Deposit", "Pantebeholder" eller liknende pantegebyr-linje (typisk 2-3 kr pr enhet). Ellers "product". Hvis du er usikker → "product".\n'
+    +'- lineKind: "pant" hvis beskrivelsen matcher "Pant", "Emballasje", "Deposit", "Pantebeholder" eller liknende pantegebyr-linje (typisk 2-3 kr pr enhet). EKSEMPLER: "PANT - LITEN BOKS (2 NOK)" → lineKind:"pant". "PANT EMBALLASJE" → lineKind:"pant". "Coca-Cola 0.5L 24x" → lineKind:"product". Ellers "product". Hvis du er usikker → "product".\n'
     +'- VIKTIG PANT-REGEL: Hvis lineKind="pant", sett mva=0 (pant har null MVA i Norge per skattelov, uansett hva fakturaen viser).\n'
     +'- selgesSom: hva butikken selger varen som til kunder:\n'
     +'   * "pakke" eller "stk" hvis beskrivelsen har format som "12x500g", "24x380g", "8x20x1,7g" (tørrvarer, drikke, is, søtt, pålegg — selges som enkeltpakke)\n'
@@ -5425,7 +5425,8 @@ function showScanResults(data){
         if(mStk)innhold=Math.round((parseFloat(mStk[1])+parseFloat(mStk[2]))/2);
       }
     }
-    const isPantLine=l.lineKind==='pant'||/pant|emballasje|deposit|pantebehold/i.test(l.beskrivelse||'');
+    const pantText=(l.beskrivelse||l.raw||l.description||l.tekst||l.name||'').toString();
+    const isPantLine=l.lineKind==='pant'||/pant|emballasje|deposit|pantebehold/i.test(pantText);
     return{
       i,
       raw:l.beskrivelse||'',
