@@ -5584,7 +5584,7 @@ function renderScanRows(){
   scanRows.forEach((row,idx)=>{
     const rowCat=row.isNew?row.newCategory:(row.productId?(dbFind('products',row.productId)?.kategori||''):'');
     const rowClass=row.skipped?'row-skipped':((row.isNew?'row-draft':categoryRowClass(rowCat))+(row.ekskluder?' row-ekskludert':'')+(row.lineKind==='pant'?' row-pant':''));
-    const mva=row.mva||15;
+    const mva=row.mva!=null?row.mva:15;
     // Convert scanned price per kolli to eks. MVA based on rule
     const prisPerKolliEks=rule==='eks'?row.prisPerKolli:row.prisPerKolli/(1+mva/100);
     // Total kjøp for the line (eks. MVA) — antallKolli × pris/kolli
@@ -5647,6 +5647,7 @@ function renderScanRows(){
     '</select>';
     // MVA dropdown (15% matvarer, 25% non-food)
     const mvaSel='<select class="cell mva-sel mva-'+mva+'" style="text-align:center;font-weight:600" onchange="updScanRow('+idx+',\'mva\',parseFloat(this.value))">'+
+      '<option value="0"'+(mva===0?' selected':'')+'>0%</option>'+
       '<option value="15"'+(mva===15?' selected':'')+'>15%</option>'+
       '<option value="25"'+(mva===25?' selected':'')+'>25%</option>'+
     '</select>';
