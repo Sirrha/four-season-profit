@@ -296,6 +296,10 @@ select.fi:focus{background-color:#fff}
 .scantbl tr.row-pant td{background:rgba(120,170,220,.15);color:#3a6a9e}
 .scantbl .pant-x{color:var(--muted);background:none;border:none;cursor:pointer;font-size:14px;padding:4px 6px;line-height:1;margin-right:2px}
 .scantbl .pant-x.active{color:#3a6a9e;background:rgba(120,170,220,.3);border-radius:5px;font-weight:700}
+.scantbl tr.row-mismatch td{background:#fff8e1}
+.scantbl .mismatch-badge{display:inline-block;font-size:9.5px;padding:2px 7px;border-radius:8px;color:#8a6d00;background:rgba(255,193,7,.28);font-weight:700;letter-spacing:.4px;margin-left:6px;vertical-align:middle}
+.scantbl .fix-x{color:var(--muted);background:none;border:none;cursor:pointer;font-size:14px;padding:4px 6px;line-height:1;margin-right:2px}
+.scantbl .fix-x:hover{color:#8a6d00;background:rgba(255,193,7,.28);border-radius:5px}
 .scan-ekskl-row{display:flex;justify-content:space-between;align-items:center;padding:6px 12px;font-size:12px;background:rgba(180,180,180,.1);border-radius:6px;margin-top:6px;color:#666}
 .scan-ekskl-row.inkluder{background:rgba(141,225,158,.1);color:#2d5a40;font-weight:600}
 .bank-tx-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
@@ -5538,6 +5542,20 @@ function matchProductByName(raw){
   return{type:'none',product:null};
 }
 
+// Matcher Fix V1: detect when AI's extracted name disagrees with a fuzzy-matched product
+function scanRowMismatch(row){
+  if(!row||row.skipped||row.isNew||!row.productId||row.matchType!=='maybe')return false;
+  const p=dbFind('products',row.productId);
+  if(!p)return false;
+  const aw=normProd(row.raw||'').split(' ').filter(w=>w.length>2);
+  const bw=normProd(p.navn||'').split(' ').filter(w=>w.length>2);
+  if(!aw.length||!bw.length)return false;
+  const setB=new Set(bw);
+  let inter=0;for(const w of aw)if(setB.has(w))inter++;
+  const union=new Set([...aw,...bw]).size;
+  return union>0&&(inter/union)<0.5;
+}
+
 function guessCategory(raw,mva){
   const s=(raw||'').toLowerCase();
   // keywords → category
@@ -5635,7 +5653,8 @@ function renderScanRows(){
   let html='';
   scanRows.forEach((row,idx)=>{
     const rowCat=row.isNew?row.newCategory:(row.productId?(dbFind('products',row.productId)?.kategori||''):'');
-    const rowClass=row.skipped?'row-skipped':((row.isNew?'row-draft':categoryRowClass(rowCat))+(row.ekskluder?' row-ekskludert':'')+(row.lineKind==='pant'?' row-pant':''));
+    const mismatch=scanRowMismatch(row);
+    const rowClass=row.skipped?'row-skipped':((row.isNew?'row-draft':categoryRowClass(rowCat))+(row.ekskluder?' row-ekskludert':'')+(row.lineKind==='pant'?' row-pant':'')+(mismatch?' row-mismatch':''));
     const mva=row.mva!=null?row.mva:15;
     // Convert scanned price per kolli to eks. MVA based on rule
     const prisPerKolliEks=rule==='eks'?row.prisPerKolli:row.prisPerKolli/(1+mva/100);
@@ -5675,7 +5694,7 @@ function renderScanRows(){
       nameBody='<div class="pname">'+escapeHtml(row.raw)+'</div><div class="raw">hoppet over</div>';
     } else if(row.productId){
       const p=dbFind('products',row.productId);
-      nameBody='<div class="pname">'+dot+escapeHtml(p?.navn||row.raw)+(row.lineKind==='pant'?' <span class="pant-badge">PANT</span>':'')+(row.ekskluder?' <span class="ekskluder-badge">EKSKLUDERT</span>':'')+'</div>'+
+      nameBody='<div class="pname">'+dot+escapeHtml(p?.navn||row.raw)+(row.lineKind==='pant'?' <span class="pant-badge">PANT</span>':'')+(row.ekskluder?' <span class="ekskluder-badge">EKSKLUDERT</span>':'')+(mismatch?' <span class="mismatch-badge">⚠️ NAVN AVVIK</span>':'')+'</div>'+
         '<div class="raw">Skannet: '+escapeHtml(row.raw)+(row.varenr?' · Varenr: '+escapeHtml(row.varenr):'')+'</div>';
     } else {
       // Not found — inline registration form
@@ -5728,7 +5747,9 @@ function renderScanRows(){
       '<td class="c"><span class="gm-badge '+gmClass(gmPct)+'">'+(gmPct!==null?fmtPct(gmPct):'–')+'</span></td>'+
       '<td class="c">'+(row.skipped
         ?'<button class="skip-x" title="Gjenopprett" onclick="updScanRow('+idx+',\'skipped\',false)">↻</button>'
-        :'<button class="pant-x'+(row.lineKind==='pant'?' active':'')+'" title="'+(row.lineKind==='pant'?'Pant-linje — klikk for å fjerne':'Marker som pant-linje (0% MVA, pass-through)')+'" onclick="updScanRow('+idx+',\'lineKind\',\''+(row.lineKind==='pant'?'product':'pant')+'\')">🔄</button>'+
+        :(mismatch?'<button class="fix-x" title="Endre produktnavn i registeret til skannet navn" onclick="renameMatchedProduct('+idx+')">✏️</button>'+
+                   '<button class="fix-x" title="Bryt feil match — behandle linjen som nytt produkt" onclick="treatScanRowAsNew('+idx+')">➕</button>':'')+
+         '<button class="pant-x'+(row.lineKind==='pant'?' active':'')+'" title="'+(row.lineKind==='pant'?'Pant-linje — klikk for å fjerne':'Marker som pant-linje (0% MVA, pass-through)')+'" onclick="updScanRow('+idx+',\'lineKind\',\''+(row.lineKind==='pant'?'product':'pant')+'\')">🔄</button>'+
          '<button class="ekskl-x'+(row.ekskluder?' active':'')+'" title="'+(row.ekskluder?'Ekskludert fra beregning — klikk for å inkludere':'Ekskluder fra beregning (kreditnota, IFCO, returer)')+'" onclick="updScanRow('+idx+',\'ekskluder\','+(!row.ekskluder)+')">⊘</button>'+
          '<button class="skip-x" title="Hopp over" onclick="updScanRow('+idx+',\'skipped\',true)">×</button>')+'</td>'+
     '</tr>';
@@ -5811,6 +5832,38 @@ function registerScanRowProduct(idx){
     showToast('Produkt registrert — skriv utsalgspris');
     renderScanRows();
   }).catch(e=>{showToast('Kunne ikke lagre: '+e.message,'err');});
+}
+
+// Matcher Fix V1 — rename a wrongly fuzzy-matched product to the AI's extracted name
+function renameMatchedProduct(idx){
+  const row=scanRows[idx];
+  if(!row||!row.productId||row.isNew)return;
+  const p=dbFind('products',row.productId);
+  if(!p)return;
+  const aiName=(row.raw||'').trim();
+  if(!aiName){showToast('Skannet navn mangler','err');return;}
+  if(!confirm('Endre navn på produktet «'+p.navn+'» til «'+aiName+'»?\n\nDette oppdaterer produktregisteret permanent — tidligere kjøp beholder koblingen.'))return;
+  dbUpdate('products',row.productId,{navn:aiName}).then(()=>{
+    scanRows[idx].productName=aiName;
+    scanRows[idx].matchType='exact';
+    showToast('Produktnavn oppdatert');
+    renderScanRows();
+  }).catch(e=>showToast('Kunne ikke endre navn: '+e.message,'err'));
+}
+
+// Matcher Fix V1 — break a wrong match and treat the line as a new product
+function treatScanRowAsNew(idx){
+  const row=scanRows[idx];
+  if(!row||!row.productId)return;
+  const p=dbFind('products',row.productId);
+  if(!confirm('Bryt matchen mot «'+(p?p.navn:row.productName||'')+'» og behandle «'+(row.raw||'')+'» som et nytt produkt?'))return;
+  scanRows[idx].productId='';
+  scanRows[idx].productName='';
+  scanRows[idx].matchType='none';
+  scanRows[idx].isNew=true;
+  scanRows[idx].newCategory=guessCategory(row.raw||'',row.mva||15);
+  scanRows[idx].utsalgEks=0;
+  renderScanRows();
 }
 
 function renderScanSummary(){
