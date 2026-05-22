@@ -5698,10 +5698,14 @@ function renderScanRows(){
         '<div class="raw">Skannet: '+escapeHtml(row.raw)+(row.varenr?' · Varenr: '+escapeHtml(row.varenr):'')+'</div>';
     } else {
       // Not found — inline registration form
-      nameBody='<div class="pname">'+dot+escapeHtml(row.raw)+(row.lineKind==='pant'?' <span class="pant-badge">PANT</span>':'')+(row.ekskluder?' <span class="ekskluder-badge">EKSKLUDERT</span>':'')+'</div>'+
+      nameBody='<div class="pname">'+dot+escapeHtml(row.userName||row.raw)+(row.lineKind==='pant'?' <span class="pant-badge">PANT</span>':'')+(row.ekskluder?' <span class="ekskluder-badge">EKSKLUDERT</span>':'')+'</div>'+
         '<div class="raw">Ikke i register'+(row.varenr?' · Varenr: '+escapeHtml(row.varenr):'')+'</div>'+
         '<div class="inline-new">'+
           '<div style="font-size:10.5px;color:#8b6c3f;font-weight:600">Registrer som nytt produkt:</div>'+
+          '<div class="row">'+
+            '<label>Navn</label>'+
+            '<input type="text" style="flex:1" value="'+escapeHtml(row.userName||row.raw)+'" onchange="updScanRow('+idx+',\'userName\',this.value)">'+
+          '</div>'+
           '<div class="row">'+
             '<label>Kat.</label>'+
             '<select onchange="updScanRow('+idx+',\'newCategory\',this.value)">'+
@@ -5747,8 +5751,8 @@ function renderScanRows(){
       '<td class="c"><span class="gm-badge '+gmClass(gmPct)+'">'+(gmPct!==null?fmtPct(gmPct):'–')+'</span></td>'+
       '<td class="c">'+(row.skipped
         ?'<button class="skip-x" title="Gjenopprett" onclick="updScanRow('+idx+',\'skipped\',false)">↻</button>'
-        :(mismatch?'<button class="fix-x" title="Endre produktnavn i registeret til skannet navn" onclick="renameMatchedProduct('+idx+')">✏️</button>'+
-                   '<button class="fix-x" title="Bryt feil match — behandle linjen som nytt produkt" onclick="treatScanRowAsNew('+idx+')">➕</button>':'')+
+        :((row.productId&&!row.isNew)?'<button class="fix-x" title="Endre produktnavn i registeret" onclick="renameMatchedProduct('+idx+')">✏️</button>'+
+                   '<button class="fix-x" title="Bryt match — behandle linjen som nytt produkt" onclick="treatScanRowAsNew('+idx+')">➕</button>':'')+
          '<button class="pant-x'+(row.lineKind==='pant'?' active':'')+'" title="'+(row.lineKind==='pant'?'Pant-linje — klikk for å fjerne':'Marker som pant-linje (0% MVA, pass-through)')+'" onclick="updScanRow('+idx+',\'lineKind\',\''+(row.lineKind==='pant'?'product':'pant')+'\')">🔄</button>'+
          '<button class="ekskl-x'+(row.ekskluder?' active':'')+'" title="'+(row.ekskluder?'Ekskludert fra beregning — klikk for å inkludere':'Ekskluder fra beregning (kreditnota, IFCO, returer)')+'" onclick="updScanRow('+idx+',\'ekskluder\','+(!row.ekskluder)+')">⊘</button>'+
          '<button class="skip-x" title="Hopp over" onclick="updScanRow('+idx+',\'skipped\',true)">×</button>')+'</td>'+
@@ -5797,6 +5801,9 @@ function updScanRow(idx,field,value){
         }
       }
     }
+  } else if(field==='userName'){
+    const t=(value||'').trim();
+    scanRows[idx].userName=t||undefined;
   } else {
     scanRows[idx][field]=value;
   }
@@ -5812,7 +5819,7 @@ function registerScanRowProduct(idx){
   // New product's default enhet = whatever user picked as selgesSom for this line
   const data={
     id:newId,
-    navn:row.raw,
+    navn:(row.userName||row.raw||'').trim(),
     kategori:row.newCategory||'torr',
     enhet:row.selgesSom||'stk',
     leverandorId:levId||'',
@@ -5840,12 +5847,14 @@ function renameMatchedProduct(idx){
   if(!row||!row.productId||row.isNew)return;
   const p=dbFind('products',row.productId);
   if(!p)return;
-  const aiName=(row.raw||'').trim();
-  if(!aiName){showToast('Skannet navn mangler','err');return;}
-  if(!confirm('Endre navn på produktet «'+p.navn+'» til «'+aiName+'»?\n\nDette oppdaterer produktregisteret permanent — tidligere kjøp beholder koblingen.'))return;
-  dbUpdate('products',row.productId,{navn:aiName}).then(()=>{
-    scanRows[idx].productName=aiName;
+  const newName=prompt('Nytt navn for produktet «'+p.navn+'»:',row.userName||row.raw);
+  if(newName===null)return;
+  const trimmed=newName.trim();
+  if(!trimmed||trimmed===p.navn)return;
+  dbUpdate('products',row.productId,{navn:trimmed}).then(()=>{
+    scanRows[idx].productName=trimmed;
     scanRows[idx].matchType='exact';
+    scanRows[idx].userName=trimmed;
     showToast('Produktnavn oppdatert');
     renderScanRows();
   }).catch(e=>showToast('Kunne ikke endre navn: '+e.message,'err'));
@@ -5856,12 +5865,16 @@ function treatScanRowAsNew(idx){
   const row=scanRows[idx];
   if(!row||!row.productId)return;
   const p=dbFind('products',row.productId);
-  if(!confirm('Bryt matchen mot «'+(p?p.navn:row.productName||'')+'» og behandle «'+(row.raw||'')+'» som et nytt produkt?'))return;
+  const newName=prompt('Bryt matchen mot «'+(p?p.navn:row.productName||'')+'» — bekreft navn for det nye produktet:',row.userName||row.raw);
+  if(newName===null)return;
+  const trimmed=newName.trim();
+  if(!trimmed)return;
+  scanRows[idx].userName=trimmed;
   scanRows[idx].productId='';
   scanRows[idx].productName='';
   scanRows[idx].matchType='none';
   scanRows[idx].isNew=true;
-  scanRows[idx].newCategory=guessCategory(row.raw||'',row.mva||15);
+  scanRows[idx].newCategory=guessCategory(trimmed,row.mva||15);
   scanRows[idx].utsalgEks=0;
   renderScanRows();
 }
