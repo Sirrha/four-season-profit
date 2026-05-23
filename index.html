@@ -4898,13 +4898,20 @@ async function runAIScan(){
     prompt = 'Analyser denne fakturaen for Four Season AS, en matbutikk i Norge. Returner KUN et JSON-objekt, ingen annen tekst.\n\n'
     +'Hvis flere sider/bilder er lastet opp, er de alle del av SAMME faktura — samle alle linjer fra alle sider i én samlet liste. Leverandør, fakturanr og dato er det samme for hele fakturaen.\n\n'
     +'Format:\n'
-    +'{"leverandor":"navn","fakturanr":"nummer","dato":"YYYY-MM-DD","forfallsdato":"YYYY-MM-DD eller null","totalInkl":0.00,"linjer":[{"beskrivelse":"produktnavn","varenr":"nr","antallKolli":1,"prisPerKolli":0.00,"totalLinje":0.00,"mva":15,"selgesSom":"pakke","innholdPerKolli":12,"lineKind":"product eller pant"}]}\n\n'
+    +'{"leverandor":"navn","fakturanr":"nummer","dato":"YYYY-MM-DD","forfallsdato":"YYYY-MM-DD eller null","totalInkl":0.00,"totalEks":0.00,"mvaBreakdown":{"15":{"grunnlag":0,"mva":0},"25":{"grunnlag":0,"mva":0}},"linjer":[{"beskrivelse":"produktnavn","varenr":"nr","antallKolli":1,"prisPerKolli":0.00,"totalLinje":0.00,"mva":15,"selgesSom":"pakke","innholdPerKolli":12,"lineKind":"product eller pant"}]}\n\n'
     +'Regler:\n'
     +'- antallKolli: antall esker/kasser/kolli på denne linjen (fakturaens "antall")\n'
     +'- prisPerKolli: EFFEKTIV pris per kolli etter rabatt. Hvis fakturaen har en "Rabatt"-kolonne med prosent (f.eks. "3%", "30%"), skal du IKKE bruke "Pris"-kolonnen som står før rabatten. Bruk i stedet: "Beløp"/"Sum"/"Total linje"-kolonnen (som allerede har rabatt trukket fra) delt på antallKolli. Hvis antallKolli=1, er prisPerKolli lik "Beløp".\n'
     +'- totalLinje: "Beløp"- eller "Sum"-kolonnen på fakturaen (ETTER rabatt). Dette er det faktiske beløpet som skal betales for linjen.\n'
     +'- VIKTIG OM RABATT: Mange fakturaer har kolonner som "Pris" og "Beløp" ved siden av hverandre, med en "Rabatt %" i mellom. Eksempel: "485,98 | 3% | 471,40" — her er 485,98 før-rabatt og 471,40 etter-rabatt. Bruk ALLTID det tallet som ER ETTER rabatt (471,40), fordi det er det som faktisk faktureres.\n'
     +'- KONTROLL: Summen av alle totalLinje skal stemme med fakturaens sum eks. MVA, ikke inkl. MVA. Hvis det finnes en "Sum" nederst som f.eks. 28 752,37 og en "Total" på 33 208,00, så er 28 752,37 sum eks. MVA — og dette skal summen av dine totalLinje være lik.\n'
+    +'- MATH-VERIFY (KRITISK — for å fange feiltolkning av eks vs inkl MVA):\n'
+    +'   * totalInkl MÅ hentes fra fakturaens "Å betale"/"Total inkl. MVA"/"Sum inkl. MVA"-celle. ALDRI utled fra linjesummene.\n'
+    +'   * totalEks MÅ hentes fra fakturaens "Delsum eks. MVA"/"Sum eks. MVA"/"Netto"-celle. ALDRI utled. Returnér null for totalEks hvis cellen ikke vises.\n'
+    +'   * mvaBreakdown MÅ hentes fra fakturaens MVA-spesifikasjon (typisk en liten tabell nederst: sats, grunnlag, mva-beløp). Inkluder kun satsene som faktisk vises på fakturaen. Utelat feltet helt hvis spesifikasjonen mangler.\n'
+    +'   * Sjekk SELV før du returnerer: sum(alle totalLinje) ≈ totalEks (innenfor 5 kr eller 0,5%). HVIS DET IKKE STEMMER: revurder linjetolkningen (eks vs inkl, før/etter rabatt) FØR retur — ikke send urevidert JSON.\n'
+    +'   * Sjekk SELV før du returnerer: for hver MVA-sats S i mvaBreakdown: grunnlag × (1 + S/100) ≈ grunnlag + mva (innenfor 1 kr). HVIS DET IKKE STEMMER: revurder hvilke linjer som hører til hvilken sats.\n'
+    +'   * Sunrise/AFFA/Tenza-feilen: 15%-MVA-linjer kan se ut som inkl-priser men er eks-priser. Hvis totalEks×1,15 ≈ totalInkl OG sum(totalLinje) ≈ totalEks, så ER linjeprisene eks. MVA — ikke del på 1,15 igjen.\n'
     +'- MVA: 15% for matvarer, 25% for non-food/tobakk/paller, 0% kun hvis nullsats vises\n'
     +'- lineKind: "pant" hvis beskrivelsen matcher "Pant", "Emballasje", "Deposit", "Pantebeholder" eller liknende pantegebyr-linje (typisk 2-3 kr pr enhet). EKSEMPLER: "PANT - LITEN BOKS (2 NOK)" → lineKind:"pant". "PANT EMBALLASJE" → lineKind:"pant". "Coca-Cola 0.5L 24x" → lineKind:"product". Ellers "product". Hvis du er usikker → "product".\n'
     +'- VIKTIG PANT-REGEL: Hvis lineKind="pant", sett mva=0 (pant har null MVA i Norge per skattelov, uansett hva fakturaen viser).\n'
@@ -5424,14 +5431,18 @@ function showScanResults(data){
     ? '<strong>'+matchedLev.navn+'</strong> <span style="font-size:10.5px;color:#8de19e;font-weight:600">✓ i register</span>'
     : '<strong>'+(data.leverandor||'Ukjent lev.')+'</strong> <span style="font-size:10.5px;color:#ffd54f;font-weight:600">⚠️ ikke i register</span>';
   // v25: Build rule note from auto-detect + any saved preference
+  // Math Verification V1: always lead with "Auto-regel:" so the override is always visually anchored.
   let ruleNote;
   if(auto.rule==='uklar'){
-    ruleNote='⚠️ Kunne ikke bestemme regel automatisk — velg manuelt';
-  } else if(auto.isClear){
-    const avvik=auto.rule==='eks'?auto.avvikEks:auto.avvikInkl;
-    ruleNote='🧠 Auto-regel: Priser '+(auto.rule==='eks'?'eks.':'inkl.')+' MVA (avvik '+fmtNOK(avvik)+')';
+    ruleNote='🧮 Auto-regel: <span style="color:#ff8a8a">⚠️ Kunne ikke bestemme — velg manuelt</span>';
   } else {
-    ruleNote='⚠️ Ingen perfekt match — beste gjetning: Priser '+(auto.rule==='eks'?'eks.':'inkl.')+' MVA (avvik '+fmtN(auto.bestePct,1)+'%)';
+    const rulePris='Priser '+(auto.rule==='eks'?'eks.':'inkl.')+' MVA';
+    if(auto.isClear){
+      const avvik=auto.rule==='eks'?auto.avvikEks:auto.avvikInkl;
+      ruleNote='🧮 Auto-regel: '+rulePris+' <span style="color:#8de19e">✓ (avvik '+fmtNOK(avvik)+')</span>';
+    } else {
+      ruleNote='🧮 Auto-regel: '+rulePris+' <span style="color:#ffd54f">⚠️ (beste gjetning — avvik '+fmtN(auto.bestePct,1)+'%)</span>';
+    }
   }
   if(savedRule&&savedRule!==auto.rule&&auto.isClear){
     ruleNote+=' · <span style="color:#ffd54f">Leverandør har «'+(savedRule==='eks'?'eks':'inkl')+'» lagret — matematikken sier noe annet</span>';
@@ -5913,24 +5924,47 @@ function renderScanSummary(){
   // GM math against included only (excluded items won't be sold).
   const fortj=totalForvSalg-inkludertEks;
   const gmPct=totalForvSalg>0?((totalForvSalg-inkludertEks)/totalForvSalg)*100:null;
-  // ─── Kontrollsum: app-total vs faktura-total ───
+  // ─── Kontrollsum: app-total vs faktura-total (Math Verification V1: dual eks+inkl) ───
+  // AI's totalInkl can be derived from line interpretation (circular). Printed totalEks is invariant truth.
+  // Flag avvik only when BOTH pairs disagree — single-side mismatch usually means AI derived one total.
   const fakturaTotalInkl=parseFloat(scanResults?.totalInkl)||0;
+  const fakturaTotalEks=parseFloat(scanResults?.totalEks)||0;
   let kontrollHtml='';
-  if(fakturaTotalInkl>0){
-    const diff=totalKjopInkl-fakturaTotalInkl;
-    const diffPct=fakturaTotalInkl>0?(Math.abs(diff)/fakturaTotalInkl)*100:0;
-    const tolerancePct=1.0;  // 1% toleranse
-    if(diffPct<=tolerancePct){
-      kontrollHtml=`<div style="background:#1e3a2a;border:1px solid #2d5a40;border-radius:8px;padding:10px 14px;margin-top:10px;font-size:12.5px;color:#9fdfb5;display:flex;align-items:center;gap:10px">
-        <span style="font-size:16px">✓</span>
-        <div><strong>Sum stemmer med faktura</strong> — ${fmtNOK(totalKjopInkl)} mot ${fmtNOK(fakturaTotalInkl)} på fakturaen (avvik ${fmtN(diffPct,2)}%)</div>
+  if(fakturaTotalInkl>0||fakturaTotalEks>0){
+    const tolerancePct=1.0;
+    const diffInkl=totalKjopInkl-fakturaTotalInkl;
+    const diffEks=totalKjopEks-fakturaTotalEks;
+    const pctInkl=fakturaTotalInkl>0?(Math.abs(diffInkl)/fakturaTotalInkl)*100:null;
+    const pctEks=fakturaTotalEks>0?(Math.abs(diffEks)/fakturaTotalEks)*100:null;
+    const inklOk=pctInkl===null||pctInkl<=tolerancePct;
+    const eksOk=pctEks===null||pctEks<=tolerancePct;
+    const bothPresent=pctInkl!==null&&pctEks!==null;
+    if(inklOk&&eksOk){
+      const lines=[];
+      if(pctEks!==null)lines.push(`Eks. MVA: ${fmtNOK(totalKjopEks)} mot ${fmtNOK(fakturaTotalEks)} (avvik ${fmtN(pctEks,2)}%)`);
+      if(pctInkl!==null)lines.push(`Inkl. MVA: ${fmtNOK(totalKjopInkl)} mot ${fmtNOK(fakturaTotalInkl)} (avvik ${fmtN(pctInkl,2)}%)`);
+      kontrollHtml=`<div style="background:#1e3a2a;border:1px solid #2d5a40;border-radius:8px;padding:10px 14px;margin-top:10px;font-size:12.5px;color:#9fdfb5;display:flex;align-items:flex-start;gap:10px">
+        <span style="font-size:16px;line-height:1.2">✓</span>
+        <div><strong>Sum stemmer med faktura</strong><div style="margin-top:3px;font-size:11.5px;opacity:.92">${lines.join(' · ')}</div></div>
+      </div>`;
+    } else if(bothPresent&&(inklOk||eksOk)){
+      const okSide=eksOk?'eks':'inkl';
+      const badSide=eksOk?'inkl':'eks';
+      const okPct=eksOk?pctEks:pctInkl;
+      const badPct=eksOk?pctInkl:pctEks;
+      kontrollHtml=`<div style="background:#3a3418;border:1px solid #6b5a2a;border-radius:8px;padding:10px 14px;margin-top:10px;font-size:12.5px;color:#ffd980;display:flex;align-items:flex-start;gap:10px">
+        <span style="font-size:16px;line-height:1.2">ℹ️</span>
+        <div><strong>Sum stemmer på ${okSide}-siden (avvik ${fmtN(okPct,2)}%)</strong><div style="margin-top:3px;font-size:11.5px;opacity:.92">${badSide}-siden avviker ${fmtN(badPct,1)}% — sannsynligvis AI-utledet totalsum. Line-prisene ser riktige ut.</div></div>
       </div>`;
     } else {
+      const lines=[];
+      if(pctEks!==null)lines.push(`Eks: App <strong>${fmtNOK(totalKjopEks)}</strong> · Faktura <strong>${fmtNOK(fakturaTotalEks)}</strong> (${fmtN(pctEks,1)}%)`);
+      if(pctInkl!==null)lines.push(`Inkl: App <strong>${fmtNOK(totalKjopInkl)}</strong> · Faktura <strong>${fmtNOK(fakturaTotalInkl)}</strong> (${fmtN(pctInkl,1)}%)`);
       kontrollHtml=`<div style="background:#4a1818;border:1.5px solid #8b3a3a;border-radius:8px;padding:11px 14px;margin-top:10px;font-size:12.5px;color:#ffb3b3;display:flex;align-items:flex-start;gap:10px">
         <span style="font-size:18px;line-height:1">⚠️</span>
         <div>
           <div style="font-weight:700;margin-bottom:3px">Sum avviker fra faktura</div>
-          <div>App: <strong>${fmtNOK(totalKjopInkl)}</strong> · Faktura: <strong>${fmtNOK(fakturaTotalInkl)}</strong> · Differanse: <strong>${diff>=0?'+':''}${fmtNOK(diff,true)}</strong> (${fmtN(diffPct,1)}%)</div>
+          <div>${lines.join(' · ')}</div>
           <div style="margin-top:5px;font-size:11.5px;color:#ffd4d4">Sjekk at linjer har riktig pris ETTER rabatt, og at ingen er utelatt.</div>
         </div>
       </div>`;
