@@ -628,7 +628,25 @@ service cloud.firestore {
     <div class="fg"><label class="fl">Dato *</label><input class="fi" id="inn-dato" type="date"></div>
     <div class="fg"><label class="fl">Fakturanr.</label><input class="fi" id="inn-faktura" placeholder="F-2024-001" autocomplete="off"></div>
   </div>
-  <div class="fr">
+  <div class="fg" style="margin-bottom:4px">
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text)">
+      <input type="checkbox" id="inn-paid-at-delivery" onchange="setPaidAtDeliveryUI('inn')" style="width:16px;height:16px;cursor:pointer;flex-shrink:0">
+      <span><strong>Allerede betalt ved levering</strong> <span style="color:var(--muted);font-size:11.5px">(Bankaxept/kontant — ikke faktura med forfall)</span></span>
+    </label>
+  </div>
+  <div class="fr" id="inn-paid-method-row" style="display:none">
+    <div class="fg"><label class="fl">Betalingsmetode</label>
+      <select class="fi" id="inn-paid-method">
+        <option value="bankaxept">Bankaxept</option>
+        <option value="kontant">Kontant</option>
+        <option value="vipps">Vipps</option>
+        <option value="kort">Kort</option>
+        <option value="annet">Annet</option>
+      </select>
+    </div>
+    <div class="fg"></div>
+  </div>
+  <div class="fr" id="inn-forfall-row">
     <div class="fg"><label class="fl">Forfallsdato</label>
       <input class="fi" id="inn-forfall" type="date">
       <div style="font-size:10.5px;color:var(--muted);margin-top:4px">La stå tom hvis ukjent — kan settes senere</div>
@@ -1169,6 +1187,14 @@ function calcInvoiceReelStats(invoiceId){
 function getInvoicePaymentStatus(invoiceId){
   const purchase=dbFind('purchases',invoiceId);
   const total=purchase?calcPurchaseStats(purchase).buyInklTotal:0;
+  // Bankaxept V1: paid-at-delivery short-circuits — no bankTransactions linked, no forfall, no overdue possible.
+  if(purchase?.betaltVedLevering===true){
+    return{
+      paid:true,paymentIds:[],paidAmount:total,status:'paid',total,outstanding:0,
+      forfallsdato:purchase.forfallsdato||null,isOverdue:false,daysOverdue:0,
+      paidAtDelivery:true,paymentMethod:purchase.betalingsmetode||null
+    };
+  }
   // Filter on type: only supplier payments count toward invoice status. !type catches any pre-type-field records (defensive).
   const linked=dbAll('bankTransactions').filter(p=>(p.type==='supplier_payment'||!p.type)&&(p.linkedeFakturaer||[]).includes(invoiceId));
   // Even-split attribution across each payment's linked invoices — refined in STEP 5 if accountant needs per-invoice splits.
@@ -1183,6 +1209,9 @@ function getInvoicePaymentStatus(invoiceId){
   const daysOverdue=isOverdue?Math.floor((Date.parse(todayStr)-Date.parse(forfallsdato))/86400000):0;
   return{paid,paymentIds:linked.map(p=>p.id),paidAmount,status,total,outstanding:Math.max(0,total-paidAmount),forfallsdato,isOverdue,daysOverdue};
 }
+// Bankaxept V1: payment-method display labels — single source of truth for inn-form, edit-header, scanner header, list row, detail panel.
+const PAYMENT_METHOD_LABELS={bankaxept:'Bankaxept',kontant:'Kontant',vipps:'Vipps',kort:'Kort',annet:'Annet'};
+function paymentMethodLabel(m){return PAYMENT_METHOD_LABELS[m]||(m?m.charAt(0).toUpperCase()+m.slice(1):'')}
 function marginCls(m){return m>=30?'g':m>=20?'o':'r'}
 function marginBadge(m){const c=m>=30?'b-g':m>=20?'b-o':'b-r';return`<span class="b ${c}">${fmtPct(m)}</span>`}
 function gmPanelHtml(gmKr,gmPct,paaslagPct){
@@ -1582,7 +1611,10 @@ function renderInnkjop(){
       const pay=getInvoicePaymentStatus(p.id);
       const todayStr=today();
       let forfallChip='';
-      if(p.forfallsdato){
+      // Bankaxept V1: paid-at-delivery → green badge instead of forfall chip (belt + suspenders gate on forfallChip)
+      if(p.betaltVedLevering===true){
+        forfallChip=`<span style="font-size:11px;background:rgba(77,184,118,.2);color:#8de19e;padding:2px 8px;border-radius:9px;font-weight:700">✓ Betalt${p.betalingsmetode?' · '+paymentMethodLabel(p.betalingsmetode):''}</span>`;
+      } else if(p.forfallsdato){
         let cls='forfallsdato-future',prefix='Forfall: ';
         if(pay.isOverdue){cls='forfallsdato-overdue';prefix='⚠ Forfalt: ';}
         else if(p.forfallsdato===todayStr)cls='forfallsdato-today';
@@ -1618,12 +1650,31 @@ function openInnkjopModal(){
   document.getElementById('inn-dato').value=today();
   ['inn-faktura','inn-forfall','inn-notes'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('inn-lev-legacy').value='';
+  // Bankaxept V1: reset paid-at-delivery state
+  document.getElementById('inn-paid-at-delivery').checked=false;
+  document.getElementById('inn-paid-method').value='bankaxept';
+  setPaidAtDeliveryUI('inn');
   // Pre-selected lev (set by scanner confirm). Do this before fillLevDropdown so selected value is honored.
   const preLev=window._innkjopPreLevId||'';
   window._innkjopPreLevId=null;
   fillLevDropdown('inn-lev-id',preLev);
   onInnkjopLevChange();
   renderPLines();openModal('ov-innkjop');
+}
+
+// Bankaxept V1: shared toggle helper for paid-at-delivery on both manual form ('inn') and edit-header ('edith').
+function setPaidAtDeliveryUI(prefix){
+  const cb=document.getElementById(prefix+'-paid-at-delivery');
+  if(!cb)return;
+  const checked=cb.checked;
+  const forfallRow=document.getElementById(prefix+'-forfall-row');
+  const methodRow=document.getElementById(prefix+'-paid-method-row');
+  if(forfallRow)forfallRow.style.display=checked?'none':'';
+  if(methodRow)methodRow.style.display=checked?'':'none';
+  if(checked){
+    const f=document.getElementById(prefix+'-forfall');
+    if(f)f.value='';  // visually clear; saveInnkjop/saveEditHeader uses dato as effective forfall
+  }
 }
 
 function onInnkjopLevChange(){
@@ -1762,6 +1813,10 @@ async function saveInnkjop(){
   const dato=document.getElementById('inn-dato').value;
   if(!dato){showToast('Velg dato','err');return}
   const forfall=document.getElementById('inn-forfall').value||null;
+  // Bankaxept V1: paid-at-delivery overrides forfall to fakturaDato (per AI prompt convention)
+  const paidAtDelivery=document.getElementById('inn-paid-at-delivery').checked;
+  const paidMethod=paidAtDelivery?document.getElementById('inn-paid-method').value:null;
+  const effectiveForfall=paidAtDelivery?dato:forfall;
   const validLines=pLines.filter(l=>l.productId&&(l.antall>0||l.prisPerKolliInkl>0));
   if(!validLines.length){showToast('Legg til minst én produktlinje','err');return}
   const lines=validLines.map(l=>{
@@ -1797,8 +1852,10 @@ async function saveInnkjop(){
   }
   const newId=uid();
   await db.collection('purchases').doc(newId).set({
-    id:newId,dato,fakturanr,forfallsdato:forfall,
+    id:newId,dato,fakturanr,forfallsdato:effectiveForfall,
     leverandorId:levId||'',lev:levText,lines,
+    betaltVedLevering:paidAtDelivery,
+    betalingsmetode:paidAtDelivery?paidMethod:null,
     notes:document.getElementById('inn-notes').value.trim(),opprettet:new Date().toISOString()
   });
   // v21 Fix 2: Auto-sync buyEks/buyInkl on each product from this invoice's lines
@@ -1836,9 +1893,11 @@ function showInvoiceDetail(id){
   const stats=calcPurchaseStats(p);
   const reel=calcInvoiceReelStats(id);
   const pay=getInvoicePaymentStatus(id);
+  const isPaidAtDelivery=p.betaltVedLevering===true;
   // V0.5 forfallsdato — header-segment + overdue banner
+  // Bankaxept V1: gate on !isPaidAtDelivery (belt + suspenders — paid-at-delivery isOverdue is already false via getInvoicePaymentStatus short-circuit)
   let forfallSegment='';
-  if(p.forfallsdato){
+  if(!isPaidAtDelivery&&p.forfallsdato){
     if(pay.isOverdue){
       forfallSegment=` · <span style="color:#ffbcbc;font-weight:600">⚠ Forfall: ${fmtDate(p.forfallsdato)}</span>`;
     } else {
@@ -1846,7 +1905,7 @@ function showInvoiceDetail(id){
     }
   }
   let overdueBanner='';
-  if(pay.isOverdue&&p.forfallsdato){
+  if(!isPaidAtDelivery&&pay.isOverdue&&p.forfallsdato){
     overdueBanner=`<div class="forfallsdato-banner">⚠ Forfalt med ${pay.daysOverdue} dag${pay.daysOverdue===1?'':'er'} — Forfallsdato var ${fmtDate(p.forfallsdato)}</div>`;
   }
   const linkedPayments=dbAll('bankTransactions').filter(x=>(x.type==='supplier_payment'||!x.type)&&(x.linkedeFakturaer||[]).includes(id)).sort((a,b)=>(a.dato||'').localeCompare(b.dato||''));
@@ -1874,6 +1933,12 @@ function showInvoiceDetail(id){
         </div>
       </div>`;
     });
+  } else if(isPaidAtDelivery){
+    // Bankaxept V1: replace empty-list placeholder with green confirmation when paid-at-delivery
+    payRowsHtml=`<div style="background:rgba(77,184,118,.15);border:1px solid rgba(77,184,118,.35);border-radius:10px;padding:11px 12px;font-size:12.5px;color:#9fdfb5">
+      <div style="font-weight:700">✓ Betalt ved levering${p.betalingsmetode?' · '+paymentMethodLabel(p.betalingsmetode):''}</div>
+      <div style="font-size:11px;opacity:.85;margin-top:3px">${fmtNOK(pay.total)} · ${fmtDate(p.dato)}</div>
+    </div>`;
   } else {
     payRowsHtml=`<div style="background:rgba(255,255,255,.06);border-radius:10px;padding:11px 12px;text-align:center;font-size:12.5px;color:rgba(255,255,255,.55)">Ingen betalinger lenket ennå.</div>`;
   }
@@ -1881,7 +1946,7 @@ function showInvoiceDetail(id){
     <div class="stitle" style="color:#fff;opacity:.7;margin-top:0">BETALINGER</div>
     <div style="background:rgba(255,255,255,.08);border-radius:10px;padding:11px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;font-size:12.5px">
       <span style="opacity:.85">Betalt: ${fmtNOK(pay.paidAmount)} · Utestående: ${fmtNOK(pay.outstanding)}</span>
-      <span style="font-size:11px;opacity:.6">${linkedPayments.length} betaling${linkedPayments.length===1?'':'er'}</span>
+      <span style="font-size:11px;opacity:.6">${isPaidAtDelivery?'1 betaling (ved levering)':(linkedPayments.length+' betaling'+(linkedPayments.length===1?'':'er'))}</span>
     </div>
     ${payRowsHtml}
   </div>`;
@@ -2018,10 +2083,27 @@ function showEditHeaderForm(id){
         <label style="font-size:11px;color:var(--muted);font-weight:600">DATO
           <input id="edith-dato" type="date" value="${p.dato||''}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:13px;margin-top:4px">
         </label>
-        <label style="font-size:11px;color:var(--muted);font-weight:600">FORFALLSDATO
-          <input id="edith-forfall" type="date" value="${p.forfallsdato||''}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:13px;margin-top:4px">
-          <div style="font-size:10.5px;color:var(--muted);margin-top:4px">La stå tom for å fjerne</div>
+        <label style="font-size:11px;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:8px;cursor:pointer;padding:8px 10px;background:${p.betaltVedLevering===true?'rgba(77,184,118,.12)':'rgba(0,0,0,.03)'};border-radius:8px">
+          <input type="checkbox" id="edith-paid-at-delivery" ${p.betaltVedLevering===true?'checked':''} onchange="setPaidAtDeliveryUI('edith')" style="width:16px;height:16px;cursor:pointer">
+          <span>ALLEREDE BETALT VED LEVERING <span style="color:var(--muted);font-weight:400;text-transform:none">(Bankaxept/kontant — ikke faktura med forfall)</span></span>
         </label>
+        <div id="edith-paid-method-row" style="display:${p.betaltVedLevering===true?'block':'none'}">
+          <label style="font-size:11px;color:var(--muted);font-weight:600">BETALINGSMETODE
+            <select id="edith-paid-method" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:13px;margin-top:4px">
+              <option value="bankaxept" ${(p.betalingsmetode||'bankaxept')==='bankaxept'?'selected':''}>Bankaxept</option>
+              <option value="kontant" ${p.betalingsmetode==='kontant'?'selected':''}>Kontant</option>
+              <option value="vipps" ${p.betalingsmetode==='vipps'?'selected':''}>Vipps</option>
+              <option value="kort" ${p.betalingsmetode==='kort'?'selected':''}>Kort</option>
+              <option value="annet" ${p.betalingsmetode==='annet'?'selected':''}>Annet</option>
+            </select>
+          </label>
+        </div>
+        <div id="edith-forfall-row" style="display:${p.betaltVedLevering===true?'none':'block'}">
+          <label style="font-size:11px;color:var(--muted);font-weight:600">FORFALLSDATO
+            <input id="edith-forfall" type="date" value="${p.forfallsdato||''}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:13px;margin-top:4px">
+            <div style="font-size:10.5px;color:var(--muted);margin-top:4px">La stå tom for å fjerne</div>
+          </label>
+        </div>
         <label style="font-size:11px;color:var(--muted);font-weight:600">NOTAT
           <input id="edith-notes" value="${escapeHtml(p.notes||'')}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:13px;margin-top:4px">
         </label>
@@ -2044,12 +2126,18 @@ async function saveEditHeader(id){
   const dato=document.getElementById('edith-dato').value;
   const forfall=document.getElementById('edith-forfall').value||null;
   const notes=document.getElementById('edith-notes').value.trim();
+  // Bankaxept V1: paid-at-delivery overrides forfall to fakturaDato
+  const paidAtDelivery=document.getElementById('edith-paid-at-delivery').checked;
+  const paidMethod=paidAtDelivery?document.getElementById('edith-paid-method').value:null;
+  const effectiveForfall=paidAtDelivery?dato:forfall;
   if(!dato){showToast('Dato kreves','err');return}
   try{
     await dbUpdate('purchases',id,{
       leverandorId:levId||'',
       lev:lev||'',
-      fakturanr,dato,forfallsdato:forfall,notes
+      fakturanr,dato,forfallsdato:effectiveForfall,notes,
+      betaltVedLevering:paidAtDelivery,
+      betalingsmetode:paidAtDelivery?paidMethod:null
     });
     showToast('Faktura-hode oppdatert');
     showInvoiceDetail(id);
@@ -4898,7 +4986,7 @@ async function runAIScan(){
     prompt = 'Analyser denne fakturaen for Four Season AS, en matbutikk i Norge. Returner KUN et JSON-objekt, ingen annen tekst.\n\n'
     +'Hvis flere sider/bilder er lastet opp, er de alle del av SAMME faktura — samle alle linjer fra alle sider i én samlet liste. Leverandør, fakturanr og dato er det samme for hele fakturaen.\n\n'
     +'Format:\n'
-    +'{"leverandor":"navn","fakturanr":"nummer","dato":"YYYY-MM-DD","forfallsdato":"YYYY-MM-DD eller null","totalInkl":0.00,"totalEks":0.00,"mvaBreakdown":{"15":{"grunnlag":0,"mva":0},"25":{"grunnlag":0,"mva":0}},"linjer":[{"beskrivelse":"produktnavn","varenr":"nr","antallKolli":1,"prisPerKolli":0.00,"totalLinje":0.00,"mva":15,"selgesSom":"pakke","innholdPerKolli":12,"lineKind":"product eller pant"}]}\n\n'
+    +'{"leverandor":"navn","fakturanr":"nummer","dato":"YYYY-MM-DD","forfallsdato":"YYYY-MM-DD eller null","betaltVedLevering":true,"betalingsmetode":"bankaxept|kontant|vipps|kort|annet eller null","totalInkl":0.00,"totalEks":0.00,"mvaBreakdown":{"15":{"grunnlag":0,"mva":0},"25":{"grunnlag":0,"mva":0}},"linjer":[{"beskrivelse":"produktnavn","varenr":"nr","antallKolli":1,"prisPerKolli":0.00,"totalLinje":0.00,"mva":15,"selgesSom":"pakke","innholdPerKolli":12,"lineKind":"product eller pant"}]}\n\n'
     +'Regler:\n'
     +'- antallKolli: antall esker/kasser/kolli på denne linjen (fakturaens "antall")\n'
     +'- prisPerKolli: EFFEKTIV pris per kolli etter rabatt. Hvis fakturaen har en "Rabatt"-kolonne med prosent (f.eks. "3%", "30%"), skal du IKKE bruke "Pris"-kolonnen som står før rabatten. Bruk i stedet: "Beløp"/"Sum"/"Total linje"-kolonnen (som allerede har rabatt trukket fra) delt på antallKolli. Hvis antallKolli=1, er prisPerKolli lik "Beløp".\n'
@@ -4929,6 +5017,14 @@ async function runAIScan(){
     +'   * Hvis beskrivelsen ikke viser det tydelig (f.eks. "BULLET CHILLI" uten tall) → la stå null\n'
     +'   * PALL: innholdPerKolli = 1\n'
     +'   * VIKTIG: innholdPerKolli er tallet per ÉN kolli, ikke totalt på linjen\n'
+    +'- BETALT VED LEVERING (Bankaxept/kontant-deteksjon): Hvis fakturaen har KLART bevis på at den ALLEREDE er gjort opp ved levering, sett `betaltVedLevering:true` og `betalingsmetode` til riktig verdi. Krever BÅDE et metode-nøkkelord OG et autoriserings-nøkkelord i samme dokument:\n'
+    +'   * METODE-NØKKELORD: "BankAxept"/"Bankaxept"/"EMV-kontaktløs", "Kontant"/"Kontantsalg"/"Cash", "Vipps", "Kortbetalt"/"Kontaktløs"/"Visa"/"Mastercard"/"VISA"/"MC" (eller maskerte kortnummer som "************1234" / "****1234").\n'
+    +'   * AUTORISERINGS-NØKKELORD: "Autorisert"/"Authorised"/"Approved", "Betalt"/"PAID"/"Paid", "Innbetalt", "Mottatt betaling", "Transaksjons-ID"/"Trans-ID"/"AID", "Godkjent", "Referansenr." nær et beløp som matcher totalInkl.\n'
+    +'   * EKSEMPLER (true): Tenza-bunntekst "BankAxept ************1234 Autorisert kr 1 234,56" → `betaltVedLevering:true, betalingsmetode:"bankaxept"`. Royal-kontantbong med "BETALT KONTANT" + beløp → `true, "kontant"`. Vipps-kvittering "Vipps Betaling Mottatt Ref 123456" → `true, "vipps"`.\n'
+    +'   * SVAKT SIGNAL → `betaltVedLevering:null`. Generisk "Betalingsvilkår: 14 dager netto", "Vennligst betal til konto…", eller "Betalingsinformasjon:" UTEN konkret kvitterings-bevis er IKKE betaling — det er bare boilerplate om hvordan fakturaen SKAL betales. Ikke false-positive på dette.\n'
+    +'   * NÅR `betaltVedLevering=true`: sett `forfallsdato` lik `dato` (fakturadato) — ikke null, ikke +N dager — fordi fakturaen er gjort opp samme dag som levering. Ignorer eksisterende "Betalingsfrist"-tekst i dette tilfellet.\n'
+    +'   * NÅR `betaltVedLevering=null` eller `false`: følg den vanlige Forfallsdato-regelen under uendret.\n'
+    +'   * Verdier: `betalingsmetode` kan være "bankaxept", "kontant", "vipps", "kort", "annet", eller `null` hvis du ser klart betalingsbevis men ikke kan avgjøre metoden.\n'
     +'- Forfallsdato (due date) — extract following these rules in order:\n'
     +'   1. If invoice shows explicit "Forfallsdato" or "Forfall" or "Due date": use that date as YYYY-MM-DD.\n'
     +'   2. If invoice shows "Betalingsfrist: N dager" or "N dager netto" or "Net N days": calculate as invoice date + N days, return as YYYY-MM-DD.\n'
@@ -5449,7 +5545,7 @@ function showScanResults(data){
   }
   document.getElementById('scan-result-header').innerHTML=
     '<div style="display:flex;justify-content:space-between;margin-bottom:4px">'+levLabel+'<span>'+(data.fakturanr||'Uten nr')+'</span></div>'+
-    '<div style="display:flex;justify-content:space-between;opacity:.8;font-size:12px"><span>Dato: '+(fmtDate(data.dato)||'')+(data.forfallsdato?' · Forfall: '+fmtDate(data.forfallsdato):'')+'</span><span>Totalt på faktura: '+fmtNOK(data.totalInkl||0)+'</span></div>'+
+    '<div style="display:flex;justify-content:space-between;opacity:.8;font-size:12px"><span>Dato: '+(fmtDate(data.dato)||'')+(data.betaltVedLevering===true?' · <span style="background:rgba(77,184,118,.25);color:#9fdfb5;padding:2px 8px;border-radius:10px;font-weight:700">✓ Betalt ved levering'+(data.betalingsmetode?' · '+paymentMethodLabel(data.betalingsmetode):'')+'</span>':(data.forfallsdato?' · Forfall: '+fmtDate(data.forfallsdato):''))+'</span><span>Totalt på faktura: '+fmtNOK(data.totalInkl||0)+'</span></div>'+
     '<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.2)">'+
       '<div style="font-size:11px;color:rgba(255,255,255,.7);margin-bottom:6px">💡 '+ruleNote+'</div>'+
       '<input type="hidden" id="scan-effective-rule" value="'+initial+'">'+
@@ -6085,6 +6181,15 @@ async function confirmScanToInnkjop(){
   if(data.dato)document.getElementById('inn-dato').value=data.dato;
   if(data.forfallsdato)document.getElementById('inn-forfall').value=data.forfallsdato;
   if(data.fakturanr)document.getElementById('inn-faktura').value=data.fakturanr;
+  // Bankaxept V1: propagate paid-at-delivery state to manual form (no-op if widgets don't exist for some reason)
+  if(data.betaltVedLevering===true){
+    const cb=document.getElementById('inn-paid-at-delivery');
+    if(cb){
+      cb.checked=true;
+      if(data.betalingsmetode){const ms=document.getElementById('inn-paid-method');if(ms)ms.value=data.betalingsmetode}
+      setPaidAtDeliveryUI('inn');
+    }
+  }
   // Build pLines for existing innkjop form
   // Storage: save BOTH legacy fields (antall, vektPerKolli, prisPerKolliInkl) AND v8 fields (innholdPerKolli, prisPerEnhetEks, prisPerKolliEks)
   pLines=[];
@@ -6143,6 +6248,8 @@ async function confirmScanToInnkjop(){
     const savedForfall=data.forfallsdato||'';
     const savedFakturanr=data.fakturanr||'';
     const savedLegacy=(!matchedLev&&data.leverandor)?data.leverandor:'';
+    const savedPaidAtDelivery=data.betaltVedLevering===true;
+    const savedPaidMethod=data.betalingsmetode||'bankaxept';
     window._innkjopPreLevId=savedLevId;
     openInnkjopModal();
     // Restore data after the modal opens
@@ -6152,6 +6259,11 @@ async function confirmScanToInnkjop(){
     document.getElementById('inn-faktura').value=savedFakturanr;
     if(savedLegacy){
       document.getElementById('inn-lev-legacy').value=savedLegacy;
+    }
+    if(savedPaidAtDelivery){
+      document.getElementById('inn-paid-at-delivery').checked=true;
+      document.getElementById('inn-paid-method').value=savedPaidMethod;
+      setPaidAtDeliveryUI('inn');
     }
     renderPLines();
   } else {
