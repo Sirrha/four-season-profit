@@ -1,0 +1,18 @@
+{
+  "name": "sormena-migration-script",
+  "version": "1.0.0",
+  "description": "Phase 4 data migration: four-season-as → sormena-prod (tenant-namespaced)",
+  "main": "migrate.js",
+  "scripts": {
+    "dry-run": "node migrate.js --mode=dry-run",
+    "subset": "node migrate.js --mode=subset",
+    "full": "node migrate.js --mode=full",
+    "verify": "node migrate.js --mode=verify"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

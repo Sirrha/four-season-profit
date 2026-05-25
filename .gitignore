@@ -1,0 +1,15 @@
+# Credentials (never commit, even though they live outside repo)
+credentials/
+*-firebase-adminsdk-*.json
+*-key.json
+
+# Migration reports (audit trail, kept local)
+migration-reports/
+
+# Node.js
+node_modules/
+scripts/migration/node_modules/
+scripts/migration/package-lock.json
+
+# Claude Code local session data
+.claude/
