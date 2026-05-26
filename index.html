@@ -1808,6 +1808,34 @@ async function saveInnkjop(){
   showToast(`Faktura lagret · GM: ${fmtPct(s.gmPct)}`);
   closeModal('ov-innkjop');
   await markInnboksLinkedDone();
+  // Storage Foundation V1 Phase B: upload original scan files to Storage AFTER invoice save.
+  // Non-blocking — invoice is already created at this point; upload failures only surface as a toast.
+  const filesToUpload=(scanFiles&&scanFiles.length>0)?scanFiles.slice():[];
+  scanFiles=[];
+  if(filesToUpload.length>0){
+    const uploadedFiles=[];
+    let failedCount=0;
+    for(const sf of filesToUpload){
+      try{
+        const meta=await uploadInvoiceFile(newId,sf.file);
+        uploadedFiles.push(meta);
+      }catch(e){
+        console.warn('Original-file upload failed:',sf.name,e.message);
+        failedCount++;
+      }
+    }
+    if(uploadedFiles.length>0){
+      try{
+        await tenantCol('purchases').doc(newId).update({originalFiles:uploadedFiles});
+      }catch(e){
+        console.warn('Failed to attach originalFiles to purchase:',e.message);
+        failedCount++;
+      }
+    }
+    if(failedCount>0){
+      showToast('Faktura lagret, men ett eller flere vedlegg kunne ikke lastes opp','err');
+    }
+  }
 }
 
 // ─────────────────────────────────────────
