@@ -9,6 +9,7 @@
 <!-- Firebase SDK v8 compat -->
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
 <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-storage.js"></script>
 
 <style>
 :root{
@@ -862,6 +863,7 @@ const ARSAK={utgatt:'Utgått dato',skadet:'Skadet/knust',tyveri:'Tyveri/svinn',a
 // ─────────────────────────────────────────
 let LOCAL={products:[],purchases:[],sales:[],svinn:[],leverandorer:[],dagsalg:[],innboks:[],ansatte:[],vakter:[],payments:[],bankTransactions:[]};
 let db=null; // Firestore instance
+let storage = null; // Cloud Storage instance
 
 // ─────────────────────────────────────────
 // TENANT NAMESPACE
@@ -874,6 +876,58 @@ function tenantCol(col){
   return db.collection('tenants').doc(TENANT_ID).collection(col);
 }
 
+// Storage path helper — mirrors tenantCol() pattern.
+// Subpath is everything AFTER the tenants/{TENANT_ID}/ prefix.
+function tenantStorageRef(subpath) {
+  return storage.ref('tenants/' + TENANT_ID + '/' + subpath);
+}
+
+// Upload a File/Blob to tenants/{TENANT_ID}/invoices/{purchaseId}/{ts-filename}.
+// Returns the originalFile metadata object to attach to a purchases doc.
+async function uploadInvoiceFile(purchaseId, file) {
+  if (!storage) throw new Error('Storage not initialized');
+  if (!file) throw new Error('No file provided');
+
+  const filename = file.name || 'unknown.pdf';
+  const path = 'invoices/' + purchaseId + '/' + Date.now() + '-' + filename;
+  const ref = tenantStorageRef(path);
+
+  const snapshot = await ref.put(file);
+
+  return {
+    path: 'tenants/' + TENANT_ID + '/' + path,
+    filename: filename,
+    size: file.size || 0,
+    mimeType: file.type || 'application/octet-stream',
+    uploadedAt: new Date().toISOString()
+  };
+}
+
+// Get a download URL for a stored file. Token expires — call on-demand at render time.
+async function getOriginalFileUrl(originalFile) {
+  if (!storage) throw new Error('Storage not initialized');
+  if (!originalFile || !originalFile.path) throw new Error('Invalid file reference');
+  // originalFile.path already includes the full "tenants/..." prefix.
+  const ref = storage.ref(originalFile.path);
+  return await ref.getDownloadURL();
+}
+
+// Convert a base64 string to a Blob (used in Phase B for innboks → invoice migration).
+function base64ToBlob(base64, mimeType) {
+  const byteCharacters = atob(base64);
+  const byteArrays = [];
+  const sliceSize = 512;
+  for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
+    const slice = byteCharacters.slice(offset, offset + sliceSize);
+    const byteNumbers = new Array(slice.length);
+    for (let i = 0; i < slice.length; i++) {
+      byteNumbers[i] = slice.charCodeAt(i);
+    }
+    byteArrays.push(new Uint8Array(byteNumbers));
+  }
+  return new Blob(byteArrays, { type: mimeType || 'application/octet-stream' });
+}
+
 let listeners={};
 function initFirebase(cfg){
   document.getElementById('loading-screen').classList.remove('hidden');
@@ -883,6 +937,7 @@ function initFirebase(cfg){
     let app;
     try{app=firebase.app()}catch(e){app=firebase.initializeApp(cfg)}
     db=firebase.firestore(app);
+    storage=firebase.storage(app);
     document.getElementById('ld-text').textContent='Laster data…';
     startListeners();
   }catch(e){
