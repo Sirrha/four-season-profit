@@ -1978,6 +1978,7 @@ function showInvoiceDetail(id){
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
           ${statusPill}
+          ${(p.originalFiles||[]).map((f,i)=>`<button class="btn btn-s" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3);padding:6px 12px;font-size:11.5px" onclick="openOriginalFile('${id}',${i})" title="Åpne ${escapeHtml(f.filename||'vedlegg')}">📄 ${p.originalFiles.length>1?'Vis: '+escapeHtml(f.filename||'fil '+(i+1)):'Vis original faktura'}</button>`).join('')}
           <button class="btn btn-s" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3);padding:6px 12px;font-size:11.5px" onclick="showEditHeaderForm('${id}')" title="Rediger faktura-hode">✏️ Rediger</button>
         </div>
       </div>
@@ -1994,6 +1995,23 @@ function showInvoiceDetail(id){
       </div>
     </div>`;
   openModal('ov-detail');
+}
+
+// Storage Foundation V1 Phase D: open an uploaded original-file in a new tab.
+// Fetches a fresh signed URL on click (tokens expire — not cached).
+async function openOriginalFile(id, idx){
+  const p=dbFind('purchases',id);
+  if(!p||!p.originalFiles||!p.originalFiles[idx]){
+    showToast('Fant ikke vedlegget','err');
+    return;
+  }
+  try{
+    const url=await getOriginalFileUrl(p.originalFiles[idx]);
+    window.open(url,'_blank');
+  }catch(e){
+    console.warn('openOriginalFile failed:',e);
+    showToast('Kunne ikke åpne vedlegget','err');
+  }
 }
 
 // ─────────────────────────────────────────
