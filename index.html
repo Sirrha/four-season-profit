@@ -3418,8 +3418,13 @@ function openScannerFromInnboks(innboksId,mode){
       // Resume the draft
       innboksLinkedId=innboksId;
       openScanner(mode);
+      // Phase B2: build a REAL File from the innboks base64 so Phase B's upload
+      // in saveInnkjop can transfer the original to Storage. The previous fake
+      // metadata object passed to ref.put() silently failed.
+      const resumeBlob=base64ToBlob(it.data,it.mimeType);
+      const resumeFile=new File([resumeBlob],it.filnavn||'innboks-original.pdf',{type:it.mimeType||'application/octet-stream'});
       scanFiles=[{
-        file:{name:it.filnavn,type:it.mimeType,size:it.storrelse},
+        file:resumeFile,
         name:it.filnavn,size:it.storrelse,type:it.type,
         data:it.data,
         previewUrl:it.type==='image'?'data:'+it.mimeType+';base64,'+it.data:null
@@ -3444,9 +3449,13 @@ function openScannerFromInnboks(innboksId,mode){
   }
   innboksLinkedId=innboksId;
   openScanner(mode);
+  // Phase B2: build a REAL File from the innboks base64 so Phase B's upload
+  // in saveInnkjop can transfer the original to Storage.
+  const innboksBlob=base64ToBlob(it.data,it.mimeType);
+  const innboksFile=new File([innboksBlob],it.filnavn||'innboks-original.pdf',{type:it.mimeType||'application/octet-stream'});
   // Pre-load the file into scanFiles so user can scan immediately
   scanFiles=[{
-    file:{name:it.filnavn,type:it.mimeType,size:it.storrelse},
+    file:innboksFile,
     name:it.filnavn,
     size:it.storrelse,
     type:it.type,
