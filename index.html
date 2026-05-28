@@ -984,7 +984,7 @@ function showApp(){
 function renderIfActive(col){
   if(!document.getElementById('main-app').style.display||document.getElementById('main-app').style.display==='none')return;
   const map={products:'produkter',purchases:'innkjop',sales:'salg',svinn:'svinn',leverandorer:'leverandorer',dagsalg:'salg',innboks:'innboks',ansatte:'timeliste',vakter:'timeliste',payments:'betalinger',bankTransactions:'betalinger'};
-  if(currentPage===map[col]||currentPage==='oversikt'||currentPage==='rapporter'||currentPage==='utgifter'){
+  if(currentPage===map[col]||currentPage==='oversikt'||currentPage==='rapporter'){
     renderPage(currentPage);
   }
 }
@@ -2878,7 +2878,7 @@ function renderUtgifter(){
     <div style="font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4">${desc}</div>
   </div>`;
   const doorsHtml=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-    ${door('Leverandører','Fakturaer per leverandør',true,`showToast('Leverandør-hyller kommer i steg 3','ok')`)}
+    ${door('Leverandører','Fakturaer per leverandør',true,`renderUtgifterShelves()`)}
     ${door('Kategorier','Kommer i fase 2',false,'')}
     ${door('Utestående','Kommer i fase 2',false,'')}
     ${door('Alle utgifter','Kommer i fase 2',false,'')}
@@ -2914,6 +2914,148 @@ function renderUtgifter(){
   const storyHtml=`<div class="card" style="padding:14px 16px;margin-bottom:14px;font-size:13px;line-height:1.55">${storyParts.join(' ')}</div>`;
 
   el.innerHTML=headerHtml+storyHtml+alertHtml+doorsHtml+recentHtml;
+}
+
+// ─────────────────────────────────────────
+// UTGIFTER — Shelves (sub-view) + Shelf (sub-view), read-only
+// ─────────────────────────────────────────
+function renderUtgifterShelves(){
+  const el=document.getElementById('pg-utgifter');
+  if(!el)return;
+  const purchases=dbAll('purchases');
+  const todayStr=today(),monthStr=todayStr.slice(0,7);
+
+  const shelves=new Map();
+  for(const p of purchases){
+    let key,navn;
+    if(p.leverandorId){
+      key=p.leverandorId;
+      const lev=dbFind('leverandorer',p.leverandorId);
+      navn=lev?.navn||p.lev||'(Ukjent)';
+    } else if(p.lev){
+      key='name:'+normName(p.lev);
+      navn=p.lev;
+    } else {
+      key='_unknown';
+      navn='(Ukjent leverandør)';
+    }
+    if(!shelves.has(key))shelves.set(key,{key,navn,list:[]});
+    shelves.get(key).list.push(p);
+  }
+
+  const rows=[];
+  for(const sh of shelves.values()){
+    let total=0,overdue=0,unpaid=0;
+    for(const p of sh.list){
+      total+=calcPurchaseStats(p).buyInklTotal;
+      const pay=getInvoicePaymentStatus(p.id);
+      if(pay.isOverdue)overdue++;
+      else if(pay.status!=='paid')unpaid++;
+    }
+    rows.push({...sh,antall:sh.list.length,total,overdue,unpaid});
+  }
+  rows.sort((a,b)=>b.total-a.total);
+
+  let monthTotal=0;
+  for(const p of purchases){
+    if(p.dato?.startsWith(monthStr))monthTotal+=calcPurchaseStats(p).buyInklTotal;
+  }
+
+  const headerHtml=`<div style="margin-bottom:14px">
+    <button class="btn btn-s" style="background:none;border:none;color:var(--muted);padding:6px 0;font-size:12.5px;cursor:pointer" onclick="renderUtgifter()">← Tilbake</button>
+    <h1 style="margin:4px 0 4px;font-size:22px;font-weight:700">Leverandører</h1>
+    <div style="font-size:11.5px;color:var(--muted)">${rows.length} leverandør${rows.length===1?'':'er'} · ${fmtNOK(monthTotal)} totalt denne måneden</div>
+  </div>`;
+
+  let listHtml='';
+  if(!rows.length){
+    listHtml=`<div class="empty"><div class="ei">🏢</div><p>Ingen fakturaer ennå.</p></div>`;
+  } else {
+    listHtml=`<div class="card" style="padding:0 14px">`;
+    rows.forEach(r=>{
+      const pill=r.overdue>0
+        ?`<span style="background:rgba(220,50,50,.18);color:#c94535;padding:2px 8px;border-radius:9px;font-size:10.5px;font-weight:700;white-space:nowrap">⚠ ${r.overdue} forfalt</span>`
+        :r.unpaid>0
+        ?`<span style="background:rgba(120,120,120,.18);color:#555;padding:2px 8px;border-radius:9px;font-size:10.5px;font-weight:700;white-space:nowrap">● ${r.unpaid} ubetalt</span>`
+        :`<span style="background:rgba(45,122,74,.18);color:#2d7a4a;padding:2px 8px;border-radius:9px;font-size:10.5px;font-weight:700;white-space:nowrap">✓ Alt betalt</span>`;
+      const encKey=encodeURIComponent(r.key).replace(/'/g,'%27');
+      listHtml+=`<div class="li" style="cursor:pointer" onclick="renderUtgifterShelf('${encKey}')">
+        <div class="lim"><div class="lit">${escapeHtml(r.navn)}</div>
+        <div class="lis">${r.antall} faktura${r.antall===1?'':'er'} · ${fmtNOK(r.total)}</div></div>
+        <div style="display:flex;align-items:center;gap:8px">${pill}<div style="color:var(--muted);font-size:18px">›</div></div>
+      </div>`;
+    });
+    listHtml+=`</div>`;
+  }
+  el.innerHTML=headerHtml+listHtml;
+}
+
+function renderUtgifterShelf(encodedKey){
+  const el=document.getElementById('pg-utgifter');
+  if(!el)return;
+  const key=decodeURIComponent(encodedKey);
+  const purchases=dbAll('purchases');
+
+  const list=[];
+  let navn='(Ukjent leverandør)';
+  for(const p of purchases){
+    let k,n;
+    if(p.leverandorId){
+      k=p.leverandorId;
+      const lev=dbFind('leverandorer',p.leverandorId);
+      n=lev?.navn||p.lev||'(Ukjent)';
+    } else if(p.lev){
+      k='name:'+normName(p.lev);
+      n=p.lev;
+    } else {
+      k='_unknown';
+      n='(Ukjent leverandør)';
+    }
+    if(k===key){list.push(p);navn=n}
+  }
+  list.sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
+
+  let total=0,overdue=0,outstanding=0;
+  for(const p of list){
+    total+=calcPurchaseStats(p).buyInklTotal;
+    const pay=getInvoicePaymentStatus(p.id);
+    if(pay.isOverdue)overdue++;
+    if(pay.status!=='paid')outstanding++;
+  }
+
+  const headerHtml=`<div style="margin-bottom:14px">
+    <button class="btn btn-s" style="background:none;border:none;color:var(--muted);padding:6px 0;font-size:12.5px;cursor:pointer" onclick="renderUtgifterShelves()">← Tilbake til leverandører</button>
+    <h1 style="margin:4px 0 4px;font-size:22px;font-weight:700">${escapeHtml(navn)}</h1>
+    <div style="font-size:11.5px;color:var(--muted)">${list.length} faktura${list.length===1?'':'er'} · ${fmtNOK(total)}</div>
+  </div>`;
+
+  const summaryHtml=(overdue>0||outstanding>0)?`<div class="card" style="padding:12px 14px;margin-bottom:14px;display:flex;gap:14px;font-size:12px">
+    ${outstanding>0?`<div><span style="color:var(--muted)">Utestående:</span> <strong>${outstanding}</strong></div>`:''}
+    ${overdue>0?`<div><span style="color:var(--muted)">Forfalt:</span> <strong style="color:var(--danger)">${overdue}</strong></div>`:''}
+  </div>`:'';
+
+  let listHtml='';
+  if(!list.length){
+    listHtml=`<div class="empty"><div class="ei">📑</div><p>Ingen fakturaer.</p></div>`;
+  } else {
+    listHtml=`<div class="card" style="padding:0 14px">`;
+    list.forEach(p=>{
+      const s=calcPurchaseStats(p);
+      const pay=getInvoicePaymentStatus(p.id);
+      const pill=pay.status==='paid'
+        ?'<span style="background:rgba(45,122,74,.18);color:#2d7a4a;padding:2px 8px;border-radius:9px;font-size:10.5px;font-weight:700;white-space:nowrap">✓ Betalt</span>'
+        :pay.isOverdue?'<span style="background:rgba(220,50,50,.18);color:#c94535;padding:2px 8px;border-radius:9px;font-size:10.5px;font-weight:700;white-space:nowrap">⚠ Forfalt</span>'
+        :pay.status==='partial'?'<span style="background:rgba(224,144,37,.2);color:#a85f10;padding:2px 8px;border-radius:9px;font-size:10.5px;font-weight:700;white-space:nowrap">⚠ Delvis</span>'
+        :'<span style="background:rgba(120,120,120,.18);color:#555;padding:2px 8px;border-radius:9px;font-size:10.5px;font-weight:700;white-space:nowrap">● Ikke betalt</span>';
+      listHtml+=`<div class="li" style="cursor:pointer" onclick="showInvoiceDetail('${p.id}',{readonly:true})">
+        <div class="lim"><div class="lit">${escapeHtml(p.fakturanr||'Uten fakturanr')}</div>
+        <div class="lis">${fmtDate(p.dato)}</div></div>
+        <div style="text-align:right"><div class="liv">${fmtNOK(s.buyInklTotal)}</div><div style="margin-top:3px">${pill}</div></div>
+      </div>`;
+    });
+    listHtml+=`</div>`;
+  }
+  el.innerHTML=headerHtml+summaryHtml+listHtml;
 }
 
 // ─────────────────────────────────────────
