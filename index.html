@@ -1944,8 +1944,9 @@ async function saveInnkjop(){
 // ─────────────────────────────────────────
 // INVOICE DETAIL MODAL
 // ─────────────────────────────────────────
-function showInvoiceDetail(id){
+function showInvoiceDetail(id,opts={}){
   const p=dbFind('purchases',id);if(!p)return;
+  const readonly=opts.readonly===true;
   const stats=calcPurchaseStats(p);
   const reel=calcInvoiceReelStats(id);
   const pay=getInvoicePaymentStatus(id);
@@ -2021,8 +2022,8 @@ function showInvoiceDetail(id){
         ${isFrukt?`<span class="frukt-tag" style="margin-left:6px">🥦 Svinn trekkes</span>`:''}</div>
         <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
           <span style="font-family:'DM Mono',monospace;font-size:12px;color:${gm.gmPct>=20?'var(--accent)':'#f88'}">${fmtPct(gm.gmPct)}</span>
-          <button class="btn btn-s" style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.25);padding:4px 8px;font-size:10.5px" onclick="showEditLineForm('${id}',${idx})" title="Rediger linje">✏️</button>
-          <button class="btn btn-s" style="background:rgba(255,100,100,.2);color:#ffbcbc;border:1px solid rgba(255,150,150,.3);padding:4px 8px;font-size:10.5px" onclick="deleteInvoiceLine('${id}',${idx})" title="Slett linje">🗑️</button>
+          ${readonly?'':`<button class="btn btn-s" style="background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.25);padding:4px 8px;font-size:10.5px" onclick="showEditLineForm('${id}',${idx})" title="Rediger linje">✏️</button>
+          <button class="btn btn-s" style="background:rgba(255,100,100,.2);color:#ffbcbc;border:1px solid rgba(255,150,150,.3);padding:4px 8px;font-size:10.5px" onclick="deleteInvoiceLine('${id}',${idx})" title="Slett linje">🗑️</button>`}
         </div>
       </div>
       <div class="ldg">
@@ -2082,7 +2083,7 @@ function showInvoiceDetail(id){
         <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
           ${statusPill}
           ${(p.originalFiles||[]).map((f,i)=>`<button class="btn btn-s" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3);padding:6px 12px;font-size:11.5px" onclick="openOriginalFile('${id}',${i})" title="Åpne ${escapeHtml(f.filename||'vedlegg')}">📄 ${p.originalFiles.length>1?'Vis: '+escapeHtml(f.filename||'fil '+(i+1)):'Vis original faktura'}</button>`).join('')}
-          <button class="btn btn-s" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3);padding:6px 12px;font-size:11.5px" onclick="showEditHeaderForm('${id}')" title="Rediger faktura-hode">✏️ Rediger</button>
+          ${readonly?'':`<button class="btn btn-s" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3);padding:6px 12px;font-size:11.5px" onclick="showEditHeaderForm('${id}')" title="Rediger faktura-hode">✏️ Rediger</button>`}
         </div>
       </div>
       ${overdueBanner}
@@ -2090,12 +2091,12 @@ function showInvoiceDetail(id){
       ${betalingerHtml}
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;margin-bottom:6px">
         <div class="stitle" style="color:#fff;opacity:.7;margin:0">PRODUKTLINJER</div>
-        <button class="btn btn-s" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3);padding:6px 12px;font-size:11px" onclick="showAddLineForm('${id}')">➕ Legg til linje</button>
+        ${readonly?'':`<button class="btn btn-s" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3);padding:6px 12px;font-size:11px" onclick="showAddLineForm('${id}')">➕ Legg til linje</button>`}
       </div>
       ${linesHtml}
-      <div style="margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.15);display:flex;justify-content:flex-end">
+      ${readonly?'':`<div style="margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.15);display:flex;justify-content:flex-end">
         <button class="btn btn-s" style="background:rgba(220,50,50,.25);color:#ffcccc;border:1.5px solid rgba(255,100,100,.4);padding:8px 16px;font-size:12px;font-weight:600" onclick="deletePurchase('${id}')">🗑️ Slett hele fakturaen</button>
-      </div>
+      </div>`}
     </div>`;
   openModal('ov-detail');
 }
