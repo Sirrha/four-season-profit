@@ -862,7 +862,7 @@ const ARSAK={utgatt:'Utgått dato',skadet:'Skadet/knust',tyveri:'Tyveri/svinn',a
 // ─────────────────────────────────────────
 // LOCAL CACHE  (kept in sync by Firestore listeners)
 // ─────────────────────────────────────────
-let LOCAL={products:[],purchases:[],sales:[],svinn:[],leverandorer:[],dagsalg:[],innboks:[],ansatte:[],vakter:[],payments:[],bankTransactions:[]};
+let LOCAL={products:[],purchases:[],sales:[],svinn:[],leverandorer:[],dagsalg:[],innboks:[],ansatte:[],vakter:[],payments:[],bankTransactions:[],expenses:[],recurring_templates:[],expense_taxonomy:[]};
 let db=null; // Firestore instance
 let storage = null; // Cloud Storage instance
 
@@ -950,7 +950,7 @@ function initFirebase(cfg){
 let listenersReady=0;
 function startListeners(){
   listenersReady=0;
-  const cols=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter','payments','bankTransactions'];
+  const cols=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter','payments','bankTransactions','expenses','recurring_templates','expense_taxonomy'];
   cols.forEach(col=>{
     listeners[col]=tenantCol(col).onSnapshot(snap=>{
       LOCAL[col]=snap.docs.map(d=>({id:d.id,...d.data()}));
@@ -1137,6 +1137,101 @@ function getInvoicePaymentStatus(invoiceId){
 }
 // Bankaxept V1: payment-method display labels — single source of truth for inn-form, edit-header, scanner header, list row, detail panel.
 const PAYMENT_METHOD_LABELS={bankaxept:'Bankaxept',kontant:'Kontant',vipps:'Vipps',kort:'Kort',annet:'Annet'};
+
+// ─────────────────────────────────────────
+// EXPENSES — phase 2a vocabulary
+// Schema + enums for the expenses collection (Sirrha D1–D8 locked).
+// No behavior change in step 1 — referenced by step-2 shadow-write
+// and step-3 manual entry form. ISO strings for all timestamps per Q1.
+// ─────────────────────────────────────────
+const EXPENSE_KINDS=['purchase_invoice','rent','utility','salary','vat_tax','bank_fee','accounting_fee','insurance','subscription','service','misc','equipment_purchase'];
+const EXPENSE_KIND_LABELS={
+  purchase_invoice:'Varekjøp',
+  rent:'Husleie',
+  utility:'Strøm / vann / internett',
+  salary:'Lønn',
+  vat_tax:'MVA / Skatt',
+  bank_fee:'Bankgebyr',
+  accounting_fee:'Regnskap',
+  insurance:'Forsikring',
+  subscription:'Abonnement',
+  service:'Tjeneste',
+  misc:'Annet',
+  equipment_purchase:'Utstyrskjøp'
+};
+const OPERATIONAL_STATUS=['new','checked','needs_action','ready_to_pay','paid'];
+const ACCOUNTANT_STATUS=['not_ready','missing_info','ready','reviewed','exported','archived'];
+const EXPENSE_SOURCE=['ai_scan','manual','innboks','migrated_from_purchase','recurring_template'];
+const PAID_DATE_SOURCE=['manual','bank_match','migration'];  // null = implicit "not paid"
+const VAT_STATUS=['normal','vatUnknown','vatNotApplicable'];
+
+// Kinds where period range applies (used by step-3 form to show/hide periodStart/periodEnd inputs)
+const KINDS_WITH_PERIOD=new Set(['rent','utility','salary','subscription']);
+
+// Seeded Norwegian taxonomy defaults — written once per kind by ensureExpenseTaxonomySeed (called from step 2).
+const DEFAULT_EXPENSE_TAXONOMY={
+  purchase_invoice:[],
+  rent:[
+    {id:'lokale',label:'Lokale',subcategories:[]},
+    {id:'lager',label:'Lager',subcategories:[]}
+  ],
+  utility:[
+    {id:'strom',label:'Strøm',subcategories:[]},
+    {id:'internett',label:'Internett',subcategories:[]},
+    {id:'vann',label:'Vann',subcategories:[]},
+    {id:'varme',label:'Varme',subcategories:[]},
+    {id:'renovasjon',label:'Renovasjon',subcategories:[]}
+  ],
+  salary:[
+    {id:'fast_ansatt',label:'Fast ansatt',subcategories:[]},
+    {id:'deltid',label:'Deltid',subcategories:[]},
+    {id:'feriepenger',label:'Feriepenger',subcategories:[]},
+    {id:'arbeidsgiveravgift',label:'Arbeidsgiveravgift',subcategories:[]}
+  ],
+  vat_tax:[
+    {id:'mva_termin',label:'MVA-termin',subcategories:[]},
+    {id:'forskuddsskatt',label:'Forskuddsskatt',subcategories:[]}
+  ],
+  bank_fee:[
+    {id:'kortgebyr',label:'Kortgebyr',subcategories:[]},
+    {id:'kontogebyr',label:'Kontogebyr',subcategories:[]},
+    {id:'transaksjon',label:'Transaksjon',subcategories:[]}
+  ],
+  accounting_fee:[
+    {id:'fiken_abo',label:'Fiken-abonnement',subcategories:[]},
+    {id:'regnskapsforer',label:'Regnskapsfører',subcategories:[]}
+  ],
+  insurance:[
+    {id:'lokale',label:'Lokale',subcategories:[]},
+    {id:'ansvar',label:'Ansvar',subcategories:[]},
+    {id:'ansatt',label:'Ansatt',subcategories:[]}
+  ],
+  subscription:[
+    {id:'software',label:'Software',subcategories:[]},
+    {id:'hosting',label:'Hosting',subcategories:[]},
+    {id:'ai_api',label:'AI API',subcategories:[]}
+  ],
+  service:[
+    {id:'transport',label:'Transport / frakt',subcategories:[]},
+    {id:'renhold',label:'Renhold',subcategories:[]},
+    {id:'vedlikehold',label:'Vedlikehold',subcategories:[]},
+    {id:'marketing',label:'Marketing',subcategories:[]},
+    {id:'it_konsulent',label:'IT-konsulent',subcategories:[]}
+  ],
+  equipment_purchase:[
+    {id:'frys',label:'Frys / Kjøl',subcategories:[]},
+    {id:'pos',label:'POS / Kasse',subcategories:[]},
+    {id:'mobler',label:'Møbler / hyller',subcategories:[]},
+    {id:'it',label:'IT / Tablet',subcategories:[]},
+    {id:'verktoy',label:'Verktøy',subcategories:[]}
+  ],
+  misc:[
+    {id:'annet',label:'Annet',subcategories:[]}
+  ]
+};
+
+function expenseKindLabel(k){return EXPENSE_KIND_LABELS[k]||k}
+
 function paymentMethodLabel(m){return PAYMENT_METHOD_LABELS[m]||(m?m.charAt(0).toUpperCase()+m.slice(1):'')}
 function marginCls(m){return m>=30?'g':m>=20?'o':'r'}
 function marginBadge(m){const c=m>=30?'b-g':m>=20?'b-o':'b-r';return`<span class="b ${c}">${fmtPct(m)}</span>`}
@@ -6504,6 +6599,208 @@ async function confirmScanToInnkjop(){
 function showScanError(msg){
   const el=document.getElementById('scan-error');
   if(el){el.textContent=msg;el.style.display='block';}
+}
+
+// ─────────────────────────────────────────
+// EXPENSES — phase 2a helpers
+// Pure functions: validation, status computation, doc-shape builders,
+// and taxonomy seeding. Defined but NOT called in step 1.
+// Step 2 wires shadow-write + seed. Step 3 wires manual entry form.
+// Step 4 wires recurring scaffold (definitions present, no auto-firing).
+// ─────────────────────────────────────────
+
+function validateExpense(exp){
+  if(!exp||typeof exp!=='object')return{ready:false,reason:'Manglende dokument'};
+  // Universal
+  if(!exp.expenseKind||!EXPENSE_KINDS.includes(exp.expenseKind))return{ready:false,reason:'Ugyldig expenseKind'};
+  if(!exp.supplierName||typeof exp.supplierName!=='string'||!exp.supplierName.trim())return{ready:false,reason:'Mangler leverandør'};
+  if(typeof exp.totalInclVat!=='number'||!isFinite(exp.totalInclVat)||exp.totalInclVat<=0)return{ready:false,reason:'totalInclVat må være > 0'};
+  if(!exp.invoiceDate)return{ready:false,reason:'Mangler fakturadato'};
+  if(!exp.currency)return{ready:false,reason:'Mangler valuta'};
+  if(!VAT_STATUS.includes(exp.vatStatus||'normal'))return{ready:false,reason:'Ugyldig vatStatus'};
+  if((exp.vatStatus||'normal')==='normal'){
+    if(typeof exp.vatAmount!=='number'||!isFinite(exp.vatAmount))return{ready:false,reason:'vatAmount må være tall når vatStatus=normal'};
+  }
+  // Sirrha critical principle: auto-ready NEVER without bilag
+  if(!Array.isArray(exp.originalFiles)||exp.originalFiles.length===0)return{ready:false,reason:'Mangler bilag (originalFiles)'};
+  // Paid-date / paidDateSource must be set together or both null
+  const pdNull=exp.paidDate===null||exp.paidDate===undefined;
+  const psNull=exp.paidDateSource===null||exp.paidDateSource===undefined;
+  if(pdNull!==psNull)return{ready:false,reason:'paidDate og paidDateSource må være satt sammen eller begge null'};
+  if(!psNull&&!PAID_DATE_SOURCE.includes(exp.paidDateSource))return{ready:false,reason:'Ugyldig paidDateSource'};
+  // Per-kind
+  if(exp.expenseKind==='purchase_invoice'){
+    if(!exp.leverandorId)return{ready:false,reason:'leverandorId er påkrevd for purchase_invoice'};
+    if(!Array.isArray(exp.lines)||exp.lines.length===0)return{ready:false,reason:'Minst én linje kreves for purchase_invoice'};
+  } else {
+    // Operating expense kinds — category required
+    if(!exp.categoryId&&!exp.categoryLabel)return{ready:false,reason:'Kategori (id eller label) kreves'};
+  }
+  // Recurring discipline for kinds where periodicity matters
+  if(KINDS_WITH_PERIOD.has(exp.expenseKind)){
+    if(!exp.linkedRecurringId&&exp.confirmedOneOff!==true){
+      return{ready:false,reason:'Marker som en-gang eller koble til mal'};
+    }
+  }
+  return{ready:true,reason:null};
+}
+
+function computeAutoAccountantStatus(exp){
+  // Returns 'ready' if validateExpense passes, else 'missing_info'.
+  // Caller sets 'not_ready' as the literal initial value before this is first computed.
+  // 'reviewed', 'exported', 'archived' are MANUAL transitions — never returned here.
+  return validateExpense(exp).ready?'ready':'missing_info';
+}
+
+function buildExpenseDocFromPurchase(p,sourceHint){
+  // Mirrors a purchases doc into an expense doc (expenseKind='purchase_invoice').
+  // Lines copied literally — no restructuring. sourceHint: 'ai_scan'|'manual'|'innboks'.
+  const now=new Date().toISOString();
+  const exp={
+    expenseKind:'purchase_invoice',
+    supplierId:p.leverandorId||null,
+    supplierName:p.lev||'',
+    categoryId:null,categoryLabel:null,subcategoryId:null,subcategoryLabel:null,
+    invoiceNumber:p.fakturanr||null,
+    invoiceDate:p.dato,
+    dueDate:p.forfallsdato||null,
+    paidDate:null,paidTransactionId:null,paidDateSource:null,paidAmountMatched:null,
+    totalInclVat:0,totalExVat:0,vatAmount:0,
+    vatStatus:'normal',
+    currency:'NOK',
+    operationalStatus:'new',
+    accountantStatus:'not_ready',
+    source:sourceHint||'manual',
+    originalFiles:Array.isArray(p.originalFiles)?p.originalFiles:[],
+    linkedPurchaseId:p.id,
+    linkedRecurringId:null,
+    leverandorId:p.leverandorId||'',
+    lines:Array.isArray(p.lines)?p.lines:[],
+    notes:p.notes||null,
+    createdAt:now,updatedAt:now,
+    reviewedAt:null,exportedAt:null
+  };
+  // Bankaxept V1: paid-at-delivery = settled on invoice date
+  if(p.betaltVedLevering===true){
+    exp.paidDate=p.dato;
+    exp.paidDateSource='manual';
+  }
+  // Derive totals from paper-invoice contract
+  if(typeof calcPurchaseStats==='function'){
+    const s=calcPurchaseStats(p);
+    exp.totalInclVat=+(s.buyInklTotal||0);
+    exp.totalExVat=+(s.buyEksTotal||0);
+    exp.vatAmount=Math.max(0,exp.totalInclVat-exp.totalExVat);
+  }
+  exp.accountantStatus=computeAutoAccountantStatus(exp);
+  return exp;
+}
+
+function buildExpenseDocFromOperatingForm(f){
+  // Builds an expense doc from the step-3 manual entry form's collected fields.
+  // f is a plain object with form field names matching expense schema.
+  // source is always 'manual'. linkedPurchaseId is always null.
+  const now=new Date().toISOString();
+  const kind=f.expenseKind;
+  const exp={
+    expenseKind:kind,
+    supplierId:f.supplierId||null,
+    supplierName:(f.supplierName||'').trim(),
+    categoryId:f.categoryId||null,
+    categoryLabel:f.categoryLabel||null,
+    subcategoryId:f.subcategoryId||null,
+    subcategoryLabel:f.subcategoryLabel||null,
+    invoiceNumber:f.invoiceNumber||null,
+    invoiceDate:f.invoiceDate,
+    dueDate:f.dueDate||null,
+    paidDate:f.paidDate||null,
+    paidTransactionId:f.paidTransactionId||null,
+    paidDateSource:f.paidDateSource||null,
+    paidAmountMatched:(f.paidAmountMatched!=null)?+f.paidAmountMatched:null,
+    totalInclVat:+f.totalInclVat||0,
+    totalExVat:+f.totalExVat||0,
+    vatAmount:+f.vatAmount||0,
+    vatStatus:f.vatStatus||'normal',
+    currency:f.currency||'NOK',
+    operationalStatus:'new',
+    accountantStatus:'not_ready',
+    source:'manual',
+    originalFiles:Array.isArray(f.originalFiles)?f.originalFiles:[],
+    linkedPurchaseId:null,
+    linkedRecurringId:f.linkedRecurringId||null,
+    notes:f.notes||null,
+    createdAt:now,updatedAt:now,
+    reviewedAt:null,exportedAt:null
+  };
+  if(KINDS_WITH_PERIOD.has(kind)){
+    exp.periodStart=f.periodStart||null;
+    exp.periodEnd=f.periodEnd||null;
+  }
+  if(f.confirmedOneOff===true)exp.confirmedOneOff=true;
+  exp.accountantStatus=computeAutoAccountantStatus(exp);
+  return exp;
+}
+
+function buildExpenseDocFromRecurringInstance(t,dateOverride){
+  // Builds an expense doc from a recurring_templates doc.
+  // dateOverride: 'YYYY-MM-DD' for the instance's invoice date; defaults to today.
+  // Does NOT write — caller decides timing.
+  const now=new Date().toISOString();
+  const invDate=dateOverride||today();
+  const exp={
+    expenseKind:t.expenseKind,
+    supplierId:t.supplierId||null,
+    supplierName:t.supplierName||'',
+    categoryId:t.categoryId||null,
+    categoryLabel:t.categoryLabel||null,
+    subcategoryId:null,subcategoryLabel:null,
+    invoiceNumber:null,
+    invoiceDate:invDate,
+    dueDate:null,
+    paidDate:null,paidTransactionId:null,paidDateSource:null,paidAmountMatched:null,
+    totalInclVat:+t.expectedAmountInclVat||0,
+    totalExVat:0,vatAmount:0,
+    vatStatus:t.vatStatus||'normal',
+    currency:'NOK',
+    operationalStatus:'new',
+    accountantStatus:'not_ready',
+    source:'recurring_template',
+    originalFiles:[],
+    linkedPurchaseId:null,
+    linkedRecurringId:t.id,
+    notes:t.notes||null,
+    createdAt:now,updatedAt:now,
+    reviewedAt:null,exportedAt:null
+  };
+  if(KINDS_WITH_PERIOD.has(t.expenseKind)){
+    exp.periodStart=null;
+    exp.periodEnd=null;
+  }
+  exp.accountantStatus=computeAutoAccountantStatus(exp);
+  return exp;
+}
+
+async function ensureExpenseTaxonomySeed(tenantId){
+  // Idempotent. Sentinel-gated via _meta/migrations.expenseTaxonomySeeded.
+  // tenantId param reserved for multi-tenant future; today reads TENANT_ID via tenantCol.
+  try{
+    const sentinelRef=tenantCol('_meta').doc('migrations');
+    const snap=await sentinelRef.get();
+    const sentinel=snap.exists?snap.data():{};
+    if(sentinel.expenseTaxonomySeeded)return;
+    const col=tenantCol('expense_taxonomy');
+    const now=new Date().toISOString();
+    // Per-kind defensive check — handles partial seeds from manual editing of Firestore
+    for(const kind of EXPENSE_KINDS){
+      const ref=col.doc(kind);
+      const ks=await ref.get();
+      if(ks.exists)continue;
+      await ref.set({kind,categories:DEFAULT_EXPENSE_TAXONOMY[kind]||[],updatedAt:now});
+    }
+    await sentinelRef.set({expenseTaxonomySeeded:new Date().toISOString()},{merge:true});
+  }catch(e){
+    console.warn('[expense-taxonomy] seed failed:',e&&e.message);
+  }
 }
 </script>
 
