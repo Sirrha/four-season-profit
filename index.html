@@ -3076,8 +3076,8 @@ function findLeverandorByName(name){
 function renderLeverandorer(){
   const page=document.getElementById('pg-leverandorer');
   const all=dbAll('leverandorer').slice().sort((a,b)=>(a.navn||'').localeCompare(b.navn||'','no'));
-  const prodSuppliers=[...new Set(dbAll('products').map(p=>p.leverandor).filter(x=>x&&x.trim()))];
-  const purchSuppliers=[...new Set(dbAll('purchases').map(p=>p.leverandor).filter(x=>x&&x.trim()))];
+  const prodSuppliers=[...new Set(dbAll('products').map(p=>p.lev).filter(x=>x&&x.trim()))];
+  const purchSuppliers=[...new Set(dbAll('purchases').map(p=>p.lev).filter(x=>x&&x.trim()))];
   const allScanned=[...new Set([...prodSuppliers,...purchSuppliers])];
   const unmigrated=allScanned.filter(s=>!findLeverandorByName(s));
 
@@ -3108,8 +3108,8 @@ function renderLeverandorer(){
   } else {
     html+=`<div class="card"><div style="font-size:10.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px">Alle leverandører</div>`;
     for(const l of all){
-      const purchases=dbAll('purchases').filter(p=>p.leverandorId===l.id||normName(p.leverandor)===normName(l.navn)||(l.aliaser||[]).some(a=>normName(a)===normName(p.leverandor)));
-      const products=dbAll('products').filter(p=>p.leverandorId===l.id||normName(p.leverandor)===normName(l.navn)||(l.aliaser||[]).some(a=>normName(a)===normName(p.leverandor)));
+      const purchases=dbAll('purchases').filter(p=>p.leverandorId===l.id||normName(p.lev)===normName(l.navn)||(l.aliaser||[]).some(a=>normName(a)===normName(p.lev)));
+      const products=dbAll('products').filter(p=>p.leverandorId===l.id||normName(p.lev)===normName(l.navn)||(l.aliaser||[]).some(a=>normName(a)===normName(p.lev)));
       const aliasCount=(l.aliaser||[]).length;
       const pr=l.prisregel||'ask';
       const prBadge=pr==='inkl'?'<span style="background:#e8f5e0;color:#2e7d32;padding:2px 7px;border-radius:5px;font-size:10.5px;font-weight:600;margin-left:6px">inkl. MVA</span>':pr==='eks'?'<span style="background:#e3f2fd;color:#1565c0;padding:2px 7px;border-radius:5px;font-size:10.5px;font-weight:600;margin-left:6px">eks. MVA</span>':'<span style="background:#fff3e0;color:#e65100;padding:2px 7px;border-radius:5px;font-size:10.5px;font-weight:600;margin-left:6px">spør</span>';
@@ -3197,8 +3197,8 @@ async function deleteLeverandorCurrent(){
 }
 
 async function migrateLeverandorer(){
-  const prodSuppliers=[...new Set(dbAll('products').map(p=>p.leverandor).filter(x=>x&&x.trim()))];
-  const purchSuppliers=[...new Set(dbAll('purchases').map(p=>p.leverandor).filter(x=>x&&x.trim()))];
+  const prodSuppliers=[...new Set(dbAll('products').map(p=>p.lev).filter(x=>x&&x.trim()))];
+  const purchSuppliers=[...new Set(dbAll('purchases').map(p=>p.lev).filter(x=>x&&x.trim()))];
   const allScanned=[...new Set([...prodSuppliers,...purchSuppliers])];
   const unmigrated=allScanned.filter(s=>!findLeverandorByName(s));
   if(unmigrated.length===0){showToast('Ingen å migrere','ok');return}
