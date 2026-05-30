@@ -973,6 +973,7 @@ function showApp(){
   document.getElementById('main-app').style.display='block';
   // Run one-shot migrations before showing UI. Fire-and-forget — migration is idempotent (sentinel + per-doc skip), so concurrent tabs are safe.
   migratePaymentsToBankTransactions();
+  ensureExpenseTaxonomySeed(TENANT_ID);  // phase 2a: idempotent, sentinel-gated
   if(!currentUser){
     document.getElementById('login-screen').classList.remove('hidden');
   } else {
@@ -1667,7 +1668,7 @@ function renderInnkjop(){
   el.innerHTML=html;
 }
 function getWeekStart(){const d=new Date();const diff=d.getDate()-(d.getDay()===0?6:d.getDay()-1);d.setDate(diff);return d.toISOString().slice(0,10)}
-async function deleteInnkjop(id){if(!confirm('Slett innkjøp?'))return;await dbDelete('purchases',id);showToast('Slettet')}
+async function deleteInnkjop(id){if(!confirm('Slett innkjøp?'))return;await dbDelete('purchases',id);await shadowDeleteExpense(id);showToast('Slettet')}
 
 // ─────────────────────────────────────────
 // PURCHASE MODAL – KOLLI-BASED
@@ -1675,6 +1676,7 @@ async function deleteInnkjop(id){if(!confirm('Slett innkjøp?'))return;await dbD
 let pLines=[];
 function openInnkjopModal(){
   pLines=[];
+  window._lastFormSource=null;  // phase 2a: clear stale AI scan attribution if user opens manual form
   document.getElementById('inn-dato').value=today();
   ['inn-faktura','inn-forfall','inn-notes'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('inn-lev-legacy').value='';
@@ -1879,13 +1881,17 @@ async function saveInnkjop(){
     }
   }
   const newId=uid();
-  await tenantCol('purchases').doc(newId).set({
+  // Shadow-write phase 2a: capture source attribution once + hoist purchaseData for mirror reuse
+  const _expenseSource=window._lastFormSource||'manual';
+  window._lastFormSource=null;
+  const purchaseData={
     id:newId,dato,fakturanr,forfallsdato:effectiveForfall,
     leverandorId:levId||'',lev:levText,lines,
     betaltVedLevering:paidAtDelivery,
     betalingsmetode:paidAtDelivery?paidMethod:null,
     notes:document.getElementById('inn-notes').value.trim(),opprettet:new Date().toISOString()
-  });
+  };
+  await tenantCol('purchases').doc(newId).set(purchaseData);
   // v21 Fix 2: Auto-sync buyEks/buyInkl on each product from this invoice's lines
   try{
     const productUpdates={};
@@ -1915,6 +1921,7 @@ async function saveInnkjop(){
   // Non-blocking — invoice is already created at this point; upload failures only surface as a toast.
   const filesToUpload=(scanFiles&&scanFiles.length>0)?scanFiles.slice():[];
   scanFiles=[];
+  let _shadowOriginalFiles=[];  // phase 2a: captured for mirror after upload block
   if(filesToUpload.length>0){
     const uploadedFiles=[];
     let failedCount=0;
@@ -1930,6 +1937,7 @@ async function saveInnkjop(){
     if(uploadedFiles.length>0){
       try{
         await tenantCol('purchases').doc(newId).update({originalFiles:uploadedFiles});
+        _shadowOriginalFiles=uploadedFiles;
       }catch(e){
         console.warn('Failed to attach originalFiles to purchase:',e.message);
         failedCount++;
@@ -1939,6 +1947,8 @@ async function saveInnkjop(){
       showToast('Faktura lagret, men ett eller flere vedlegg kunne ikke lastes opp','err');
     }
   }
+  // Shadow-write phase 2a: mirror to expenses (defensive — primary write already committed)
+  await shadowCreateExpense({...purchaseData,originalFiles:_shadowOriginalFiles},_expenseSource);
 }
 
 // ─────────────────────────────────────────
@@ -2127,6 +2137,7 @@ async function deletePurchase(id){
   if(!confirm('Slett hele fakturaen?\n\n'+lbl+'\n'+(p.lines?.length||0)+' produktlinjer\n\nDette kan ikke angres.'))return;
   try{
     await tenantCol('purchases').doc(id).delete();
+    await shadowDeleteExpense(id);  // phase 2a shadow
     showToast('Faktura slettet');
     closeModal('ov-detail');
   } catch(e){
@@ -2206,14 +2217,16 @@ async function saveEditHeader(id){
   const paidMethod=paidAtDelivery?document.getElementById('edith-paid-method').value:null;
   const effectiveForfall=paidAtDelivery?dato:forfall;
   if(!dato){showToast('Dato kreves','err');return}
+  const headerUpdate={
+    leverandorId:levId||'',
+    lev:lev||'',
+    fakturanr,dato,forfallsdato:effectiveForfall,notes,
+    betaltVedLevering:paidAtDelivery,
+    betalingsmetode:paidAtDelivery?paidMethod:null
+  };
   try{
-    await dbUpdate('purchases',id,{
-      leverandorId:levId||'',
-      lev:lev||'',
-      fakturanr,dato,forfallsdato:effectiveForfall,notes,
-      betaltVedLevering:paidAtDelivery,
-      betalingsmetode:paidAtDelivery?paidMethod:null
-    });
+    await dbUpdate('purchases',id,headerUpdate);
+    await shadowUpdateExpense({...p,...headerUpdate,id},'manual');  // phase 2a shadow
     showToast('Faktura-hode oppdatert');
     showInvoiceDetail(id);
   } catch(e){
@@ -2299,6 +2312,7 @@ async function saveEditLine(purchaseId,lineIdx){
   };
   try{
     await dbUpdate('purchases',purchaseId,{lines});
+    await shadowUpdateExpense({...p,lines,id:purchaseId},'manual');  // phase 2a shadow
     // Also update product's salgEks/salgInkl + buyEks/buyInkl
     const productId=lines[lineIdx].productId;
     if(productId){
@@ -2340,6 +2354,7 @@ async function deleteInvoiceLine(purchaseId,lineIdx){
   lines.splice(lineIdx,1);
   try{
     await dbUpdate('purchases',purchaseId,{lines});
+    await shadowUpdateExpense({...p,lines,id:purchaseId},'manual');  // phase 2a shadow
     showToast('Linje slettet');
     showInvoiceDetail(purchaseId);
   } catch(e){
@@ -2420,6 +2435,7 @@ async function saveNewLine(purchaseId){
   lines.push(newLine);
   try{
     await dbUpdate('purchases',purchaseId,{lines});
+    await shadowUpdateExpense({...p,lines,id:purchaseId},'manual');  // phase 2a shadow
     showToast('Linje lagt til');
     showInvoiceDetail(purchaseId);
   } catch(e){
@@ -6593,6 +6609,7 @@ async function confirmScanToInnkjop(){
   } else {
     renderPLines();
   }
+  window._lastFormSource='ai_scan';  // phase 2a: source attribution for shadow-write (set at end, after any openInnkjopModal clear)
   const suffix=rule==='eks'?' (eks. omregnet)':'';
   showToast('Overført '+pLines.length+' linjer — klikk "Lagre faktura" for å registrere'+suffix);
 }
@@ -6600,6 +6617,75 @@ async function confirmScanToInnkjop(){
 function showScanError(msg){
   const el=document.getElementById('scan-error');
   if(el){el.textContent=msg;el.style.display='block';}
+}
+
+// ─────────────────────────────────────────
+// EXPENSES — phase 2a shadow-write
+// CRUD mirror between purchases (legacy, canonical) and expenses (mirror).
+// Primary purchases write happens first in its existing flow; shadow
+// write here is defensive — failures log via console.error but never throw.
+// ─────────────────────────────────────────
+
+function findExpenseByLinkedPurchase(purchaseId){
+  // Lookup by linkedPurchaseId — the mirror ↔ purchases link.
+  return dbAll('expenses').find(e=>e.linkedPurchaseId===purchaseId);
+}
+
+async function shadowCreateExpense(purchase,sourceHint){
+  try{
+    const exp=buildExpenseDocFromPurchase(purchase,sourceHint);
+    const id=await dbAdd('expenses',exp);
+    // Optimistic local cache update — bridges Firestore snapshot latency
+    // so a same-tick UPDATE sees the mirror and doesn't duplicate it.
+    LOCAL.expenses=[...(LOCAL.expenses||[]),{...exp,id}];
+    console.log('[shadow-write] CREATE ok:',purchase.id,'→',id);
+    return id;
+  }catch(e){
+    console.error('[shadow-write] CREATE failed:',purchase.id,e&&e.message,e);
+    return null;
+  }
+}
+
+async function shadowUpdateExpense(purchase,sourceHint){
+  try{
+    const existing=findExpenseByLinkedPurchase(purchase.id);
+    if(!existing){
+      // Pre-shadow-write era: mirror missing on UPDATE → create it now (spec rule).
+      const exp=buildExpenseDocFromPurchase(purchase,sourceHint);
+      const id=await dbAdd('expenses',exp);
+      LOCAL.expenses=[...(LOCAL.expenses||[]),{...exp,id}];
+      console.log('[shadow-write] UPDATE→CREATE ok:',purchase.id,'→',id,'(mirror was missing)');
+      return id;
+    }
+    // Rebuild from fresh purchase state; preserve immutable + accountant lifecycle.
+    const fresh=buildExpenseDocFromPurchase(purchase,existing.source||sourceHint);
+    fresh.linkedPurchaseId=purchase.id;  // defensive — ensure linkedPurchaseId preserved
+    fresh.createdAt=existing.createdAt;
+    fresh.reviewedAt=existing.reviewedAt||null;
+    fresh.exportedAt=existing.exportedAt||null;
+    fresh.updatedAt=new Date().toISOString();
+    await dbUpdate('expenses',existing.id,fresh);
+    console.log('[shadow-write] UPDATE ok:',purchase.id,'→',existing.id);
+    return existing.id;
+  }catch(e){
+    console.error('[shadow-write] UPDATE failed:',purchase.id,e&&e.message,e);
+    return null;
+  }
+}
+
+async function shadowDeleteExpense(purchaseId){
+  // Locate mirror by linkedPurchaseId; delete if found; no-op otherwise.
+  try{
+    const existing=findExpenseByLinkedPurchase(purchaseId);
+    if(!existing){
+      console.log('[shadow-write] DELETE no-op:',purchaseId,'(no mirror found)');
+      return;
+    }
+    await dbDelete('expenses',existing.id);
+    console.log('[shadow-write] DELETE ok:',purchaseId,'→',existing.id);
+  }catch(e){
+    console.error('[shadow-write] DELETE failed:',purchaseId,e&&e.message,e);
+  }
 }
 
 // ─────────────────────────────────────────
