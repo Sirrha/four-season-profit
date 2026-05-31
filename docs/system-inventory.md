@@ -1,6 +1,8 @@
 # System-inventar — Four Season AS
 
-**Last updated**: 2026-05-23, after Bankaxept Level 1 (paid-at-delivery detection + UI for AI scanner + manual entry form).
+**Last updated**: 2026-05-31, after Utgifter phase 2a step 3 (manual operating-expense entry form + FAB action sheet on Utgifter-siden).
+
+- **Siste endring**: Phase 2a step 3 (2026-05-31) — manuell driftsutgift-entry. To nye modaler: **`ov-utgifter-actions`** (FAB bottom-sheet på Utgifter — `📄 Skann faktura` / `✏️ Legg til manuelt` / `📥 Åpne innboks`) og **`ov-ny-utgift`** (selve skjemaet — kind/leverandør/datoer/total/MVA/kategori/periode/notater/bilag). FAB-map (linje 1296) fikk `utgifter:openUtgifterFabActionSheet`-entry (tidligere udekket → FAB var no-op på Utgifter). Nye funksjoner i nytt block etter `ensureExpenseTaxonomySeed`: `openUtgifterFabActionSheet`, `openNyUtgiftForm`, `onNyUtgiftKindChange`, `onNyUtgiftCategoryChange`, `onNyUtgiftFilesChosen`, `saveNyUtgift`. Skjemaet bygger doc via `buildExpenseDocFromOperatingForm`, leverandør-autocomplete via HTML5 `<datalist>` over `LOCAL.leverandorer` (eksakt case-insensitive name-match resolver `supplierId`, ellers free-text-only), kategori-dropdown sourcer fra `LOCAL.expense_taxonomy[kind].categories`, periode-rad vises kun for `KINDS_WITH_PERIOD`. For periode-kinds auto-settes `confirmedOneOff:true` (recurring template-UI er senere). Filopplasting via ny Storage V1-helper **`uploadExpenseFile(expenseId,file)`** (parallell til `uploadInvoiceFile` på linje 888) som lagrer under `tenants/{TID}/expenses/{id}/{ts-filename}` med samme metadata-shape som `originalFiles[]` forventer. **Save-semantikk**: prevaliderer kun supplier+date+total (toast + behold modal hvis disse mangler); resten faller gjennom til `accountantStatus='missing_info'` med toast "Utgift lagret — mangler: X" — `missing_info` er førsteklasses tilstand, ikke feil. Skriver kun til `expenses` (ingen `purchases`-mirror — operating expenses lever bare i expenses-kolleksjonen). Doc-ID reserveres via `tenantCol('expenses').doc()` før upload slik at filsti kan bruke endelig ID, og doc skrives én gang med `originalFiles` allerede i plass (unngår mellomtilstand der listeneren ser `missing_info` som umiddelbart flippes til `ready`).
 
 Dette dokumentet kartlegger hva som faktisk finnes i `index.html` (produksjon, sormena.no). Mål: at Soren (chat) og Claude Code skal jobbe ut fra samme bilde av systemet og slippe å duplikere arbeid eller spørre om ting som allerede er bygget.
 
@@ -147,6 +149,8 @@ Linjenumre er ferske per 2026-05-16 (etter Bank Scanner V1 Session 1.6). Filen v
 | `ov-vakt` | Legg til vakt | 744 | Timeliste (v22) |
 | `ov-leverandor` | Ny/Rediger leverandør | 766 | Leverandører |
 | `ov-betaling` | Ny betaling (2-fase) | 804 | Betalinger (v27) |
+| `ov-utgifter-actions` | Utgifter FAB action sheet (Skann faktura / Legg til manuelt / Åpne innboks) | ~830 | Utgifter (phase 2a step 3) |
+| `ov-ny-utgift` | Ny utgift — manuell driftsutgift (operating expense form) | ~845 | Utgifter (phase 2a step 3) |
 | `ov-scanner` | AI-skanner | 5972 | Faktura + Z-rapport + Bank statement (V1 Session 1+1.5) |
 
 ## Kalkulasjons-motor (linje 1066–1153)

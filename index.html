@@ -827,6 +827,81 @@ select.fi:focus{background-color:#fff}
 
 </div></div>
 
+<!-- Utgifter FAB action sheet (phase 2a step 3) -->
+<div class="ov" id="ov-utgifter-actions">
+<div class="modal">
+  <div class="mh"></div>
+  <div class="mt">Ny utgift</div>
+  <button class="btn btn-g btn-f" style="margin-bottom:10px;justify-content:flex-start;padding:14px 16px;font-size:14px" onclick="closeModal('ov-utgifter-actions');openScanner('faktura')">📄 Skann faktura</button>
+  <button class="btn btn-g btn-f" style="margin-bottom:10px;justify-content:flex-start;padding:14px 16px;font-size:14px" onclick="closeModal('ov-utgifter-actions');openNyUtgiftForm()">✏️ Legg til manuelt</button>
+  <button class="btn btn-g btn-f" style="justify-content:flex-start;padding:14px 16px;font-size:14px" onclick="closeModal('ov-utgifter-actions');openInnboksUpload()">📥 Åpne innboks</button>
+</div></div>
+
+<!-- Ny utgift (manuell driftsutgift) — phase 2a step 3 -->
+<div class="ov" id="ov-ny-utgift">
+<div class="modal">
+  <div class="mh"></div>
+  <div class="mt">Ny utgift</div>
+
+  <div class="fg"><label class="fl">Type utgift *</label>
+    <select class="fi" id="nu-kind" onchange="onNyUtgiftKindChange()"></select>
+  </div>
+
+  <div class="fg"><label class="fl">Leverandør *</label>
+    <input class="fi" id="nu-supplier-name" list="nu-lev-datalist" placeholder="f.eks. Eidsiva Strøm AS" autocomplete="off">
+    <datalist id="nu-lev-datalist"></datalist>
+    <div style="font-size:10.5px;color:var(--muted);margin-top:4px">Velg fra registeret eller skriv fritt</div>
+  </div>
+
+  <div class="fr">
+    <div class="fg"><label class="fl">Fakturadato *</label><input class="fi" id="nu-invoice-date" type="date"></div>
+    <div class="fg"><label class="fl">Forfallsdato</label><input class="fi" id="nu-due-date" type="date"></div>
+  </div>
+
+  <div class="fr">
+    <div class="fg"><label class="fl">Total inkl. MVA *</label><input class="fi" id="nu-total-incl" type="number" step="0.01" min="0" inputmode="decimal" placeholder="0,00"></div>
+    <div class="fg"><label class="fl">MVA-beløp</label><input class="fi" id="nu-vat-amount" type="number" step="0.01" min="0" inputmode="decimal" placeholder="0,00"></div>
+  </div>
+
+  <div class="fg"><label class="fl">MVA-status</label>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;padding:4px 0">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="nu-vat-status" value="normal" checked> Normal</label>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="nu-vat-status" value="vatUnknown"> Ukjent</label>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="nu-vat-status" value="vatNotApplicable"> Ikke aktuelt</label>
+    </div>
+  </div>
+
+  <div class="fg"><label class="fl">Kategori</label>
+    <select class="fi" id="nu-category" onchange="onNyUtgiftCategoryChange()"></select>
+    <div style="font-size:10.5px;color:var(--muted);margin-top:4px">Påkrevd for regnskapsklar status</div>
+  </div>
+
+  <div class="fg" id="nu-subcategory-row" style="display:none"><label class="fl">Underkategori</label>
+    <select class="fi" id="nu-subcategory"></select>
+  </div>
+
+  <div class="fr" id="nu-period-row" style="display:none">
+    <div class="fg"><label class="fl">Periode start</label><input class="fi" id="nu-period-start" type="date"></div>
+    <div class="fg"><label class="fl">Periode slutt</label><input class="fi" id="nu-period-end" type="date"></div>
+  </div>
+
+  <div class="fg"><label class="fl">Notater</label>
+    <textarea class="fi" id="nu-notes" rows="2" placeholder="Valgfritt…" style="resize:vertical;font-family:inherit"></textarea>
+  </div>
+
+  <div class="fg"><label class="fl">Bilag (PDF eller bilde)</label>
+    <input type="file" id="nu-file-input" accept="image/*,.pdf" multiple onchange="onNyUtgiftFilesChosen(this.files)" style="display:none">
+    <button type="button" class="btn btn-g btn-f btn-s" onclick="document.getElementById('nu-file-input').click()" style="margin-bottom:6px">📎 Velg fil(er)…</button>
+    <div id="nu-file-list" style="font-size:11.5px;color:var(--muted)"></div>
+    <div style="font-size:10.5px;color:var(--muted);margin-top:4px">Påkrevd for regnskapsklar status</div>
+  </div>
+
+  <div class="fr" style="margin-top:6px">
+    <button class="btn btn-g btn-f" onclick="closeModal('ov-ny-utgift')">Avbryt</button>
+    <button class="btn btn-p btn-f" id="nu-save-btn" onclick="saveNyUtgift()">💾 Lagre</button>
+  </div>
+</div></div>
+
 <!-- ══════════════════════════════════════
      JAVASCRIPT
 ══════════════════════════════════════ -->
@@ -895,6 +970,24 @@ async function uploadInvoiceFile(purchaseId, file) {
 
   const snapshot = await ref.put(file);
 
+  return {
+    path: 'tenants/' + TENANT_ID + '/' + path,
+    filename: filename,
+    size: file.size || 0,
+    mimeType: file.type || 'application/octet-stream',
+    uploadedAt: new Date().toISOString()
+  };
+}
+
+// Upload a File/Blob to tenants/{TENANT_ID}/expenses/{expenseId}/{ts-filename}.
+// Returns the originalFile metadata object to attach to an expenses doc (same shape as uploadInvoiceFile).
+async function uploadExpenseFile(expenseId, file) {
+  if (!storage) throw new Error('Storage not initialized');
+  if (!file) throw new Error('No file provided');
+  const filename = file.name || 'unknown.pdf';
+  const path = 'expenses/' + expenseId + '/' + Date.now() + '-' + filename;
+  const ref = tenantStorageRef(path);
+  await ref.put(file);
   return {
     path: 'tenants/' + TENANT_ID + '/' + path,
     filename: filename,
@@ -1293,7 +1386,7 @@ function handleHdrAdd(){
 }
 document.querySelectorAll('.nb').forEach(b=>b.addEventListener('click',()=>goTo(b.dataset.pg)));
 document.getElementById('fabBtn').addEventListener('click',()=>{
-  const map={produkter:openProduktModal,leverandorer:openLeverandorModal,innboks:openInnboksUpload,innkjop:openInnkjopModal,salg:openDagsalgModal,svinn:openSvinnModal,oversikt:openInnkjopModal,timeliste:openAnsattModal,betalinger:openBetalingModal};
+  const map={produkter:openProduktModal,leverandorer:openLeverandorModal,innboks:openInnboksUpload,innkjop:openInnkjopModal,salg:openDagsalgModal,svinn:openSvinnModal,oversikt:openInnkjopModal,timeliste:openAnsattModal,betalinger:openBetalingModal,utgifter:openUtgifterFabActionSheet};
   if(map[currentPage])map[currentPage]();
 });
 function handleExport(){if(currentPage==='produkter')exportCSV('products');else if(currentPage==='innkjop')exportCSV('purchases')}
@@ -6883,6 +6976,147 @@ async function ensureExpenseTaxonomySeed(tenantId){
     await sentinelRef.set({expenseTaxonomySeeded:new Date().toISOString()},{merge:true});
   }catch(e){
     console.warn('[expense-taxonomy] seed failed:',e&&e.message);
+  }
+}
+
+// ─────────────────────────────────────────
+// EXPENSES — phase 2a step 3: manual entry form
+// FAB action sheet wiring + "Ny utgift" form for operating expenses.
+// Writes only to `expenses` collection (no purchases mirror).
+// ─────────────────────────────────────────
+let _nyUtgiftFiles=[];
+
+function openUtgifterFabActionSheet(){openModal('ov-utgifter-actions')}
+
+function openNyUtgiftForm(){
+  _nyUtgiftFiles=[];
+  const kindSel=document.getElementById('nu-kind');
+  kindSel.innerHTML=EXPENSE_KINDS
+    .filter(k=>k!=='purchase_invoice')
+    .map(k=>`<option value="${k}"${k==='misc'?' selected':''}>${EXPENSE_KIND_LABELS[k]||k}</option>`)
+    .join('');
+  const dl=document.getElementById('nu-lev-datalist');
+  dl.innerHTML=dbAll('leverandorer')
+    .slice().sort((a,b)=>(a.navn||'').localeCompare(b.navn||'','no'))
+    .map(l=>`<option value="${(l.navn||'').replace(/"/g,'&quot;')}">`)
+    .join('');
+  document.getElementById('nu-supplier-name').value='';
+  document.getElementById('nu-invoice-date').value=today();
+  document.getElementById('nu-due-date').value='';
+  document.getElementById('nu-total-incl').value='';
+  document.getElementById('nu-vat-amount').value='';
+  document.querySelector('input[name="nu-vat-status"][value="normal"]').checked=true;
+  document.getElementById('nu-period-start').value='';
+  document.getElementById('nu-period-end').value='';
+  document.getElementById('nu-notes').value='';
+  document.getElementById('nu-file-input').value='';
+  document.getElementById('nu-file-list').innerHTML='';
+  onNyUtgiftKindChange();
+  openModal('ov-ny-utgift');
+}
+
+function onNyUtgiftKindChange(){
+  const kind=document.getElementById('nu-kind').value;
+  const tax=dbAll('expense_taxonomy').find(t=>t.kind===kind);
+  const cats=(tax&&Array.isArray(tax.categories))?tax.categories:[];
+  const catSel=document.getElementById('nu-category');
+  catSel.innerHTML='<option value="">— Velg kategori —</option>'+
+    cats.map(c=>`<option value="${c.id}" data-label="${(c.label||'').replace(/"/g,'&quot;')}">${c.label||c.id}</option>`).join('');
+  document.getElementById('nu-subcategory-row').style.display='none';
+  document.getElementById('nu-subcategory').innerHTML='';
+  document.getElementById('nu-period-row').style.display=KINDS_WITH_PERIOD.has(kind)?'grid':'none';
+}
+
+function onNyUtgiftCategoryChange(){
+  const kind=document.getElementById('nu-kind').value;
+  const catId=document.getElementById('nu-category').value;
+  const tax=dbAll('expense_taxonomy').find(t=>t.kind===kind);
+  const cat=tax&&Array.isArray(tax.categories)?tax.categories.find(c=>c.id===catId):null;
+  const subs=(cat&&Array.isArray(cat.subcategories))?cat.subcategories:[];
+  const row=document.getElementById('nu-subcategory-row');
+  const sel=document.getElementById('nu-subcategory');
+  if(subs.length===0){row.style.display='none';sel.innerHTML='';return}
+  sel.innerHTML='<option value="">— Velg —</option>'+
+    subs.map(s=>`<option value="${s.id}" data-label="${(s.label||'').replace(/"/g,'&quot;')}">${s.label||s.id}</option>`).join('');
+  row.style.display='block';
+}
+
+function onNyUtgiftFilesChosen(fileList){
+  _nyUtgiftFiles=fileList?Array.from(fileList):[];
+  const box=document.getElementById('nu-file-list');
+  if(!_nyUtgiftFiles.length){box.innerHTML='';return}
+  box.innerHTML=_nyUtgiftFiles.map(f=>`📎 ${escapeHtml(f.name)} <span style="color:var(--muted)">(${Math.round(f.size/1024)} KB)</span>`).join('<br>');
+}
+
+async function saveNyUtgift(){
+  const btn=document.getElementById('nu-save-btn');
+  const kind=document.getElementById('nu-kind').value;
+  const supplierName=document.getElementById('nu-supplier-name').value.trim();
+  const invoiceDate=document.getElementById('nu-invoice-date').value;
+  const dueDate=document.getElementById('nu-due-date').value||null;
+  const totalInclVat=parseFloat(document.getElementById('nu-total-incl').value)||0;
+  const vatAmountRaw=document.getElementById('nu-vat-amount').value;
+  const vatAmount=vatAmountRaw===''?0:(parseFloat(vatAmountRaw)||0);
+  const vatStatus=document.querySelector('input[name="nu-vat-status"]:checked')?.value||'normal';
+  const catSel=document.getElementById('nu-category');
+  const catOpt=catSel.options[catSel.selectedIndex];
+  const categoryId=catSel.value||null;
+  const categoryLabel=categoryId?(catOpt&&catOpt.dataset.label)||null:null;
+  const subSel=document.getElementById('nu-subcategory');
+  const subOpt=subSel.options[subSel.selectedIndex];
+  const subcategoryId=subSel.value||null;
+  const subcategoryLabel=subcategoryId?(subOpt&&subOpt.dataset.label)||null:null;
+  const supplierMatch=dbAll('leverandorer').find(l=>(l.navn||'').toLowerCase()===supplierName.toLowerCase());
+  const supplierId=supplierMatch?supplierMatch.id:null;
+  if(!supplierName){showToast('Mangler leverandør','err');return}
+  if(!invoiceDate){showToast('Mangler fakturadato','err');return}
+  if(!(totalInclVat>0)){showToast('Total inkl. MVA må være > 0','err');return}
+  const formData={
+    expenseKind:kind,
+    supplierId,supplierName,
+    invoiceDate,dueDate,
+    totalInclVat,
+    totalExVat:Math.max(0,totalInclVat-vatAmount),
+    vatAmount,
+    vatStatus,
+    categoryId,categoryLabel,subcategoryId,subcategoryLabel,
+    notes:document.getElementById('nu-notes').value.trim()||null,
+    originalFiles:[],
+    currency:'NOK'
+  };
+  if(KINDS_WITH_PERIOD.has(kind)){
+    formData.periodStart=document.getElementById('nu-period-start').value||null;
+    formData.periodEnd=document.getElementById('nu-period-end').value||null;
+    formData.confirmedOneOff=true;
+  }
+  btn.disabled=true;
+  try{
+    const ref=tenantCol('expenses').doc();
+    const expenseId=ref.id;
+    const uploaded=[];
+    if(_nyUtgiftFiles.length>0){
+      for(const f of _nyUtgiftFiles){
+        try{uploaded.push(await uploadExpenseFile(expenseId,f))}
+        catch(e){console.warn('uploadExpenseFile failed:',f.name,e&&e.message)}
+      }
+      if(uploaded.length<_nyUtgiftFiles.length){
+        showToast('Ett eller flere vedlegg kunne ikke lastes opp','err');
+      }
+    }
+    formData.originalFiles=uploaded;
+    const doc=buildExpenseDocFromOperatingForm(formData);
+    doc.id=expenseId;
+    setSyncing();
+    await ref.set(doc);
+    const v=validateExpense(doc);
+    closeModal('ov-ny-utgift');
+    if(v.ready)showToast('Utgift lagret og regnskapsklar');
+    else showToast('Utgift lagret — mangler: '+v.reason);
+  }catch(e){
+    console.error('saveNyUtgift failed:',e);
+    showToast('Lagring feilet: '+(e.message||'ukjent feil'),'err');
+  }finally{
+    btn.disabled=false;
   }
 }
 </script>
