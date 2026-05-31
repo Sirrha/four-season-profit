@@ -6635,9 +6635,6 @@ async function shadowCreateExpense(purchase,sourceHint){
   try{
     const exp=buildExpenseDocFromPurchase(purchase,sourceHint);
     const id=await dbAdd('expenses',exp);
-    // Optimistic local cache update — bridges Firestore snapshot latency
-    // so a same-tick UPDATE sees the mirror and doesn't duplicate it.
-    LOCAL.expenses=[...(LOCAL.expenses||[]),{...exp,id}];
     console.log('[shadow-write] CREATE ok:',purchase.id,'→',id);
     return id;
   }catch(e){
@@ -6653,7 +6650,6 @@ async function shadowUpdateExpense(purchase,sourceHint){
       // Pre-shadow-write era: mirror missing on UPDATE → create it now (spec rule).
       const exp=buildExpenseDocFromPurchase(purchase,sourceHint);
       const id=await dbAdd('expenses',exp);
-      LOCAL.expenses=[...(LOCAL.expenses||[]),{...exp,id}];
       console.log('[shadow-write] UPDATE→CREATE ok:',purchase.id,'→',id,'(mirror was missing)');
       return id;
     }
