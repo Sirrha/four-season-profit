@@ -1040,18 +1040,22 @@ function initFirebase(cfg){
   }
 }
 
-let listenersReady=0;
+const firstSnapshotSeen={};  // per-collection first-snapshot flag (phase 2b-fix)
 function startListeners(){
-  listenersReady=0;
+  // Reset per-collection flags so re-starting listeners (tenant switch, etc.) works.
+  Object.keys(firstSnapshotSeen).forEach(k=>delete firstSnapshotSeen[k]);
   const cols=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter','payments','bankTransactions','expenses','recurring_templates','expense_taxonomy'];
   cols.forEach(col=>{
     listeners[col]=tenantCol(col).onSnapshot(snap=>{
       LOCAL[col]=snap.docs.map(d=>({id:d.id,...d.data()}));
-      listenersReady++;
-      if(listenersReady>=cols.length){
-        showApp();
-      } else {
-        renderIfActive(col);
+      // Fire showApp() exactly once — when the FIRST snapshot of EVERY collection has landed.
+      // Subsequent snapshots only re-render the active page; previously this re-fired showApp()
+      // on every write, which created the Phase 2b backfill duplication storm (74afaba).
+      if(!firstSnapshotSeen[col]){
+        firstSnapshotSeen[col]=true;
+        if(cols.every(c=>firstSnapshotSeen[c])){
+          showApp();
+        }
       }
       renderIfActive(col);
       setSynced();
@@ -1061,13 +1065,17 @@ function startListeners(){
   });
 }
 
+let _appShown=false;  // belt-and-braces guard against re-entry into showApp() (phase 2b-fix)
 function showApp(){
+  if(_appShown)return;
+  _appShown=true;
   document.getElementById('loading-screen').classList.add('hidden');
   document.getElementById('main-app').style.display='block';
   // Run one-shot migrations before showing UI. Fire-and-forget — migration is idempotent (sentinel + per-doc skip), so concurrent tabs are safe.
   migratePaymentsToBankTransactions();
   ensureExpenseTaxonomySeed(TENANT_ID);  // phase 2a: idempotent, sentinel-gated
   backfillPurchasesToExpenses();         // phase 2b: idempotent, sentinel-gated
+  dedupeMigratedExpenseMirrors();        // phase 2b-fix: one-shot cleanup of race duplicates
   if(!currentUser){
     document.getElementById('login-screen').classList.remove('hidden');
   } else {
@@ -5116,7 +5124,9 @@ async function backfillPurchasesToExpenses(){
       try{
         if(mirroredPurchaseIds.has(p.id)){skipped++;continue}
         const exp=buildExpenseDocFromPurchase(p,'migrated_from_purchase');
-        await dbAdd('expenses',exp);
+        // Deterministic ID makes the backfill structurally idempotent: concurrent
+        // invocations all write to the same doc, last-write-wins, never duplicates.
+        await tenantCol('expenses').doc('mirror-'+p.id).set({...exp,id:'mirror-'+p.id});
         created++;
       }catch(e){
         failed++;
@@ -5130,6 +5140,76 @@ async function backfillPurchasesToExpenses(){
   }catch(e){
     console.error('[backfill] purchases → expenses failed:',e);
     showToast('Backfill av utgifter feilet — prøver igjen ved neste oppstart','err');
+  }
+}
+
+async function dedupeMigratedExpenseMirrors(){
+  // Phase 2b-fix: one-shot cleanup of race-duplicated expense mirrors (commit 74afaba
+  // produced 558 docs for 38 purchases due to a showApp() re-entry loop in startListeners).
+  // Deletes ALL migrated_from_purchase docs (raced auto-IDs) and recreates exactly one
+  // per affected purchase using deterministic 'mirror-<purchaseId>' IDs. End state:
+  // every backfilled purchase has one mirror with a predictable ID.
+  // Idempotent via _meta/migrations.expenseMirrorsDedupedAt.
+  try{
+    const sentinelRef=tenantCol('_meta').doc('migrations');
+    const snap=await sentinelRef.get();
+    const sentinel=snap.exists?snap.data():{};
+    if(sentinel.expenseMirrorsDedupedAt){
+      console.log('[dedup-mirrors] already complete, skipping');
+      return;
+    }
+    // Authoritative reads — defense in depth against any subtle bug in the Fix 1 listener.
+    const expSnap=await tenantCol('expenses').get();
+    const toDelete=[];
+    const linkedPurchaseIds=new Set();
+    expSnap.docs.forEach(d=>{
+      const data=d.data();
+      if(data.source==='migrated_from_purchase'){
+        toDelete.push(d.id);
+        if(data.linkedPurchaseId)linkedPurchaseIds.add(data.linkedPurchaseId);
+      }
+    });
+    if(toDelete.length===0){
+      await sentinelRef.set({expenseMirrorsDedupedAt:new Date().toISOString()},{merge:true});
+      console.log('[dedup-mirrors] nothing to clean up');
+      return;
+    }
+    let deleted=0,created=0,failed=0;
+    for(const id of toDelete){
+      try{
+        await tenantCol('expenses').doc(id).delete();
+        deleted++;
+      }catch(e){
+        failed++;
+        console.error('[dedup-mirrors] delete failed for',id,e&&e.message);
+      }
+    }
+    const purchasesSnap=await tenantCol('purchases').get();
+    const purchases=purchasesSnap.docs.map(d=>({id:d.id,...d.data()}));
+    const purchasesById={};
+    purchases.forEach(p=>{purchasesById[p.id]=p});
+    for(const purchaseId of linkedPurchaseIds){
+      const p=purchasesById[purchaseId];
+      if(!p){
+        console.warn('[dedup-mirrors] source purchase missing, skipping recreate:',purchaseId);
+        continue;
+      }
+      try{
+        const exp=buildExpenseDocFromPurchase(p,'migrated_from_purchase');
+        await tenantCol('expenses').doc('mirror-'+p.id).set({...exp,id:'mirror-'+p.id});
+        created++;
+      }catch(e){
+        failed++;
+        console.error('[dedup-mirrors] recreate failed for',purchaseId,e&&e.message);
+      }
+    }
+    if(failed===0){
+      await sentinelRef.set({expenseMirrorsDedupedAt:new Date().toISOString()},{merge:true});
+    }
+    console.log('[dedup-mirrors] deleted:',deleted,'created:',created,'failed:',failed);
+  }catch(e){
+    console.error('[dedup-mirrors] failed:',e);
+    showToast('Oppdrydding av utgift-speil feilet — prøver igjen','err');
   }
 }
 
