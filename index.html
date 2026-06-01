@@ -1067,6 +1067,7 @@ function showApp(){
   // Run one-shot migrations before showing UI. Fire-and-forget — migration is idempotent (sentinel + per-doc skip), so concurrent tabs are safe.
   migratePaymentsToBankTransactions();
   ensureExpenseTaxonomySeed(TENANT_ID);  // phase 2a: idempotent, sentinel-gated
+  backfillPurchasesToExpenses();         // phase 2b: idempotent, sentinel-gated
   if(!currentUser){
     document.getElementById('login-screen').classList.remove('hidden');
   } else {
@@ -5082,6 +5083,53 @@ async function migratePaymentsToBankTransactions(){
   }catch(e){
     console.error('[migration] payments → bankTransactions failed:',e);
     showToast('Migrasjon av betalinger feilet — prøver igjen ved neste oppstart','err');
+  }
+}
+
+async function backfillPurchasesToExpenses(){
+  // Phase 2b: one-shot mirror of existing purchases into expenses for any
+  // purchase that predates shadow-write (bc8e13a, 2026-05-26). Idempotent —
+  // sentinel-gated, and the per-purchase skip uses an authoritative Firestore
+  // read of linkedPurchaseIds so we don't race the expenses listener.
+  try{
+    const sentinelRef=tenantCol('_meta').doc('migrations');
+    const snap=await sentinelRef.get();
+    const sentinel=snap.exists?snap.data():{};
+    if(sentinel.purchasesBackfilledAt){
+      console.log('[backfill] already complete, skipping');
+      return;
+    }
+    const purchases=dbAll('purchases');
+    if(purchases.length===0){
+      await sentinelRef.set({purchasesBackfilledAt:new Date().toISOString()},{merge:true});
+      console.log('[backfill] purchases → expenses: 0 records (empty source)');
+      return;
+    }
+    const existingSnap=await tenantCol('expenses').get();
+    const mirroredPurchaseIds=new Set();
+    existingSnap.docs.forEach(d=>{
+      const data=d.data();
+      if(data&&data.linkedPurchaseId)mirroredPurchaseIds.add(data.linkedPurchaseId);
+    });
+    let created=0,skipped=0,failed=0;
+    for(const p of purchases){
+      try{
+        if(mirroredPurchaseIds.has(p.id)){skipped++;continue}
+        const exp=buildExpenseDocFromPurchase(p,'migrated_from_purchase');
+        await dbAdd('expenses',exp);
+        created++;
+      }catch(e){
+        failed++;
+        console.error('[backfill] failed for purchase',p.id,e&&e.message);
+      }
+    }
+    if(failed===0){
+      await sentinelRef.set({purchasesBackfilledAt:new Date().toISOString()},{merge:true});
+    }
+    console.log('[backfill] created:',created,'skipped:',skipped,'failed:',failed);
+  }catch(e){
+    console.error('[backfill] purchases → expenses failed:',e);
+    showToast('Backfill av utgifter feilet — prøver igjen ved neste oppstart','err');
   }
 }
 
