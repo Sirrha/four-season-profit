@@ -1190,7 +1190,7 @@ function calcPurchaseStats(purchase){
   return{buyEksTotal,buyInklTotal,forvSalgEks,gmKr,gmPct,paaslagPct,inkludertEks,inkludertInkl,ekskludertEks,ekskludertInkl,pantTotalEks,pantTotalInkl};
 }
 function calcInvoiceReelStats(invoiceId){
-  const purchase=dbFind('purchases',invoiceId);if(!purchase)return null;
+  const purchase=getPurchaseInvoiceById(invoiceId);if(!purchase)return null;
   const base=calcPurchaseStats(purchase);
   const purchaseProdIds=(purchase.lines||[]).map(l=>l.productId);
   const fruktIds=purchaseProdIds.filter(pid=>{const p=dbFind('products',pid);return p&&(p.kategori==='frukt'||p.kategori==='gronnsaker')});
@@ -1215,7 +1215,7 @@ function calcInvoiceReelStats(invoiceId){
   return{...base,faktiskSalgEks,svinnKost,reellGmKr,reellGmPct,hasSales,wasteCount:wasteAll.length,salesCount:linkedSales.length};
 }
 function getInvoicePaymentStatus(invoiceId){
-  const purchase=dbFind('purchases',invoiceId);
+  const purchase=getPurchaseInvoiceById(invoiceId);
   const total=purchase?calcPurchaseStats(purchase).buyInklTotal:0;
   // Bankaxept V1: paid-at-delivery short-circuits — no bankTransactions linked, no forfall, no overdue possible.
   if(purchase?.betaltVedLevering===true){
@@ -2060,7 +2060,7 @@ async function saveInnkjop(){
 // INVOICE DETAIL MODAL
 // ─────────────────────────────────────────
 function showInvoiceDetail(id,opts={}){
-  const p=dbFind('purchases',id);if(!p)return;
+  const p=getPurchaseInvoiceById(id);if(!p)return;
   const readonly=opts.readonly===true;
   const stats=calcPurchaseStats(p);
   const reel=calcInvoiceReelStats(id);
@@ -2219,7 +2219,7 @@ function showInvoiceDetail(id,opts={}){
 // Storage Foundation V1 Phase D: open an uploaded original-file in a new tab.
 // Fetches a fresh signed URL on click (tokens expire — not cached).
 async function openOriginalFile(id, idx){
-  const p=dbFind('purchases',id);
+  const p=getPurchaseInvoiceById(id);
   if(!p||!p.originalFiles||!p.originalFiles[idx]){
     showToast('Fant ikke vedlegget','err');
     return;
@@ -7091,6 +7091,38 @@ function getPurchaseInvoiceMirrors(){
       leverandorId:e.leverandorId,
       lines:e.lines
     }));
+}
+
+function getPurchaseInvoiceById(id){
+  // Phase 2e: single-record read adapter — mirror-first with defensive purchases fallback.
+  // After Phase 2e-prep, all 38 mirrors carry betaltVedLevering + betalingsmetode directly
+  // (writer-extended + backfilled). In steady state the fallback never triggers; it exists
+  // as belt-and-braces in case a mirror disappears (e.g., out-of-order Firestore deletes
+  // during Phase 2f write-path migration, or pre-backfill new tenants). Warn-once per
+  // missing-id to avoid console spam. Aliases id → linkedPurchaseId so downstream callers
+  // that pass the returned object's .id into other helpers receive the real purchase ID.
+  const mirror=dbAll('expenses').find(e=>e.expenseKind==='purchase_invoice'&&e.linkedPurchaseId===id);
+  if(mirror){
+    return {
+      id:mirror.linkedPurchaseId,
+      dato:mirror.invoiceDate,
+      forfallsdato:mirror.dueDate,
+      fakturanr:mirror.invoiceNumber,
+      lev:mirror.supplierName,
+      leverandorId:mirror.leverandorId,
+      lines:mirror.lines,
+      notes:mirror.notes,
+      originalFiles:mirror.originalFiles,
+      betaltVedLevering:mirror.betaltVedLevering===true,
+      betalingsmetode:mirror.betalingsmetode||null
+    };
+  }
+  if(!window._missingMirrorWarned)window._missingMirrorWarned=new Set();
+  if(!window._missingMirrorWarned.has(id)){
+    window._missingMirrorWarned.add(id);
+    console.warn('[D8] purchase '+id+' has no expense mirror — falling back to purchases');
+  }
+  return dbFind('purchases',id)||null;
 }
 
 function buildExpenseDocFromOperatingForm(f){
