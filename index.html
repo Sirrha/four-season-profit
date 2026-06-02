@@ -1076,6 +1076,7 @@ function showApp(){
   ensureExpenseTaxonomySeed(TENANT_ID);  // phase 2a: idempotent, sentinel-gated
   backfillPurchasesToExpenses();         // phase 2b: idempotent, sentinel-gated
   dedupeMigratedExpenseMirrors();        // phase 2b-fix: one-shot cleanup of race duplicates
+  backfillMirrorPaymentFields();         // phase 2e-prep: one-shot copy of payment fields onto mirrors
   if(!currentUser){
     document.getElementById('login-screen').classList.remove('hidden');
   } else {
@@ -5215,6 +5216,69 @@ async function dedupeMigratedExpenseMirrors(){
   }
 }
 
+async function backfillMirrorPaymentFields(){
+  // Phase 2e-prep: backfill betaltVedLevering + betalingsmetode onto existing
+  // purchase_invoice mirrors. Pre-2e-prep, buildExpenseDocFromPurchase did not copy
+  // these two fields (only derived the paid-at-delivery effect into paidDate +
+  // paidDateSource). Phase 2e reader needs the raw fields so the modal + payment-
+  // status can read mirror-first without losing the "✓ Betalt · Bankaxept" label.
+  // Reads purchases authoritatively from Firestore (defense in depth — showApp fires
+  // before snapshots land). Idempotent via _meta/migrations.mirrorPaymentFieldsBackfilledAt
+  // + per-record desired-state skip (so partial-success retries don't re-write completed docs).
+  try{
+    const sentinelRef=tenantCol('_meta').doc('migrations');
+    const snap=await sentinelRef.get();
+    const sentinel=snap.exists?snap.data():{};
+    if(sentinel.mirrorPaymentFieldsBackfilledAt){
+      console.log('[backfill-payment-fields] already complete, skipping');
+      return;
+    }
+    const expSnap=await tenantCol('expenses').get();
+    const mirrors=expSnap.docs
+      .map(d=>({id:d.id,...d.data()}))
+      .filter(e=>e.expenseKind==='purchase_invoice'&&e.linkedPurchaseId);
+    if(mirrors.length===0){
+      await sentinelRef.set({mirrorPaymentFieldsBackfilledAt:new Date().toISOString()},{merge:true});
+      console.log('[backfill-payment-fields] no mirrors to update');
+      return;
+    }
+    const purchasesSnap=await tenantCol('purchases').get();
+    const purchasesById={};
+    purchasesSnap.docs.forEach(d=>{purchasesById[d.id]={id:d.id,...d.data()}});
+    let updated=0,skipped=0,failed=0;
+    for(const m of mirrors){
+      const p=purchasesById[m.linkedPurchaseId];
+      if(!p){
+        console.warn('[backfill-payment-fields] source purchase missing, skipping:',m.linkedPurchaseId);
+        skipped++;
+        continue;
+      }
+      const desired={
+        betaltVedLevering:p.betaltVedLevering===true,
+        betalingsmetode:p.betalingsmetode||null
+      };
+      if(m.betaltVedLevering===desired.betaltVedLevering&&m.betalingsmetode===desired.betalingsmetode){
+        skipped++;
+        continue;
+      }
+      try{
+        await tenantCol('expenses').doc(m.id).set(desired,{merge:true});
+        updated++;
+      }catch(e){
+        failed++;
+        console.error('[backfill-payment-fields] update failed for',m.id,e&&e.message);
+      }
+    }
+    if(failed===0){
+      await sentinelRef.set({mirrorPaymentFieldsBackfilledAt:new Date().toISOString()},{merge:true});
+    }
+    console.log('[backfill-payment-fields] updated:',updated,'skipped:',skipped,'failed:',failed);
+  }catch(e){
+    console.error('[backfill-payment-fields] failed:',e);
+    showToast('Backfill av betalingsfelter feilet — prøver igjen','err');
+  }
+}
+
 // ─────────────────────────────────────────
 // AI FAKTURA SKANNER
 // ─────────────────────────────────────────
@@ -6971,6 +7035,12 @@ function buildExpenseDocFromPurchase(p,sourceHint){
     invoiceDate:p.dato,
     dueDate:p.forfallsdato||null,
     paidDate:null,paidTransactionId:null,paidDateSource:null,paidAmountMatched:null,
+    // Phase 2e-prep: preserve raw paid-at-delivery flag + method so mirror readers
+    // (modal, getInvoicePaymentStatus) can reconstruct payment-state display without
+    // losing the "✓ Betalt · Bankaxept" label segment. Normalized at write time:
+    // betaltVedLevering is strict boolean, betalingsmetode is string|null.
+    betaltVedLevering:p.betaltVedLevering===true,
+    betalingsmetode:p.betalingsmetode||null,
     totalInclVat:0,totalExVat:0,vatAmount:0,
     vatStatus:'normal',
     currency:'NOK',
