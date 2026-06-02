@@ -1714,7 +1714,7 @@ async function deleteProdukt(id){
 let innFilter='alle';
 function renderInnkjop(){
   const el=document.getElementById('pg-innkjop');
-  const purchases=dbAll('purchases').slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
+  const purchases=getPurchaseInvoiceMirrors().slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
   const todayStr=today(),monthStr=todayStr.slice(0,7);
   let filtered=purchases;
   if(innFilter==='dag')filtered=purchases.filter(p=>p.dato===todayStr);
@@ -1743,8 +1743,10 @@ function renderInnkjop(){
       const todayStr=today();
       let forfallChip='';
       // Bankaxept V1: paid-at-delivery → green badge instead of forfall chip (belt + suspenders gate on forfallChip)
-      if(p.betaltVedLevering===true){
-        forfallChip=`<span style="font-size:11px;background:rgba(77,184,118,.2);color:#8de19e;padding:2px 8px;border-radius:9px;font-weight:700">✓ Betalt${p.betalingsmetode?' · '+paymentMethodLabel(p.betalingsmetode):''}</span>`;
+      // Phase 2d: pay.paidAtDelivery / pay.paymentMethod source-of-truth via getInvoicePaymentStatus (line 1742),
+      // which reads the real purchase doc — adapter aliases id → linkedPurchaseId so this lookup hits the right row.
+      if(pay.paidAtDelivery===true){
+        forfallChip=`<span style="font-size:11px;background:rgba(77,184,118,.2);color:#8de19e;padding:2px 8px;border-radius:9px;font-weight:700">✓ Betalt${pay.paymentMethod?' · '+paymentMethodLabel(pay.paymentMethod):''}</span>`;
       } else if(p.forfallsdato){
         let cls='forfallsdato-future',prefix='Forfall: ';
         if(pay.isOverdue){cls='forfallsdato-overdue';prefix='⚠ Forfalt: ';}
@@ -3047,7 +3049,7 @@ async function deleteSvinn(id){if(!confirm('Slett?'))return;await dbDelete('svin
 function renderUtgifter(){
   const el=document.getElementById('pg-utgifter');
   if(!el)return;
-  const purchases=getUtgifterInvoices();
+  const purchases=getPurchaseInvoiceMirrors();
   const todayStr=today(),monthStr=todayStr.slice(0,7);
   const monthP=purchases.filter(p=>p.dato?.startsWith(monthStr));
 
@@ -3136,7 +3138,7 @@ function renderUtgifter(){
 function renderUtgifterShelves(){
   const el=document.getElementById('pg-utgifter');
   if(!el)return;
-  const purchases=getUtgifterInvoices();
+  const purchases=getPurchaseInvoiceMirrors();
   const todayStr=today(),monthStr=todayStr.slice(0,7);
 
   const shelves=new Map();
@@ -3208,7 +3210,7 @@ function renderUtgifterShelf(encodedKey){
   const el=document.getElementById('pg-utgifter');
   if(!el)return;
   const key=decodeURIComponent(encodedKey);
-  const purchases=getUtgifterInvoices();
+  const purchases=getPurchaseInvoiceMirrors();
 
   const list=[];
   let navn='(Ukjent leverandør)';
@@ -7000,12 +7002,13 @@ function buildExpenseDocFromPurchase(p,sourceHint){
   return exp;
 }
 
-function getUtgifterInvoices(){
-  // Phase 2c (D8 adapter cutover): Utgifter reads expense mirrors instead of purchases.
-  // Renames the few top-level fields the renderer touches back to purchase-shape so
-  // the existing render code (renderUtgifter / renderUtgifterShelves / renderUtgifterShelf)
-  // works unchanged. Aliases id → linkedPurchaseId so getInvoicePaymentStatus and
-  // showInvoiceDetail (both dbFind('purchases', id) internally) get the real purchase ID.
+function getPurchaseInvoiceMirrors(){
+  // D8 adapter (Phase 2c Utgifter, Phase 2d Innkjøp): shared read adapter for
+  // any consumer that needs purchase_invoice expense mirrors aliased to the
+  // original purchase shape. Renames the top-level fields the renderers touch
+  // back to purchase-shape so existing render code works unchanged. Aliases
+  // id → linkedPurchaseId so getInvoicePaymentStatus and showInvoiceDetail
+  // (both dbFind('purchases', id) internally) get the real purchase ID.
   // No new fields, no computed properties — pure rename.
   return dbAll('expenses')
     .filter(e=>e.expenseKind==='purchase_invoice')
