@@ -1410,7 +1410,7 @@ function renderPage(pg){
 // ─────────────────────────────────────────
 function renderOversikt(){
   const el=document.getElementById('pg-oversikt');
-  const purchases=dbAll('purchases');
+  const purchases=getPurchaseInvoiceMirrors();
   const todayStr=today(),monthStr=todayStr.slice(0,7);
   const todayP=purchases.filter(p=>p.dato===todayStr);
   const monthP=purchases.filter(p=>p.dato?.startsWith(monthStr));
@@ -1562,7 +1562,7 @@ function fillLevDropdown(selectId,selectedId){
 // v21 Fix 3: Lav GM diagnose-modal — klikkbar fra Oversikt-varselet
 function showLowGmDiagnostics(){
   const prds=dbAll('products');
-  const purchases=dbAll('purchases');
+  const purchases=getPurchaseInvoiceMirrors();
   const lowProds=prds.filter(p=>calcGM(p.buyEks||0,p.salgEks||0).gmPct<20);
   lowProds.sort((a,b)=>calcGM(a.buyEks||0,a.salgEks||0).gmPct-calcGM(b.buyEks||0,b.salgEks||0).gmPct);
   let rowsHtml='';
@@ -7079,13 +7079,18 @@ function getPurchaseInvoiceMirrors(){
   // back to purchase-shape so existing render code works unchanged. Aliases
   // id → linkedPurchaseId so getInvoicePaymentStatus and showInvoiceDetail
   // (both dbFind('purchases', id) internally) get the real purchase ID.
-  // No new fields, no computed properties — pure rename.
+  // Pure rename — no computed properties. Field set grows as more pages join the fanout.
+  // opprettet (Phase 2f.0a): aliased from mirror's createdAt. For shadow-created mirrors
+  // this matches the original purchase's opprettet. For the 38 backfilled mirrors, this
+  // is the backfill date (2026-05-31) rather than the original purchase opprettet —
+  // cosmetic fidelity drift accepted; only AI scanner dup display (line ~5797) reads it.
   return dbAll('expenses')
     .filter(e=>e.expenseKind==='purchase_invoice')
     .map(e=>({
       id:e.linkedPurchaseId,
       dato:e.invoiceDate,
       forfallsdato:e.dueDate,
+      opprettet:e.createdAt,
       fakturanr:e.invoiceNumber,
       lev:e.supplierName,
       leverandorId:e.leverandorId,
