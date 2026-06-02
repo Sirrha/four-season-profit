@@ -2560,7 +2560,7 @@ function renderSalg(){
   const el=document.getElementById('pg-salg');
   const dagsalg=dbAll('dagsalg').slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
   const sales=dbAll('sales').slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
-  const purchases=dbAll('purchases');
+  const purchases=getPurchaseInvoiceMirrors();
   const todayStr=today();
 
   // Today summary
@@ -2824,7 +2824,7 @@ function showDagsalgDetail(id){
   const mvaTotal=parseFloat(d.mvaTotal)||(totalInkl-totalEks);
   document.getElementById('dagsalg-detail-id').value=id;
   // Compute forventet salg from purchases on this date
-  const dayPurchases=dbAll('purchases').filter(p=>p.dato===d.dato);
+  const dayPurchases=getPurchaseInvoiceMirrors().filter(p=>p.dato===d.dato);
   let forvDag=0;
   for(const p of dayPurchases){forvDag+=calcPurchaseStats(p).forvSalgEks}
   const diff=totalEks-forvDag;
@@ -2925,7 +2925,7 @@ function openSalgModal(){
   sLines=[];
   document.getElementById('salg-dato').value=today();
   document.getElementById('salg-ref').value='';
-  const purchases=dbAll('purchases').slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||'')).slice(0,20);
+  const purchases=getPurchaseInvoiceMirrors().slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||'')).slice(0,20);
   document.getElementById('salg-faktura').innerHTML=`<option value="">— Ikke knyttet —</option>`+
     purchases.map(p=>`<option value="${p.id}">${fmtDate(p.dato)} · ${p.fakturanr||'Uten nr'} · ${p.lev||'–'}</option>`).join('');
   renderSLines();openModal('ov-salg');
