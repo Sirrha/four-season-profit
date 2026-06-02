@@ -3047,7 +3047,7 @@ async function deleteSvinn(id){if(!confirm('Slett?'))return;await dbDelete('svin
 function renderUtgifter(){
   const el=document.getElementById('pg-utgifter');
   if(!el)return;
-  const purchases=dbAll('purchases');
+  const purchases=getUtgifterInvoices();
   const todayStr=today(),monthStr=todayStr.slice(0,7);
   const monthP=purchases.filter(p=>p.dato?.startsWith(monthStr));
 
@@ -3136,7 +3136,7 @@ function renderUtgifter(){
 function renderUtgifterShelves(){
   const el=document.getElementById('pg-utgifter');
   if(!el)return;
-  const purchases=dbAll('purchases');
+  const purchases=getUtgifterInvoices();
   const todayStr=today(),monthStr=todayStr.slice(0,7);
 
   const shelves=new Map();
@@ -3208,7 +3208,7 @@ function renderUtgifterShelf(encodedKey){
   const el=document.getElementById('pg-utgifter');
   if(!el)return;
   const key=decodeURIComponent(encodedKey);
-  const purchases=dbAll('purchases');
+  const purchases=getUtgifterInvoices();
 
   const list=[];
   let navn='(Ukjent leverandør)';
@@ -6998,6 +6998,26 @@ function buildExpenseDocFromPurchase(p,sourceHint){
   }
   exp.accountantStatus=computeAutoAccountantStatus(exp);
   return exp;
+}
+
+function getUtgifterInvoices(){
+  // Phase 2c (D8 adapter cutover): Utgifter reads expense mirrors instead of purchases.
+  // Renames the few top-level fields the renderer touches back to purchase-shape so
+  // the existing render code (renderUtgifter / renderUtgifterShelves / renderUtgifterShelf)
+  // works unchanged. Aliases id → linkedPurchaseId so getInvoicePaymentStatus and
+  // showInvoiceDetail (both dbFind('purchases', id) internally) get the real purchase ID.
+  // No new fields, no computed properties — pure rename.
+  return dbAll('expenses')
+    .filter(e=>e.expenseKind==='purchase_invoice')
+    .map(e=>({
+      id:e.linkedPurchaseId,
+      dato:e.invoiceDate,
+      forfallsdato:e.dueDate,
+      fakturanr:e.invoiceNumber,
+      lev:e.supplierName,
+      leverandorId:e.leverandorId,
+      lines:e.lines
+    }));
 }
 
 function buildExpenseDocFromOperatingForm(f){
