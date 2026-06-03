@@ -4906,7 +4906,7 @@ function exportCSV(type){
   }else if(type==='purchases'){
     fn='innkjop.csv';
     csv='Dato,Forfallsdato,Fakturanr,Leverandor,Produkt,Linjetype,Kolli,Vekt/kolli,TotalVekt,Pris/kolli.inkl,Total.inkl,Total.eks,Pris/kg.inkl,Pris/kg.eks,Salg.eks,GM.kr,GM%,Paaslag%\n';
-    dbAll('purchases').forEach(p=>{
+    getPurchaseInvoiceMirrors().slice().sort((a,b)=>(a.dato||'').localeCompare(b.dato||'')||(a.fakturanr||'').localeCompare(b.fakturanr||'')).forEach(p=>{
       (p.lines||[]).forEach(l=>{
         const prod=dbFind('products',l.productId);
         const gm=l.prPerEnhetEks>0&&prod?calcGM(l.prPerEnhetEks,prod.salgEks||0):{gmKr:0,gmPct:0,paaslagPct:0};
