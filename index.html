@@ -5780,7 +5780,7 @@ async function runAIScan(){
     if(scanMode==='faktura'&&parsed.fakturanr){
       const fn=(parsed.fakturanr||'').trim();
       const lev=(parsed.leverandor||'').toLowerCase().trim();
-      const existing=dbAll('purchases').filter(p=>
+      const existing=getPurchaseInvoiceMirrors().filter(p=>
         (p.fakturanr||'').trim()===fn&&
         (p.lev||'').toLowerCase().trim()===lev
       );
@@ -6321,7 +6321,7 @@ function guessCategory(raw,mva){
 
 function findForrigeBuy(productId,currentDate){
   if(!productId)return null;
-  const purchases=dbAll('purchases').slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
+  const purchases=getPurchaseInvoiceMirrors().slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
   for(const p of purchases){
     if(currentDate&&p.dato>=currentDate)continue;
     for(const l of(p.lines||[])){
@@ -6343,7 +6343,7 @@ function findForrigeBuy(productId,currentDate){
 
 function findForrigeInnhold(productId){
   if(!productId)return null;
-  const purchases=dbAll('purchases').slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
+  const purchases=getPurchaseInvoiceMirrors().slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
   for(const p of purchases){
     for(const l of(p.lines||[])){
       if(l.productId===productId){
