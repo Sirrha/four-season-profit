@@ -4573,7 +4573,7 @@ function renderRapContent(){
   else if(rapTab==='graf'){el.innerHTML='<div id="graf-container"></div>';rapGraf();}
 }
 function rapFakturaer(){
-  const purchases=dbAll('purchases').slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
+  const purchases=getPurchaseInvoiceMirrors().slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
   if(!purchases.length)return`<div class="empty"><div class="ei">📋</div><p>Ingen fakturaer ennå.</p></div>`;
   let tBuyEks=0,tBuyInkl=0,tSalg=0,tGm=0;
   let html=`<div class="card" style="padding:0 14px">`;
@@ -4606,7 +4606,7 @@ function rapFakturaer(){
   `+html+'</div>';
 }
 function rapKategorier(){
-  const purchases=dbAll('purchases');
+  const purchases=getPurchaseInvoiceMirrors();
   const cats={};Object.keys(CATS).forEach(k=>cats[k]={buyEks:0,buyInkl:0,salgEks:0});
   for(const p of purchases){for(const l of(p.lines||[])){
     if(l.lineKind==='pant'||l.ekskluderFraBeregning===true)continue;
@@ -4651,7 +4651,7 @@ function rapProdukter(){
   return html+'</div>';
 }
 function rapDag(){
-  const purchases=dbAll('purchases');
+  const purchases=getPurchaseInvoiceMirrors();
   const dayMap={};
   for(const p of purchases){
     if(!p.dato)continue;
@@ -4755,7 +4755,7 @@ function rapSvinn(){
 // RAPPORT: UKE VS UKE
 // ─────────────────────────────────────────
 function rapUkeVsUke(){
-  const purchases=dbAll('purchases');
+  const purchases=getPurchaseInvoiceMirrors();
   if(!purchases.length)return`<div class="empty"><div class="ei">📆</div><p>Ingen data ennå.</p></div>`;
 
   function getWeekNum(dateStr){
@@ -4816,7 +4816,7 @@ function rapUkeVsUke(){
 // RAPPORT: GRAF (GM over tid)
 // ─────────────────────────────────────────
 function rapGraf(){
-  const purchases=dbAll('purchases');
+  const purchases=getPurchaseInvoiceMirrors();
   if(!purchases.length){
     document.getElementById('graf-container').innerHTML=`<div class="empty"><div class="ei">📈</div><p>Ingen data ennå.</p></div>`;
     return;
