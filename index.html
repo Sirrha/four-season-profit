@@ -3547,7 +3547,7 @@ function goToBetPhase1(){
 
 function renderBetPhase2Invoices(levId,paymentAmount){
   const lev=dbFind('leverandorer',levId);
-  const invoices=dbAll('purchases')
+  const invoices=getPurchaseInvoiceMirrors()
     .filter(p=>p.leverandorId===levId)
     .map(p=>{
       const stats=calcPurchaseStats(p);
