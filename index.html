@@ -2979,7 +2979,7 @@ function renderSvinn(){
   const el=document.getElementById('pg-svinn');
   const svinns=dbAll('svinn').slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
   if(!svinns.length){el.innerHTML=`<div class="empty"><div class="ei">✅</div><p>Ingen svinn registrert. Bra!</p></div>`;return}
-  const purchases=dbAll('purchases');
+  const purchases=getPurchaseInvoiceMirrors();
   const totKost=svinns.reduce((a,s)=>{const p=dbFind('products',s.productId);return a+(s.kostverdi||(p?(s.qty||0)*(p.buyEks||0):0))},0);
   let html=`<div class="sc" style="margin-bottom:10px"><div class="sl">Total svinnkostnad eks. MVA</div><div class="sv r">${fmtNOK(totKost)}</div></div>
   <div class="card" style="padding:0 14px">`;
@@ -3007,7 +3007,7 @@ function openSvinnModal(){
   const prds=dbAll('products').filter(p=>p.aktiv);
   document.getElementById('svi-prd').innerHTML=`<option value="">Velg produkt…</option>`+
     prds.map(p=>`<option value="${p.id}">${CATS[p.kategori]?.emoji||''} ${p.navn}</option>`).join('');
-  const purchases=dbAll('purchases').slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||'')).slice(0,20);
+  const purchases=getPurchaseInvoiceMirrors().slice().sort((a,b)=>(b.dato||'').localeCompare(a.dato||'')).slice(0,20);
   document.getElementById('svi-faktura').innerHTML=`<option value="">— Ikke knyttet —</option>`+
     purchases.map(p=>`<option value="${p.id}">${fmtDate(p.dato)} · ${p.fakturanr||'Uten nr'} · ${p.lev||'–'}</option>`).join('');
   openModal('ov-svinn');
@@ -3017,7 +3017,7 @@ function onSvinnPrdChange(){
   const pid=document.getElementById('svi-prd').value;
   const p=dbFind('products',pid);
   if(p&&p.kategori==='frukt'){
-    const recent=dbAll('purchases').filter(pu=>(pu.lines||[]).some(l=>l.productId===pid)).sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
+    const recent=getPurchaseInvoiceMirrors().filter(pu=>(pu.lines||[]).some(l=>l.productId===pid)).sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
     if(recent.length)document.getElementById('svi-faktura').value=recent[0].id;
   }
 }
