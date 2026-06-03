@@ -3294,7 +3294,7 @@ function renderLeverandorer(){
   const page=document.getElementById('pg-leverandorer');
   const all=dbAll('leverandorer').slice().sort((a,b)=>(a.navn||'').localeCompare(b.navn||'','no'));
   const prodSuppliers=[...new Set(dbAll('products').map(p=>p.lev).filter(x=>x&&x.trim()))];
-  const purchSuppliers=[...new Set(dbAll('purchases').map(p=>p.lev).filter(x=>x&&x.trim()))];
+  const purchSuppliers=[...new Set(getPurchaseInvoiceMirrors().map(p=>p.lev).filter(x=>x&&x.trim()))];
   const allScanned=[...new Set([...prodSuppliers,...purchSuppliers])];
   const unmigrated=allScanned.filter(s=>!findLeverandorByName(s));
 
@@ -3325,7 +3325,7 @@ function renderLeverandorer(){
   } else {
     html+=`<div class="card"><div style="font-size:10.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px">Alle leverandører</div>`;
     for(const l of all){
-      const purchases=dbAll('purchases').filter(p=>p.leverandorId===l.id||normName(p.lev)===normName(l.navn)||(l.aliaser||[]).some(a=>normName(a)===normName(p.lev)));
+      const purchases=getPurchaseInvoiceMirrors().filter(p=>p.leverandorId===l.id||normName(p.lev)===normName(l.navn)||(l.aliaser||[]).some(a=>normName(a)===normName(p.lev)));
       const products=dbAll('products').filter(p=>p.leverandorId===l.id||normName(p.lev)===normName(l.navn)||(l.aliaser||[]).some(a=>normName(a)===normName(p.lev)));
       const aliasCount=(l.aliaser||[]).length;
       const pr=l.prisregel||'ask';
@@ -3415,7 +3415,7 @@ async function deleteLeverandorCurrent(){
 
 async function migrateLeverandorer(){
   const prodSuppliers=[...new Set(dbAll('products').map(p=>p.lev).filter(x=>x&&x.trim()))];
-  const purchSuppliers=[...new Set(dbAll('purchases').map(p=>p.lev).filter(x=>x&&x.trim()))];
+  const purchSuppliers=[...new Set(getPurchaseInvoiceMirrors().map(p=>p.lev).filter(x=>x&&x.trim()))];
   const allScanned=[...new Set([...prodSuppliers,...purchSuppliers])];
   const unmigrated=allScanned.filter(s=>!findLeverandorByName(s));
   if(unmigrated.length===0){showToast('Ingen å migrere','ok');return}
