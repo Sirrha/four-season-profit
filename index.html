@@ -1964,7 +1964,7 @@ async function saveInnkjop(){
   const levText=levObj?levObj.navn:(document.getElementById('inn-lev-legacy').value||'');
   // v21 Fix 1: Duplicate invoice check
   if(fakturanr){
-    const existing=dbAll('purchases').filter(p=>
+    const existing=getPurchaseInvoiceMirrors().filter(p=>
       (p.fakturanr||'').trim()===fakturanr&&
       (p.lev||'').toLowerCase().trim()===(levText||'').toLowerCase().trim()
     );
@@ -2237,7 +2237,7 @@ async function openOriginalFile(id, idx){
 // EDIT/DELETE HELPERS — v20
 // ─────────────────────────────────────────
 async function deletePurchase(id){
-  const p=dbFind('purchases',id);if(!p)return;
+  const p=getPurchaseInvoiceById(id);if(!p)return;
   const lbl=(p.lev||'Ukjent')+' · '+(p.fakturanr||'(uten nr)');
   if(!confirm('Slett hele fakturaen?\n\n'+lbl+'\n'+(p.lines?.length||0)+' produktlinjer\n\nDette kan ikke angres.'))return;
   try{
@@ -2251,7 +2251,7 @@ async function deletePurchase(id){
 }
 
 function showEditHeaderForm(id){
-  const p=dbFind('purchases',id);if(!p)return;
+  const p=getPurchaseInvoiceById(id);if(!p)return;
   const levs=dbAll('leverandorer').slice().sort((a,b)=>(a.navn||'').localeCompare(b.navn||''));
   const levOptions=levs.map(lv=>`<option value="${lv.id}" ${p.leverandorId===lv.id?'selected':''}>${escapeHtml(lv.navn)}</option>`).join('');
   const container=document.getElementById('detail-content');
@@ -2308,7 +2308,7 @@ function showEditHeaderForm(id){
 }
 
 async function saveEditHeader(id){
-  const p=dbFind('purchases',id);if(!p)return;
+  const p=getPurchaseInvoiceById(id);if(!p)return;
   const levId=document.getElementById('edith-lev-id').value;
   const levTxt=document.getElementById('edith-lev-txt').value.trim();
   const levObj=levId?dbFind('leverandorer',levId):null;
@@ -2340,7 +2340,7 @@ async function saveEditHeader(id){
 }
 
 function showEditLineForm(purchaseId,lineIdx){
-  const p=dbFind('purchases',purchaseId);if(!p)return;
+  const p=getPurchaseInvoiceById(purchaseId);if(!p)return;
   const l=(p.lines||[])[lineIdx];if(!l)return;
   const prod=dbFind('products',l.productId);
   const prodName=prod?prod.navn:'Ukjent produkt';
@@ -2397,7 +2397,7 @@ function showEditLineForm(purchaseId,lineIdx){
 }
 
 async function saveEditLine(purchaseId,lineIdx){
-  const p=dbFind('purchases',purchaseId);if(!p)return;
+  const p=getPurchaseInvoiceById(purchaseId);if(!p)return;
   const lines=(p.lines||[]).slice();
   if(!lines[lineIdx]){showToast('Fant ikke linjen','err');return}
   const antall=parseFloat(document.getElementById('editl-antall').value)||0;
@@ -2450,7 +2450,7 @@ async function saveEditLine(purchaseId,lineIdx){
 }
 
 async function deleteInvoiceLine(purchaseId,lineIdx){
-  const p=dbFind('purchases',purchaseId);if(!p)return;
+  const p=getPurchaseInvoiceById(purchaseId);if(!p)return;
   const lines=(p.lines||[]).slice();
   const l=lines[lineIdx];if(!l)return;
   const prod=dbFind('products',l.productId);
@@ -2468,7 +2468,7 @@ async function deleteInvoiceLine(purchaseId,lineIdx){
 }
 
 function showAddLineForm(purchaseId){
-  const p=dbFind('purchases',purchaseId);if(!p)return;
+  const p=getPurchaseInvoiceById(purchaseId);if(!p)return;
   const prods=dbAll('products').slice().sort((a,b)=>(a.navn||'').localeCompare(b.navn||''));
   const prodOpts=prods.map(pr=>`<option value="${pr.id}">${escapeHtml(pr.navn)}</option>`).join('');
   const container=document.getElementById('detail-content');
@@ -2518,7 +2518,7 @@ function showAddLineForm(purchaseId){
 }
 
 async function saveNewLine(purchaseId){
-  const p=dbFind('purchases',purchaseId);if(!p)return;
+  const p=getPurchaseInvoiceById(purchaseId);if(!p)return;
   const productId=document.getElementById('addl-prd').value;
   if(!productId){showToast('Velg et produkt','err');return}
   const antall=parseFloat(document.getElementById('addl-antall').value)||0;
