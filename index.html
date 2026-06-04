@@ -2026,9 +2026,11 @@ async function saveInnkjop(){
     }
   } catch(e){console.warn('buyEks sync failed',e)}
   const s=calcPurchaseStats({lines});
-  showToast(`Faktura lagret · GM: ${fmtPct(s.gmPct)}`);
-  closeModal('ov-innkjop');
-  await markInnboksLinkedDone();
+  if(WRITE_TO_PURCHASES){
+    showToast(`Faktura lagret · GM: ${fmtPct(s.gmPct)}`);
+    closeModal('ov-innkjop');
+    await markInnboksLinkedDone();
+  }
   // Storage Foundation V1 Phase B: upload original scan files to Storage AFTER invoice save.
   // Non-blocking — invoice is already created at this point; upload failures only surface as a toast.
   const filesToUpload=(scanFiles&&scanFiles.length>0)?scanFiles.slice():[];
@@ -2065,8 +2067,15 @@ async function saveInnkjop(){
   // already fired upstream — this toast is a post-facto inconsistency warning.
   try{
     await shadowCreateExpense({...purchaseData,originalFiles:_shadowOriginalFiles},_expenseSource);
+    if(!WRITE_TO_PURCHASES){
+      showToast(`Faktura lagret · GM: ${fmtPct(s.gmPct)}`);
+      closeModal('ov-innkjop');
+      await markInnboksLinkedDone();
+    }
   }catch(e){
-    showToast('Faktura ble lagret, men synk til oversikten feilet. Prøv å åpne/lagre på nytt, eller kontakt support hvis den ikke vises.','err');
+    showToast(WRITE_TO_PURCHASES
+      ?'Faktura ble lagret, men synk til oversikten feilet. Prøv å åpne/lagre på nytt, eller kontakt support hvis den ikke vises.'
+      :'Faktura ikke lagret — prøv igjen.','err');
   }
 }
 
