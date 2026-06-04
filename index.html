@@ -1041,6 +1041,13 @@ function initFirebase(cfg){
 }
 
 const firstSnapshotSeen={};  // per-collection first-snapshot flag (phase 2b-fix)
+
+// Phase 2f.1c: gate primary purchases writes. true = dual-write today (purchases + mirror).
+// 2f.1d flips this to false → mirror becomes the only write target; purchases freezes as a
+// historical record. Operator-controlled (not sentinel-automated): change the literal, deploy,
+// observe a clean Chrome Claude cycle, then ship 2f.1d.
+const WRITE_TO_PURCHASES=true;
+
 function startListeners(){
   // Reset per-collection flags so re-starting listeners (tenant switch, etc.) works.
   Object.keys(firstSnapshotSeen).forEach(k=>delete firstSnapshotSeen[k]);
@@ -1773,7 +1780,7 @@ function renderInnkjop(){
   el.innerHTML=html;
 }
 function getWeekStart(){const d=new Date();const diff=d.getDate()-(d.getDay()===0?6:d.getDay()-1);d.setDate(diff);return d.toISOString().slice(0,10)}
-async function deleteInnkjop(id){if(!confirm('Slett innkjøp?'))return;try{await dbDelete('purchases',id);await shadowDeleteExpense(id);showToast('Slettet')}catch(e){showToast('Kunne ikke slette helt. Prøv igjen.','err')}}
+async function deleteInnkjop(id){if(!confirm('Slett innkjøp?'))return;try{if(WRITE_TO_PURCHASES) await dbDelete('purchases',id);await shadowDeleteExpense(id);showToast('Slettet')}catch(e){showToast('Kunne ikke slette helt. Prøv igjen.','err')}}
 
 // ─────────────────────────────────────────
 // PURCHASE MODAL – KOLLI-BASED
@@ -1996,7 +2003,7 @@ async function saveInnkjop(){
     betalingsmetode:paidAtDelivery?paidMethod:null,
     notes:document.getElementById('inn-notes').value.trim(),opprettet:new Date().toISOString()
   };
-  await tenantCol('purchases').doc(newId).set(purchaseData);
+  if(WRITE_TO_PURCHASES) await tenantCol('purchases').doc(newId).set(purchaseData);
   // v21 Fix 2: Auto-sync buyEks/buyInkl on each product from this invoice's lines
   try{
     const productUpdates={};
@@ -2041,7 +2048,7 @@ async function saveInnkjop(){
     }
     if(uploadedFiles.length>0){
       try{
-        await tenantCol('purchases').doc(newId).update({originalFiles:uploadedFiles});
+        if(WRITE_TO_PURCHASES) await tenantCol('purchases').doc(newId).update({originalFiles:uploadedFiles});
         _shadowOriginalFiles=uploadedFiles;
       }catch(e){
         console.warn('Failed to attach originalFiles to purchase:',e.message);
@@ -2248,7 +2255,7 @@ async function deletePurchase(id){
   const lbl=(p.lev||'Ukjent')+' · '+(p.fakturanr||'(uten nr)');
   if(!confirm('Slett hele fakturaen?\n\n'+lbl+'\n'+(p.lines?.length||0)+' produktlinjer\n\nDette kan ikke angres.'))return;
   try{
-    await tenantCol('purchases').doc(id).delete();
+    if(WRITE_TO_PURCHASES) await tenantCol('purchases').doc(id).delete();
     await shadowDeleteExpense(id);  // phase 2a shadow
     showToast('Faktura slettet');
     closeModal('ov-detail');
@@ -2337,7 +2344,7 @@ async function saveEditHeader(id){
     betalingsmetode:paidAtDelivery?paidMethod:null
   };
   try{
-    await dbUpdate('purchases',id,headerUpdate);
+    if(WRITE_TO_PURCHASES) await dbUpdate('purchases',id,headerUpdate);
     await shadowUpdateExpense({...p,...headerUpdate,id},'manual');  // phase 2a shadow
     showToast('Faktura-hode oppdatert');
     showInvoiceDetail(id);
@@ -2423,7 +2430,7 @@ async function saveEditLine(purchaseId,lineIdx){
     ...kl
   };
   try{
-    await dbUpdate('purchases',purchaseId,{lines});
+    if(WRITE_TO_PURCHASES) await dbUpdate('purchases',purchaseId,{lines});
     await shadowUpdateExpense({...p,lines,id:purchaseId},'manual');  // phase 2a shadow
     // Also update product's salgEks/salgInkl + buyEks/buyInkl
     const productId=lines[lineIdx].productId;
@@ -2465,7 +2472,7 @@ async function deleteInvoiceLine(purchaseId,lineIdx){
   if(!confirm('Slett linjen "'+prodName+'" fra fakturaen?\n\nDette kan ikke angres.'))return;
   lines.splice(lineIdx,1);
   try{
-    await dbUpdate('purchases',purchaseId,{lines});
+    if(WRITE_TO_PURCHASES) await dbUpdate('purchases',purchaseId,{lines});
     await shadowUpdateExpense({...p,lines,id:purchaseId},'manual');  // phase 2a shadow
     showToast('Linje slettet');
     showInvoiceDetail(purchaseId);
@@ -2546,7 +2553,7 @@ async function saveNewLine(purchaseId){
   const lines=(p.lines||[]).slice();
   lines.push(newLine);
   try{
-    await dbUpdate('purchases',purchaseId,{lines});
+    if(WRITE_TO_PURCHASES) await dbUpdate('purchases',purchaseId,{lines});
     await shadowUpdateExpense({...p,lines,id:purchaseId},'manual');  // phase 2a shadow
     showToast('Linje lagt til');
     showInvoiceDetail(purchaseId);
@@ -6928,7 +6935,8 @@ function findExpenseByLinkedPurchase(purchaseId){
 async function shadowCreateExpense(purchase,sourceHint){
   try{
     const exp=buildExpenseDocFromPurchase(purchase,sourceHint);
-    const id=await dbAdd('expenses',exp);
+    const id='mirror-'+purchase.id;
+    await tenantCol('expenses').doc(id).set({...exp,id});
     console.log('[shadow-write] CREATE ok:',purchase.id,'→',id);
     return id;
   }catch(e){
@@ -6942,8 +6950,10 @@ async function shadowUpdateExpense(purchase,sourceHint){
     const existing=findExpenseByLinkedPurchase(purchase.id);
     if(!existing){
       // Pre-shadow-write era: mirror missing on UPDATE → create it now (spec rule).
+      // Phase 2f.1c: deterministic mirror-<id> for idempotent re-runs (same convention as backfill/dedupe).
       const exp=buildExpenseDocFromPurchase(purchase,sourceHint);
-      const id=await dbAdd('expenses',exp);
+      const id='mirror-'+purchase.id;
+      await tenantCol('expenses').doc(id).set({...exp,id});
       console.log('[shadow-write] UPDATE→CREATE ok:',purchase.id,'→',id,'(mirror was missing)');
       return id;
     }
