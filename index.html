@@ -1773,7 +1773,7 @@ function renderInnkjop(){
   el.innerHTML=html;
 }
 function getWeekStart(){const d=new Date();const diff=d.getDate()-(d.getDay()===0?6:d.getDay()-1);d.setDate(diff);return d.toISOString().slice(0,10)}
-async function deleteInnkjop(id){if(!confirm('Slett innkjøp?'))return;await dbDelete('purchases',id);await shadowDeleteExpense(id);showToast('Slettet')}
+async function deleteInnkjop(id){if(!confirm('Slett innkjøp?'))return;try{await dbDelete('purchases',id);await shadowDeleteExpense(id);showToast('Slettet')}catch(e){showToast('Kunne ikke slette helt. Prøv igjen.','err')}}
 
 // ─────────────────────────────────────────
 // PURCHASE MODAL – KOLLI-BASED
@@ -2053,7 +2053,14 @@ async function saveInnkjop(){
     }
   }
   // Shadow-write phase 2a: mirror to expenses (defensive — primary write already committed)
-  await shadowCreateExpense({...purchaseData,originalFiles:_shadowOriginalFiles},_expenseSource);
+  // Phase 2f.1b: shadow now re-throws on failure; wrap so failure surfaces as a user-visible
+  // toast instead of silently leaving the mirror out of sync. Success toast + closeModal
+  // already fired upstream — this toast is a post-facto inconsistency warning.
+  try{
+    await shadowCreateExpense({...purchaseData,originalFiles:_shadowOriginalFiles},_expenseSource);
+  }catch(e){
+    showToast('Faktura ble lagret, men synk til oversikten feilet. Prøv å åpne/lagre på nytt, eller kontakt support hvis den ikke vises.','err');
+  }
 }
 
 // ─────────────────────────────────────────
@@ -6926,7 +6933,7 @@ async function shadowCreateExpense(purchase,sourceHint){
     return id;
   }catch(e){
     console.error('[shadow-write] CREATE failed:',purchase.id,e&&e.message,e);
-    return null;
+    throw e;
   }
 }
 
@@ -6952,7 +6959,7 @@ async function shadowUpdateExpense(purchase,sourceHint){
     return existing.id;
   }catch(e){
     console.error('[shadow-write] UPDATE failed:',purchase.id,e&&e.message,e);
-    return null;
+    throw e;
   }
 }
 
@@ -6968,6 +6975,7 @@ async function shadowDeleteExpense(purchaseId){
     console.log('[shadow-write] DELETE ok:',purchaseId,'→',existing.id);
   }catch(e){
     console.error('[shadow-write] DELETE failed:',purchaseId,e&&e.message,e);
+    throw e;
   }
 }
 
