@@ -5355,9 +5355,23 @@ function saveApiKey(val){
     localStorage.setItem('fs_anthropic_key',clean);
     document.getElementById('scan-apikey').value=clean;
     if(status){status.textContent='✅ API-nøkkel lagret! ('+clean.length+' tegn)';status.style.color='var(--accent)';}
+    // Auto-collapse Steg 1 on a valid paste; surface the "Endre nøkkel" affordance.
+    const sec=document.getElementById('scan-apikey-section');
+    const edit=document.getElementById('scan-apikey-edit');
+    if(sec) sec.style.display='none';
+    if(edit) edit.style.display='inline-block';
   } else if(clean&&clean.length>5){
     if(status){status.textContent='⚠️ Ugyldig nøkkel — skal starte med sk-ant-...';status.style.color='#f88';}
   }
+}
+function showApiKeyField(){
+  // Recovery path for revoked/invalid keys — re-expose Steg 1 + focus the input.
+  const sec=document.getElementById('scan-apikey-section');
+  const edit=document.getElementById('scan-apikey-edit');
+  const inp=document.getElementById('scan-apikey');
+  if(sec) sec.style.display='';
+  if(edit) edit.style.display='none';
+  if(inp) inp.focus();
 }
 function openScanner(mode){
   scanMode=mode||'faktura';
@@ -5370,6 +5384,11 @@ function openScanner(mode){
     keyInput.value=saved;
     if(status){status.textContent='✅ API-nøkkel lagret fra forrige gang!';status.style.color='var(--accent)';}
   }
+  // Hide the Steg 1 entry once a key is saved; expose the "Endre nøkkel" recovery affordance.
+  const _apiSec=document.getElementById('scan-apikey-section');
+  const _apiEdit=document.getElementById('scan-apikey-edit');
+  if(_apiSec) _apiSec.style.display = saved ? 'none' : '';
+  if(_apiEdit) _apiEdit.style.display = saved ? 'inline-block' : 'none';
   // Update title + upload zone copy based on mode
   const titleEl=document.getElementById('scan-title');
   const subEl=document.getElementById('scan-subtitle');
@@ -7416,6 +7435,10 @@ async function saveNyUtgift(){
     <div>
       <div id="scan-title" style="font-size:17px;font-weight:700">🤖 AI Fakturaskanner</div>
       <div id="scan-subtitle" style="font-size:11px;color:var(--muted);margin-top:2px">Last opp faktura — AI leser og registrerer automatisk</div>
+      <button id="scan-apikey-edit" onclick="showApiKeyField()"
+        style="display:none;margin-top:6px;font-size:11px;color:var(--accent);background:none;border:none;padding:0;cursor:pointer;text-decoration:underline">
+        🔑 Endre API-nøkkel
+      </button>
     </div>
     <span class="scan-ai-badge">AI</span>
   </div>
