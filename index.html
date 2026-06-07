@@ -6535,7 +6535,7 @@ function renderScanRows(){
       '<td class="r">'+forrigeHtml+'</td>'+
       '<td class="r">'+(row.isNew
         ?'<span class="price-prev" style="font-style:italic">venter reg.</span>'
-        :'<input type="number" step="0.01" min="0" class="cell'+(utsalg>0?'':' hint')+'" value="'+(utsalg>0?fmtN(utsalg,2).replace(/\s/g,''):'')+'" placeholder="'+(utsalg>0?'':'skriv…')+'" onchange="updScanRow('+idx+',\'utsalgEks\',this.value)">')+'</td>'+
+        :'<input type="number" step="0.01" min="0" class="cell'+(utsalg>0?'':' hint')+'" value="'+(utsalg>0?Number(utsalg).toFixed(2):'')+'" placeholder="'+(utsalg>0?'':'skriv…')+'" onchange="updScanRow('+idx+',\'utsalgEks\',this.value)">')+'</td>'+
       '<td class="r">'+fmtN(totalKjopEks,2)+'</td>'+
       '<td class="r">'+(forvSalgEks>0?fmtN(forvSalgEks,2):'–')+'</td>'+
       '<td class="r">'+(fortjKr!==null?fmtN(fortjKr,2):'–')+'</td>'+
@@ -6558,7 +6558,7 @@ function escapeHtml(s){return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&
 function updScanRow(idx,field,value){
   if(!scanRows[idx])return;
   if(field==='antallKolli'||field==='innholdPerKolli'||field==='utsalgEks'){
-    scanRows[idx][field]=parseFloat(value)||0;
+    scanRows[idx][field]=parseFloat(String(value).replace(',','.'))||0;
   } else if(field==='skipped'){
     scanRows[idx].skipped=!!value;
   } else if(field==='ekskluder'){
