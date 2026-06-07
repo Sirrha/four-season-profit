@@ -3913,6 +3913,10 @@ function openScannerFromInnboks(innboksId,mode){
       scanFileType=it.type;
       scanResults=it.utkast.scanResults;
       scanRows=it.utkast.scanRows;
+      // Phase 2f.scanner-fix: draft-resume must run autoDetect + render the header/toggle
+      // (otherwise getScanRule falls through to 'inkl' default and every price ÷ 1.15).
+      renderScanResultHeader(scanResults);
+      setScanRule(getScanRule());
       renderScanPreview();
       // Show the results view directly
       const prev=document.getElementById('scan-preview');if(prev)prev.style.display='none';
@@ -5306,6 +5310,7 @@ async function backfillMirrorPaymentFields(){
 // AI FAKTURA SKANNER
 // ─────────────────────────────────────────
 let scanFiles=[],scanResults=[],scanMode='faktura';
+let scanEffectiveRule=null;
 // Legacy single-file pointers still maintained for Z-rapport flow
 let scanFileData=null,scanFileType=null;
 
@@ -5429,6 +5434,8 @@ function cancelScanner(){
 }
 
 function resetScanner(){
+  scanEffectiveRule=null;
+  const _sh=document.getElementById('scan-result-header');if(_sh)_sh.innerHTML='';
   scanFiles=[];scanFileData=null;scanFileType=null;scanResults=[];
   ['scan-preview','scan-btn-area','scan-progress','scan-results','scan-error','scan-z-results','scan-bank-results'].forEach(id=>{
     const el=document.getElementById(id);if(el)el.style.display='none';
@@ -6174,24 +6181,17 @@ async function confirmBankStatementOverride(){
   if(ok)await confirmBankStatementImport();
 }
 
-function showScanResults(data){
-  document.getElementById('scan-progress').style.display='none';
-  if(scanMode==='z-rapport'){
-    showZRapportResults(data);
-    return;
-  }
-  if(scanMode==='bank_statement'){
-    showBankStatementResults(data);
-    return;
-  }
-  document.getElementById('scan-results').style.display='block';
-  // Match supplier
+function renderScanResultHeader(data){
+  // Phase 2f.scanner-fix: extracted from showScanResults so the draft-resume path can
+  // reuse it. Runs autoDetectScanRule + stores result in scanEffectiveRule + null-guards
+  // the DOM write — so basis-detection isn't lost even if showScanResults is bypassed.
   const matchedLev=data.leverandor?findLeverandorByName(data.leverandor):null;
   const savedRule=matchedLev?(matchedLev.prisregel||null):null;
   // v25: Auto-detect rule based on math. v25.1: Math wins when it's clear.
   const auto=autoDetectScanRule(data);
   // Prioritize math when clear (<5% avvik). Only use saved rule when math is inconclusive.
   const initial=auto.isClear?auto.rule:(savedRule==='eks'||savedRule==='inkl'?savedRule:auto.rule);
+  scanEffectiveRule=initial;
   const levLabel=matchedLev
     ? '<strong>'+matchedLev.navn+'</strong> <span style="font-size:10.5px;color:#8de19e;font-weight:600">✓ i register</span>'
     : '<strong>'+(data.leverandor||'Ukjent lev.')+'</strong> <span style="font-size:10.5px;color:#ffd54f;font-weight:600">⚠️ ikke i register</span>';
@@ -6212,7 +6212,8 @@ function showScanResults(data){
   if(savedRule&&savedRule!==auto.rule&&auto.isClear){
     ruleNote+=' · <span style="color:#ffd54f">Leverandør har «'+(savedRule==='eks'?'eks':'inkl')+'» lagret — matematikken sier noe annet</span>';
   }
-  document.getElementById('scan-result-header').innerHTML=
+  const el=document.getElementById('scan-result-header');if(!el)return;
+  el.innerHTML=
     '<div style="display:flex;justify-content:space-between;margin-bottom:4px">'+levLabel+'<span>'+(data.fakturanr||'Uten nr')+'</span></div>'+
     '<div style="display:flex;justify-content:space-between;opacity:.8;font-size:12px"><span>Dato: '+(fmtDate(data.dato)||'')+(data.betaltVedLevering===true?' · <span style="background:rgba(77,184,118,.25);color:#9fdfb5;padding:2px 8px;border-radius:10px;font-weight:700">✓ Betalt ved levering'+(data.betalingsmetode?' · '+paymentMethodLabel(data.betalingsmetode):'')+'</span>':(data.forfallsdato?' · Forfall: '+fmtDate(data.forfallsdato):''))+'</span><span>Totalt på faktura: '+fmtNOK(data.totalInkl||0)+'</span></div>'+
     '<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.2)">'+
@@ -6223,6 +6224,20 @@ function showScanResults(data){
         '<button type="button" id="scan-rule-eks" onclick="setScanRule(\'eks\');renderScanRows()" style="flex:1;padding:8px;border:2px solid '+(initial==='eks'?'#90caf9':'rgba(255,255,255,.3)')+';background:'+(initial==='eks'?'rgba(144,202,249,.2)':'rgba(255,255,255,.1)')+';color:#fff;border-radius:8px;font-weight:600;font-size:12.5px;cursor:pointer;font-family:inherit">🔵 Priser eks. MVA</button>'+
       '</div>'+
     '</div>';
+}
+
+function showScanResults(data){
+  document.getElementById('scan-progress').style.display='none';
+  if(scanMode==='z-rapport'){
+    showZRapportResults(data);
+    return;
+  }
+  if(scanMode==='bank_statement'){
+    showBankStatementResults(data);
+    return;
+  }
+  document.getElementById('scan-results').style.display='block';
+  renderScanResultHeader(data);
   // Build scanRows state from scanner output — v8 uses innholdPerKolli
   scanRows=(data.linjer||[]).map((l,i)=>{
     const match=matchProductByName(l.beskrivelse||'');
@@ -6418,7 +6433,7 @@ function categoryMarker(cat){
 let scanRows=[];
 
 function getScanRule(){
-  return document.getElementById('scan-effective-rule')?.value||'inkl';
+  return scanEffectiveRule||document.getElementById('scan-effective-rule')?.value||'inkl';
 }
 
 function renderScanRows(){
@@ -6810,6 +6825,7 @@ function autoDetectScanRule(scanData){
 }
 
 function setScanRule(rule){
+  scanEffectiveRule=rule;
   const hid=document.getElementById('scan-effective-rule');
   if(!hid)return;
   hid.value=rule;
