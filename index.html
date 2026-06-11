@@ -6336,6 +6336,19 @@ function matchProductByName(raw){
 // Matcher Fix V1: detect when AI's extracted name disagrees with a fuzzy-matched product
 function scanRowMismatch(row){
   if(!row||row.skipped||row.isNew||!row.productId||row.matchType!=='maybe')return false;
+  // Batch-mismatch heuristic (Matcher Fix V2, 2026-06-11): if 2+ live
+  // maybe-matched rows share this productId, the matcher got fooled by a
+  // similar-products cluster (Eti Popkek flavor variants, Duru Ris variants).
+  // Counts THIS row too, so threshold is >=2 (i.e. at least one other row
+  // also matches the same product).
+  let dupCount=0;
+  for(const r of scanRows){
+    if(r&&!r.skipped&&!r.isNew&&r.matchType==='maybe'&&r.productId===row.productId){
+      dupCount++;
+      if(dupCount>=2)break;
+    }
+  }
+  if(dupCount>=2)return true;
   const p=dbFind('products',row.productId);
   if(!p)return false;
   const aw=normProd(row.raw||'').split(' ').filter(w=>w.length>2);
@@ -6344,7 +6357,7 @@ function scanRowMismatch(row){
   const setB=new Set(bw);
   let inter=0;for(const w of aw)if(setB.has(w))inter++;
   const union=new Set([...aw,...bw]).size;
-  return union>0&&(inter/union)<0.5;
+  return union>0&&(inter/union)<0.7;
 }
 
 function guessCategory(raw,mva){
