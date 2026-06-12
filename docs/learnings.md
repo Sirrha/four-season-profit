@@ -16,9 +16,60 @@ Soren should know.
 - `DECISION` — architectural or design call locked
 - `LANDMINE` — collab tripping point
 - `PRINCIPLE` — capital-letter rule
+- `NAME` — a naming/terminology fact for the collab
+- `GATE-PASS` — a verified production-deploy confirmation
 
 Add new entries above the existing top one. Never delete; supersede with later
 entries if a decision is revised.
+
+---
+
+## 2026-06-12 · OPEN BUG · Innkjøp registration form computes Formula B (ant × innhold × pris) instead of Formula A
+**What:** Scanner stores `totalLinje = antall × prisPerKolli` (Formula A) correctly — all 120 lines of invoice-20647 sum to exactly 63 677,04 eks = invoice total. But the Innkjøp registration form summary "TOTALT INNKJØP EKS" shows 84 991,44 — 33,5% over. Sage confirmed registration code path is multiplying `antall × innholdPerKolli × prisPerKolli` (Formula B), inflating every line with innhold > 1 (119 of 120 lines).
+**Why:** Likely in `confirmScanToInnkjop` (~line 5530), `renderPLines`, or `calcKolliLine` (~line 1072). `innholdPerKolli` is descriptive (units per carton), not a multiplier in line total.
+**So what:** **Do NOT click "Lagre og registrer som innkjøp" on any multi-line invoice with innhold > 1 until fixed.** Unknown whether save function writes scanner-stored `totalLinje` (correct) or recomputed summary values (wrong). Recon path: trace data flow scanRows → pLines → summary. Fix + add `Sum avviker` guard at registration form level. Open question: why not noticed across months of registered invoices? Either new bug or earlier invoices had shapes that didn't trigger it. Verify by sampling historical invoices' stored totals.
+
+## 2026-06-12 · PATTERN · Sage forensic console diagnostics — read-only first, targeted write second
+**What:** Sage's JS console inspections cracked two messy bugs today: (1) recovered invoice-20647 utkast from `status:'done'` via `dbUpdate('innboks', id, {status:'pending'})`, (2) confirmed Formula A vs B discrepancy by walking `utkast.scanResults.linjer` and computing both candidate formulas line by line.
+**Why:** Sage sees actual data shape, removes Soren's speculation. Targeted writes safer than blind UI clicks when something's gone wrong.
+**So what:** When future Soren is speculating about data shape — **stop speculating, write a Sage prompt instead.** Pattern: pure read first (inspect, log, console.table), share results, design write if any. Never destructive writes without read first. Sage prompts labeled `→ PASTE TO: Chrome Claude (Sage)`.
+
+## 2026-06-12 · NAME · Chrome Claude renamed to "Sage"
+**What:** The Chrome-based Claude instance for visual gating and console diagnostics is now called Sage.
+**So what:** All future handoffs and prompts use "Sage". Three-persona team: Soren (planner, claude.ai), Claude Code (executor, laptop), Sage (visual/console gate, Chrome).
+
+## 2026-06-12 · LANDMINE · `status:'done'` silently hides Innboks files with active utkast
+**What:** Tenza invoice-20647.pdf had 5+ hours of work as 120-row utkast (savedAt 2026-06-12T15:30:46.387Z). After accidental "ferdig" click or wrong `markInnboksLinkedDone` fire, file got `status:'done'`. Pending-list filter excluded it. File appeared lost. Firestore data was intact — only UI filtered it out.
+**Why:** Innboks pending-list filters on `status === 'pending'`. Status-flip silent; no warning if file has `utkast.scanRows.length > 0`.
+**So what:** When utkast appears "missing" from Innboks: **first diagnostic = check if status got flipped to 'done', not assume data loss.** Recovery via Sage console: `dbUpdate('innboks', id, {status:'pending'})` — utkast preserved exactly, savedAt unchanged, file reappears with 💾 Utkast badge after refresh. Future code defense worth shipping: refuse or warn before setting `status:'done'` on file with active utkast.
+
+## 2026-06-12 · LANDMINE · ✏️ Rename ≠ ➕ Treat-as-new for wrong-product matches
+**What:** When matcher picks COMPLETELY DIFFERENT product (e.g. Chtoura Freekeh → Coarce Semolina, Banana Popkek → Dark Chocolate), V1.1 `✏️ Rename` only sets `row.userName` for display. Does NOT change `row.productId`. On save, purchase registers against wrong product's productId — silent data corruption. Modal title misleadingly says "Nytt navn for produktet «X»" — legacy V1 text where rename actually renamed the DB record.
+**Why:** Matcher V2 makes wrong matches visually obvious (⚠️ NAVN AVVIK badge + gold tint) but same two buttons remain: ✏️ Rename (display-only) vs ➕ Treat as new (creates new product, correct productId).
+**So what:** **Rule: for wrong-product matches, ALWAYS click ➕ Treat as new, never ✏️ Rename.** ✏️ Rename only safe when match is correct but name needs aesthetic fix. Recovery check if ✏️ clicked mistakenly: search Produkter for the original product name — if still there with original name, only display was affected (recoverable); if renamed in DB, manual restore needed.
+
+## 2026-06-12 · PATTERN · Multi-level packaging extraction (N kart × X stk) — workaround + open AI prompt fix
+**What:** Invoice format "Grønn Oliven Mammut Mykonos Marinert m/Chili 500gr x 12 stk. 3 kart" contains 3 packaging levels: 3 cartons × 12 stk × 44,10/stk = 1 587,60 line total. Scanner data model is 2-level only (ANT × PRIS/KOLLI = TOTAL). AI extracts PRIS/KOLLI as per-STK price (44,10) not per-CARTON price (529,20).
+**Why:** AI prompt doesn't parse "N kart" + "X stk" as separate antall/innhold signals.
+**So what:** **Workaround:** ANT = total-stk-count (3×12=36 for Mykonos, 5×12=60 for Naxos/Argolis), INNHOLD = 1 (NOT carton's stk count), PRIS = AI's per-stk. Scanner TOTAL = ANT × PRIS = invoice line ✓. Loses carton-structure metadata on save. Affects fresh-produce-in-cartons (Tenza, Grønn Oliven Mammut, Argolis 750ml-cases). **Open AI prompt fix:** "If description contains 'N kart'/'N kartonger'/'N esker' AND 'X stk' separately → antallKolli = N × X (total units), innholdPerKolli = 1, prisPerKolli = per-stk price. Verify antall × pris ≈ printed line total." Defense-in-depth: make PRIS/KOLLI EKS user-editable.
+
+## 2026-06-12 · OPEN BUG · PRIS/KOLLI EKS not user-editable in scanner UI
+**What:** Scanner row shows PRIS/KOLLI EKS as display-only computed field. User can edit ANT.KOLLI, SELGES I, MVA, INNHOLD/KOLLI — but not PRIS/KOLLI itself.
+**Why:** Soren originally advised "set PRIS/KOLLI=529,20" for Mykonos — field doesn't accept input. Workaround forced via ANT/INNHOLD manipulation instead.
+**So what:** Bundle candidate: make PRIS/KOLLI EKS user-editable. Combined with multi-level packaging AI prompt fix = defense-in-depth.
+
+## 2026-06-12 · PATTERN · AI doesn't auto-extract unit/innhold from descriptions
+**What:** Invoice descriptions with explicit weight ("16kg", "14kg") or count ("5 stk", "x 12 stk") should drive selgesSom and innholdPerKolli. But: NEW products → AI leaves innholdPerKolli empty; KNOWN products → AI falls back to historical product's stored enhet, ignoring new invoice's explicit value. Examples this week: Galia 16kg (returned "5 stk"), Cesme 14kg (blank), Mykonos/Naxos kart×stk (flattened to per-stk).
+**Why:** Prompt doesn't instruct AI to prefer invoice's current weight/count over historical defaults.
+**So what:** Prompt addition: "When invoice description contains explicit weight (e.g. '16kg') or count (e.g. '5 stk', 'x 12 stk'), use those values for selgesSom and innholdPerKolli regardless of any matched historical product." Bundle with multi-level packaging fix; both scanner-prompt-only, post-soak.
+
+## 2026-06-12 · GATE-PASS · Matcher Fix V2 confirmed live via Sage console (commit eb2cb55)
+**What:** Sage's console check on sormena.no verified all four expected booleans `true`:
+- `V2_deployed`: scanRowMismatch contains 'dupCount' (batch-mismatch heuristic)
+- `threshold_0_7`: Jaccard threshold raised from 0.5 to 0.7
+- `utsalg_period`: Sunday's `Number(utsalg).toFixed(2)` fix live
+- `scanEffectiveRule`: Sunday's basis-detection rule live
+**So what:** All three scanner commits (utsalgEks apply, basis-detection, Matcher V2) live in production browser. Earlier same-day screenshots without ⚠️ NAVN AVVIK were pre-refresh state. Sage console gate = new standard for confirming production deploys after commits ship.
 
 ---
 
