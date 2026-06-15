@@ -6445,6 +6445,34 @@ function categoryMarker(cat){
 // ─── Render the scan table ──────────────────
 let scanRows=[];
 
+// ─── Auto-save infrastructure (Chunk 1/3, 2026-06-13) ───
+// Prevents Ramco-style multi-hour loss to power/update/crash.
+// Helper is dormant until Chunks 2+3 wire timer + dirty markers.
+let scanAutosaveTimer=null;
+let scanIsDirty=false;
+function _markScanDirty(){ scanIsDirty=true; }
+
+async function autoSaveScanDraft(){
+  if(!innboksLinkedId) return;              // never enter saveScanAsDraft Path B confirm()
+  if(!scanIsDirty) return;                  // nothing changed since last save
+  if(!scanResults || !scanRows || scanRows.length===0) return;
+  try{
+    await dbUpdate('innboks', innboksLinkedId, {
+      utkast:{ scanResults, scanRows, savedAt:new Date().toISOString() }
+    });
+    scanIsDirty=false;
+    const el=document.getElementById('scan-autosave-status');
+    if(el){
+      const now=new Date();
+      const hh=String(now.getHours()).padStart(2,'0');
+      const mm=String(now.getMinutes()).padStart(2,'0');
+      el.textContent='💾 Auto-lagret kl '+hh+':'+mm;
+    }
+  }catch(e){
+    console.error('[autosave] failed', e);
+  }
+}
+
 function getScanRule(){
   return scanEffectiveRule||document.getElementById('scan-effective-rule')?.value||'inkl';
 }
@@ -7560,7 +7588,8 @@ async function saveNyUtgift(){
       </table>
     </div>
     <div class="scan-summary" id="scan-summary"></div>
-    <div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+    <div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;align-items:center">
+      <span id="scan-autosave-status" style="color:#888;font-size:13px;margin-right:auto" aria-live="polite"></span>
       <button class="btn btn-g" onclick="cancelScanner()">Avbryt</button>
       <button class="btn" onclick="saveScanAsDraft()" style="background:#8b6c3f;color:#fff;min-width:180px" title="Lagre fremgang, fortsett senere fra Innboks">💾 Lagre utkast</button>
       <button class="btn btn-p" onclick="confirmScanToInnkjop()" style="min-width:260px">✅ Lagre og registrer som innkjøp</button>
