@@ -3898,6 +3898,11 @@ function openScannerFromInnboks(innboksId,mode){
       // Resume the draft
       innboksLinkedId=innboksId;
       openScanner(mode);
+      // Re-affirm after openScanner→resetScanner cleared session state, then
+      // start the 30s auto-save timer (Chunk 2/3, Option B).
+      innboksLinkedId=innboksId;
+      if(scanAutosaveTimer) clearInterval(scanAutosaveTimer);
+      scanAutosaveTimer=setInterval(autoSaveScanDraft, 30000);
       // Phase B2: build a REAL File from the innboks base64 so Phase B's upload
       // in saveInnkjop can transfer the original to Storage. The previous fake
       // metadata object passed to ref.put() silently failed.
@@ -3933,6 +3938,11 @@ function openScannerFromInnboks(innboksId,mode){
   }
   innboksLinkedId=innboksId;
   openScanner(mode);
+  // Re-affirm after openScanner→resetScanner cleared session state, then
+  // start the 30s auto-save timer (Chunk 2/3, Option B).
+  innboksLinkedId=innboksId;
+  if(scanAutosaveTimer) clearInterval(scanAutosaveTimer);
+  scanAutosaveTimer=setInterval(autoSaveScanDraft, 30000);
   // Phase B2: build a REAL File from the innboks base64 so Phase B's upload
   // in saveInnkjop can transfer the original to Storage.
   const innboksBlob=base64ToBlob(it.data,it.mimeType);
@@ -5420,6 +5430,15 @@ function openScanner(mode){
 function openZRapportScanner(){openScanner('z-rapport')}
 function openBankStatementScanner(){openScanner('bank_statement')}
 function closeScanner(){
+  // Stop auto-save timer on every close (Chunk 2/3, 2026-06-13).
+  // NOTE: deliberately does NOT null innboksLinkedId — confirmScanToInnkjop
+  // calls closeScanner() then relies on saveInnkjop→markInnboksLinkedDone
+  // (which needs the id) to mark the innboks item done + clear its utkast.
+  if(scanAutosaveTimer){
+    clearInterval(scanAutosaveTimer);
+    scanAutosaveTimer=null;
+  }
+  scanIsDirty=false;
   document.getElementById('ov-scanner').classList.remove('open');
 }
 
@@ -5429,11 +5448,28 @@ function closeScanner(){
 // confirmScanToInnkjop is the one exception — it intentionally calls
 // closeScanner() directly to preserve scanFiles for the immediate next save.
 function cancelScanner(){
+  // Abandon path: clear full auto-save session state (Chunk 2/3, 2026-06-13).
+  if(scanAutosaveTimer){
+    clearInterval(scanAutosaveTimer);
+    scanAutosaveTimer=null;
+  }
+  innboksLinkedId=null;
+  scanIsDirty=false;
   scanFiles=[];
   closeScanner();
 }
 
 function resetScanner(){
+  // Clear auto-save session state (Chunk 2/3, 2026-06-13).
+  // Bleed safety-net: every fresh open runs through here, nulling a stale
+  // innboksLinkedId so a direct (Innkjøp-side) scan can't auto-save onto a
+  // previous Innboks item. openScannerFromInnboks re-sets it AFTER openScanner.
+  if(scanAutosaveTimer){
+    clearInterval(scanAutosaveTimer);
+    scanAutosaveTimer=null;
+  }
+  innboksLinkedId=null;
+  scanIsDirty=false;
   scanEffectiveRule=null;
   const _sh=document.getElementById('scan-result-header');if(_sh)_sh.innerHTML='';
   scanFiles=[];scanFileData=null;scanFileType=null;scanResults=[];
