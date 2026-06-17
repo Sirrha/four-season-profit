@@ -6675,6 +6675,7 @@ function updScanRow(idx,field,value){
   } else {
     scanRows[idx][field]=value;
   }
+  _markScanDirty();  // Chunk 3/3 — auto-save dirty flag
   renderScanRows();
 }
 
@@ -6705,6 +6706,7 @@ function registerScanRowProduct(idx){
     scanRows[idx].matchType='exact';
     scanRows[idx].utsalgEks=0;
     showToast('Produkt registrert — skriv utsalgspris');
+    _markScanDirty();  // Chunk 3/3 — auto-save dirty flag
     renderScanRows();
   }).catch(e=>{showToast('Kunne ikke lagre: '+e.message,'err');});
 }
@@ -6724,6 +6726,7 @@ function renameMatchedProduct(idx){
     scanRows[idx].matchType='exact';
     scanRows[idx].userName=trimmed;
     showToast('Produktnavn oppdatert');
+    _markScanDirty();  // Chunk 3/3 — auto-save dirty flag
     renderScanRows();
   }).catch(e=>showToast('Kunne ikke endre navn: '+e.message,'err'));
 }
@@ -6744,6 +6747,7 @@ function treatScanRowAsNew(idx){
   scanRows[idx].isNew=true;
   scanRows[idx].newCategory=guessCategory(trimmed,row.mva||15);
   scanRows[idx].utsalgEks=0;
+  _markScanDirty();  // Chunk 3/3 — auto-save dirty flag
   renderScanRows();
 }
 
