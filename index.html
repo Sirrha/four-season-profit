@@ -1046,7 +1046,7 @@ const firstSnapshotSeen={};  // per-collection first-snapshot flag (phase 2b-fix
 // 2f.1d flips this to false → mirror becomes the only write target; purchases freezes as a
 // historical record. Operator-controlled (not sentinel-automated): change the literal, deploy,
 // observe a clean Chrome Claude cycle, then ship 2f.1d.
-const WRITE_TO_PURCHASES=true;
+const WRITE_TO_PURCHASES=false;
 
 function startListeners(){
   // Reset per-collection flags so re-starting listeners (tenant switch, etc.) works.
