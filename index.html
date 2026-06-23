@@ -1281,6 +1281,8 @@ const EXPENSE_KIND_LABELS={
 };
 const OPERATIONAL_STATUS=['new','checked','needs_action','ready_to_pay','paid'];
 const ACCOUNTANT_STATUS=['not_ready','missing_info','ready','reviewed','exported','archived'];
+const MISSING_REASONS=['missing_supplier','missing_total','missing_invoice_date','missing_currency','invalid_vat','missing_original_file','missing_supplier_id','missing_lines','missing_category','missing_recurring_confirmation'];
+const REASON_LABELS={missing_supplier:'Mangler leverandør',missing_total:'totalInclVat må være > 0',missing_invoice_date:'Mangler fakturadato',missing_currency:'Mangler valuta',invalid_vat:'Ugyldig vatStatus',missing_original_file:'Mangler bilag (originalFiles)',missing_supplier_id:'leverandorId er påkrevd for purchase_invoice',missing_lines:'Minst én linje kreves for purchase_invoice',missing_category:'Kategori (id eller label) kreves',missing_recurring_confirmation:'Marker som en-gang eller koble til mal'};
 const EXPENSE_SOURCE=['ai_scan','manual','innboks','migrated_from_purchase','recurring_template'];
 const PAID_DATE_SOURCE=['manual','bank_match','migration'];  // null = implicit "not paid"
 const VAT_STATUS=['normal','vatUnknown','vatNotApplicable'];
@@ -7133,47 +7135,45 @@ async function shadowDeleteExpense(purchaseId){
 // Step 4 wires recurring scaffold (definitions present, no auto-firing).
 // ─────────────────────────────────────────
 
-function validateExpense(exp){
-  if(!exp||typeof exp!=='object')return{ready:false,reason:'Manglende dokument'};
-  // Universal
-  if(!exp.expenseKind||!EXPENSE_KINDS.includes(exp.expenseKind))return{ready:false,reason:'Ugyldig expenseKind'};
-  if(!exp.supplierName||typeof exp.supplierName!=='string'||!exp.supplierName.trim())return{ready:false,reason:'Mangler leverandør'};
-  if(typeof exp.totalInclVat!=='number'||!isFinite(exp.totalInclVat)||exp.totalInclVat<=0)return{ready:false,reason:'totalInclVat må være > 0'};
-  if(!exp.invoiceDate)return{ready:false,reason:'Mangler fakturadato'};
-  if(!exp.currency)return{ready:false,reason:'Mangler valuta'};
-  if(!VAT_STATUS.includes(exp.vatStatus||'normal'))return{ready:false,reason:'Ugyldig vatStatus'};
-  if((exp.vatStatus||'normal')==='normal'){
-    if(typeof exp.vatAmount!=='number'||!isFinite(exp.vatAmount))return{ready:false,reason:'vatAmount må være tall når vatStatus=normal'};
-  }
-  // Sirrha critical principle: auto-ready NEVER without bilag
-  if(!Array.isArray(exp.originalFiles)||exp.originalFiles.length===0)return{ready:false,reason:'Mangler bilag (originalFiles)'};
-  // Paid-date / paidDateSource must be set together or both null
+function getAccountingReadiness(exp){
+  if(!exp||typeof exp!=='object')return{status:'not_ready',missingReasons:[]};
+  if(!exp.expenseKind||!EXPENSE_KINDS.includes(exp.expenseKind))return{status:'not_ready',missingReasons:[]};
+  const reasons=[];
+  // Check order matches old validateExpense for toast byte-identity (Call 2)
+  if(!exp.supplierName||typeof exp.supplierName!=='string'||!exp.supplierName.trim())reasons.push('missing_supplier');
+  if(typeof exp.totalInclVat!=='number'||!isFinite(exp.totalInclVat)||exp.totalInclVat<=0)reasons.push('missing_total');
+  if(!exp.invoiceDate)reasons.push('missing_invoice_date');
+  if(!exp.currency)reasons.push('missing_currency');
+  if(!VAT_STATUS.includes(exp.vatStatus||'normal'))reasons.push('invalid_vat');
+  else if((exp.vatStatus||'normal')==='normal'&&(typeof exp.vatAmount!=='number'||!isFinite(exp.vatAmount)))reasons.push('invalid_vat');
+  if(!Array.isArray(exp.originalFiles)||exp.originalFiles.length===0)reasons.push('missing_original_file');
+  // paidDate integrity → not_ready (Call 1, no enum entry)
   const pdNull=exp.paidDate===null||exp.paidDate===undefined;
   const psNull=exp.paidDateSource===null||exp.paidDateSource===undefined;
-  if(pdNull!==psNull)return{ready:false,reason:'paidDate og paidDateSource må være satt sammen eller begge null'};
-  if(!psNull&&!PAID_DATE_SOURCE.includes(exp.paidDateSource))return{ready:false,reason:'Ugyldig paidDateSource'};
-  // Per-kind
+  if(pdNull!==psNull)return{status:'not_ready',missingReasons:[]};
+  if(!psNull&&!PAID_DATE_SOURCE.includes(exp.paidDateSource))return{status:'not_ready',missingReasons:[]};
+  // Per-kind checks
   if(exp.expenseKind==='purchase_invoice'){
-    if(!exp.leverandorId)return{ready:false,reason:'leverandorId er påkrevd for purchase_invoice'};
-    if(!Array.isArray(exp.lines)||exp.lines.length===0)return{ready:false,reason:'Minst én linje kreves for purchase_invoice'};
+    if(!exp.leverandorId)reasons.push('missing_supplier_id');
+    if(!Array.isArray(exp.lines)||exp.lines.length===0)reasons.push('missing_lines');
   } else {
-    // Operating expense kinds — category required
-    if(!exp.categoryId&&!exp.categoryLabel)return{ready:false,reason:'Kategori (id eller label) kreves'};
+    if(!exp.categoryId&&!exp.categoryLabel)reasons.push('missing_category');
   }
-  // Recurring discipline for kinds where periodicity matters
+  // Recurring discipline (missing_period + invalid_lines DEFERRED per Call 3)
   if(KINDS_WITH_PERIOD.has(exp.expenseKind)){
-    if(!exp.linkedRecurringId&&exp.confirmedOneOff!==true){
-      return{ready:false,reason:'Marker som en-gang eller koble til mal'};
-    }
+    if(!exp.linkedRecurringId&&exp.confirmedOneOff!==true)reasons.push('missing_recurring_confirmation');
   }
-  return{ready:true,reason:null};
+  return{status:reasons.length===0?'ready':'missing_info',missingReasons:reasons};
 }
 
 function computeAutoAccountantStatus(exp){
-  // Returns 'ready' if validateExpense passes, else 'missing_info'.
+  // E1b: collapse-mapping. Returns 'ready' if getAccountingReadiness passes, else 'missing_info'.
   // Caller sets 'not_ready' as the literal initial value before this is first computed.
   // 'reviewed', 'exported', 'archived' are MANUAL transitions — never returned here.
-  return validateExpense(exp).ready?'ready':'missing_info';
+  // Note: not_ready from getAccountingReadiness collapses to missing_info here — preserves
+  // stored accountantStatus byte-identical to pre-E1b behavior (no doc ever stored not_ready).
+  const r=getAccountingReadiness(exp);
+  return r.status==='ready'?'ready':'missing_info';
 }
 
 function buildExpenseDocFromPurchase(p,sourceHint){
@@ -7520,10 +7520,10 @@ async function saveNyUtgift(){
     doc.id=expenseId;
     setSyncing();
     await ref.set(doc);
-    const v=validateExpense(doc);
+    const v=getAccountingReadiness(doc);
     closeModal('ov-ny-utgift');
-    if(v.ready)showToast('Utgift lagret og regnskapsklar');
-    else showToast('Utgift lagret — mangler: '+v.reason);
+    if(v.status==='ready')showToast('Utgift lagret og regnskapsklar');
+    else showToast('Utgift lagret — mangler: '+(REASON_LABELS[v.missingReasons[0]]||v.status));
   }catch(e){
     console.error('saveNyUtgift failed:',e);
     showToast('Lagring feilet: '+(e.message||'ukjent feil'),'err');
