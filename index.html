@@ -76,6 +76,7 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 .sv.sm{font-size:16px}
 .sv.g{color:var(--ok)}.sv.r{color:var(--danger)}.sv.o{color:var(--warn)}.sv.b{color:#1a73e8}
 .sc.dark .sv.g{color:#7fd99a}.sc.dark .sv.r{color:#ff9a9a}.sc.dark .sv.o{color:#ffd770}.sc.dark .sv.b{color:#90caf9}
+.sg-okonomi{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px}
 
 /* ── LIST ── */
 .li{display:flex;align-items:center;padding:11px 0;border-bottom:1px solid var(--border);gap:10px}
@@ -3079,6 +3080,26 @@ async function saveSvinn(){
 }
 async function deleteSvinn(id){if(!confirm('Slett?'))return;await dbDelete('svinn',id);showToast('Slettet')}
 
+// E3a: Native-read summary for Økonomi cards row.
+// Reads dbAll('expenses') + dbAll('dagsalg') directly — not via adapter.
+// Hybrid coexistence with legacy render below is INTENTIONAL per E3A-SHIP-001.
+function getOkonomiSummary(){
+  const monthStr=today().slice(0,7);
+  const exps=dbAll('expenses');
+  const dagsalg=dbAll('dagsalg');
+  const inntekter=dagsalg.filter(d=>d.dato?.startsWith(monthStr)).reduce((a,d)=>a+(d.totalInkl||0),0);
+  const monthExps=exps.filter(e=>e.invoiceDate?.slice(0,7)===monthStr);
+  const utgifter=monthExps.reduce((a,e)=>a+(e.totalInclVat||0),0);
+  const netto=inntekter-utgifter;
+  const unpaid=exps.filter(e=>e.expenseKind==='purchase_invoice'?getInvoicePaymentStatus(e.linkedPurchaseId).status!=='paid':e.paidDate===null);
+  const ubetaltCount=unpaid.length;
+  const ubetaltSum=unpaid.reduce((a,e)=>a+(e.totalInclVat||0),0);
+  const manglerBilag=exps.filter(e=>!Array.isArray(e.originalFiles)||e.originalFiles.length===0).length;
+  const klarCount=monthExps.filter(e=>e.accountantStatus==='ready').length;
+  const monthTotal=monthExps.length;
+  return{inntekter,utgifter,netto,ubetaltCount,ubetaltSum,manglerBilag,klarCount,monthTotal};
+}
+
 // ─────────────────────────────────────────
 // UTGIFTER — read-only expense overview (Phase 1)
 // Reads existing purchases + bankTransactions only. No writes.
@@ -3164,9 +3185,23 @@ function renderUtgifter(){
     <div style="font-size:11.5px;color:var(--muted)">Fase 1 viser innkjøpsfakturaer. Driftsutgifter kommer i fase 2.</div>
   </div>`;
 
+  const s=getOkonomiSummary();
+  const nettoCls=s.netto>=0?'g':'r';
+  const ubetaltCls=s.ubetaltCount>0?'o':'';
+  const bilagCls=s.manglerBilag>0?'o':'';
+  const klarCls=s.klarCount>0?'g':'';
+  const cardsHtml=`<div class="sg-okonomi">
+    <div class="sc"><div class="sl">Inntekter</div><div class="sv">${fmtNOK(s.inntekter)}</div></div>
+    <div class="sc"><div class="sl">Utgifter</div><div class="sv">${fmtNOK(s.utgifter)}</div></div>
+    <div class="sc"><div class="sl">Netto</div><div class="sv ${nettoCls}">${fmtNOK(s.netto)}</div></div>
+    <div class="sc"><div class="sl">Ubetalt</div><div class="sv ${ubetaltCls}">${fmtNOK(s.ubetaltSum)}</div><div style="font-size:10.5px;color:var(--muted);margin-top:3px">${s.ubetaltCount} stk</div></div>
+    <div class="sc"><div class="sl">Mangler bilag</div><div class="sv ${bilagCls}">${s.manglerBilag}</div></div>
+    <div class="sc"><div class="sl">Klar for regnskap</div><div class="sv ${klarCls}">${s.klarCount} / ${s.monthTotal}</div></div>
+  </div>`;
+
   const storyHtml=`<div class="card" style="padding:14px 16px;margin-bottom:14px;font-size:13px;line-height:1.55">${storyParts.join(' ')}</div>`;
 
-  el.innerHTML=headerHtml+storyHtml+alertHtml+doorsHtml+recentHtml;
+  el.innerHTML=headerHtml+cardsHtml+storyHtml+alertHtml+doorsHtml+recentHtml;
 }
 
 // ─────────────────────────────────────────
