@@ -3100,6 +3100,29 @@ function getOkonomiSummary(){
   return{inntekter,utgifter,netto,ubetaltCount,ubetaltSum,manglerBilag,klarCount,monthTotal};
 }
 
+// E3b: Native-read followup arrays for "Trenger oppfølging" action strip.
+// Reads dbAll('expenses') directly — same pattern as getOkonomiSummary.
+// Returns three sorted arrays; getOkonomiSummary's count/sum stays authoritative.
+function getOkonomiFollowup(){
+  const monthStr=today().slice(0,7);
+  const todayStr=today();
+  const exps=dbAll('expenses');
+  // Unpaid: mixed-rule (E3a lock), sorted by dueDate ascending then invoiceDate
+  const unpaid=exps.filter(e=>e.expenseKind==='purchase_invoice'?getInvoicePaymentStatus(e.linkedPurchaseId).status!=='paid':e.paidDate===null);
+  unpaid.sort((a,b)=>{
+    const ad=a.dueDate||a.invoiceDate||'9999';
+    const bd=b.dueDate||b.invoiceDate||'9999';
+    return ad.localeCompare(bd);
+  });
+  // Missing bilag: all-time, sorted by invoiceDate ascending (oldest backlog first)
+  const missingBilag=exps.filter(e=>!Array.isArray(e.originalFiles)||e.originalFiles.length===0);
+  missingBilag.sort((a,b)=>(a.invoiceDate||'9999').localeCompare(b.invoiceDate||'9999'));
+  // Needs review: current-month, accountantStatus !== 'ready', sorted by invoiceDate
+  const needsReview=exps.filter(e=>e.invoiceDate?.slice(0,7)===monthStr&&e.accountantStatus!=='ready');
+  needsReview.sort((a,b)=>(a.invoiceDate||'9999').localeCompare(b.invoiceDate||'9999'));
+  return{unpaid,missingBilag,needsReview};
+}
+
 // ─────────────────────────────────────────
 // UTGIFTER — read-only expense overview (Phase 1)
 // Reads existing purchases + bankTransactions only. No writes.
@@ -3137,15 +3160,6 @@ function renderUtgifter(){
   else storyParts.push(`Ingen innkjøp registrert denne måneden ennå.`);
   if(topSupp&&topSupp[1]>0)storyParts.push(`Største leverandør: <strong>${escapeHtml(topSupp[0])}</strong>.`);
   if(dueSoonCount>0)storyParts.push(`${dueSoonCount} faktura${dueSoonCount===1?'':'er'} forfaller innen 7 dager.`);
-
-  let alertHtml='';
-  if(overdueCount>0){
-    alertHtml=`<div class="card" style="background:rgba(220,50,50,.08);border:1px solid rgba(220,50,50,.35);padding:12px 14px;margin-bottom:14px;display:flex;gap:10px;align-items:flex-start">
-      <div style="font-size:18px">⚠️</div>
-      <div><div style="font-weight:700;font-size:13px;color:#7a1f1f">${overdueCount} faktura${overdueCount===1?'':'er'} forfalt</div>
-      <div style="font-size:11.5px;margin-top:3px;color:#a04040">Sjekk og betal snarest.</div></div>
-    </div>`;
-  }
 
   const door=(title,desc,active,onclick)=>`<div class="card" style="padding:14px;cursor:${active?'pointer':'default'};opacity:${active?'1':'.5'};margin-bottom:0" ${active&&onclick?`onclick="${onclick}"`:''}>
     <div style="font-weight:700;font-size:13.5px">${title}</div>
@@ -3199,9 +3213,52 @@ function renderUtgifter(){
     <div class="sc"><div class="sl">Klar for regnskap</div><div class="sv ${klarCls}">${s.klarCount} / ${s.monthTotal}</div></div>
   </div>`;
 
+  const fu=getOkonomiFollowup();
+  const renderFollowupRow=(e,clickable)=>{
+    const supplier=escapeHtml(e.supplierName||'Ukjent');
+    const beløp=fmtNOK(e.totalInclVat||0);
+    const dato=e.dueDate||e.invoiceDate||'';
+    const tap=clickable&&e.linkedPurchaseId?`onclick="showInvoiceDetail('${e.linkedPurchaseId}')" style="cursor:pointer"`:'';
+    let extra='';
+    if(clickable&&e.expenseKind==='purchase_invoice'){
+      const ps=getInvoicePaymentStatus(e.linkedPurchaseId);
+      if(ps.isOverdue)extra=`<div class="lis" style="color:var(--danger)">⚠ forfalt ${fmtDate(dato)} (${ps.daysOverdue} dager)</div>`;
+      else extra=`<div class="lis">${fmtDate(dato)}</div>`;
+    } else {
+      extra=`<div class="lis">${fmtDate(dato)}</div>`;
+    }
+    return `<div class="li" ${tap}><div class="lim"><div class="lit">${supplier}</div>${extra}</div><div class="liv">${beløp}</div></div>`;
+  };
+  const renderNeedsReviewRow=(e)=>{
+    const supplier=escapeHtml(e.supplierName||'Ukjent');
+    const beløp=fmtNOK(e.totalInclVat||0);
+    const r=getAccountingReadiness(e);
+    const reasonLabel=r.missingReasons[0]?REASON_LABELS[r.missingReasons[0]]||r.missingReasons[0]:'Ukjent grunn';
+    const clickable=e.expenseKind==='purchase_invoice'&&e.linkedPurchaseId;
+    const tap=clickable?`onclick="showInvoiceDetail('${e.linkedPurchaseId}')" style="cursor:pointer"`:'';
+    return `<div class="li" ${tap}><div class="lim"><div class="lit">${supplier}</div><div class="lis">Mangler: ${escapeHtml(reasonLabel)}</div></div><div class="liv">${beløp}</div></div>`;
+  };
+  const followupSections=[];
+  if(fu.unpaid.length>0){
+    const top=fu.unpaid.slice(0,5);
+    const extra=fu.unpaid.length>5?`<div class="lis" style="text-align:center;padding:8px;color:var(--muted)">+${fu.unpaid.length-5} flere</div>`:'';
+    followupSections.push(`<div class="stitle">Ubetalt (${fu.unpaid.length})</div>${top.map(e=>renderFollowupRow(e,true)).join('')}${extra}`);
+  }
+  if(fu.missingBilag.length>0){
+    const top=fu.missingBilag.slice(0,5);
+    const extra=fu.missingBilag.length>5?`<div class="lis" style="text-align:center;padding:8px;color:var(--muted)">+${fu.missingBilag.length-5} flere</div>`:'';
+    followupSections.push(`<div class="stitle">Mangler bilag (${fu.missingBilag.length})</div>${top.map(e=>renderFollowupRow(e,true)).join('')}${extra}`);
+  }
+  if(fu.needsReview.length>0){
+    followupSections.push(`<div class="stitle">Trenger gjennomgang (${fu.needsReview.length} denne måneden)</div>${fu.needsReview.map(renderNeedsReviewRow).join('')}`);
+  }
+  const followupHtml=followupSections.length>0
+    ?`<div class="card" style="padding:14px 16px;margin-bottom:14px">${followupSections.join('<div style="height:14px"></div>')}</div>`
+    :`<div class="card" style="padding:14px 16px;margin-bottom:14px;color:var(--ok);font-weight:600">Alt er à jour ✓ — ingen ubetalte, alle bilag på plass.</div>`;
+
   const storyHtml=`<div class="card" style="padding:14px 16px;margin-bottom:14px;font-size:13px;line-height:1.55">${storyParts.join(' ')}</div>`;
 
-  el.innerHTML=headerHtml+cardsHtml+storyHtml+alertHtml+doorsHtml+recentHtml;
+  el.innerHTML=headerHtml+cardsHtml+followupHtml+storyHtml+doorsHtml+recentHtml;
 }
 
 // ─────────────────────────────────────────
