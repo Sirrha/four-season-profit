@@ -104,6 +104,32 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 .br-row .br-row-amt.pos{color:var(--ok,#2a9d4a)}
 .br-row .br-row-link{font-size:11.5px;color:var(--muted,#777);min-width:120px;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .br-row .br-row-chev{color:var(--muted,#777);font-size:14px;width:14px;text-align:center}
+/* V1A.2 — Bankavstemming expand panel */
+.br-row{cursor:pointer;transition:background .12s}
+.br-row.br-active{background:rgba(0,0,0,.04)}
+.br-row .br-row-chev{transition:transform .15s}
+.br-row.br-active .br-row-chev{transform:rotate(90deg)}
+.br-expand{padding:14px 16px;background:rgba(0,0,0,.025);border-bottom:1px solid rgba(0,0,0,.06);font-size:13px}
+.br-expand .br-exp-row{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px;align-items:flex-start}
+.br-expand .br-exp-label{font-size:10.5px;color:var(--muted,#777);text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px}
+.br-expand .br-exp-val{font-size:12.5px;font-weight:500}
+.br-expand .br-warn{background:rgba(220,50,50,.08);border:1px solid rgba(220,50,50,.25);color:#a83232;padding:8px 12px;border-radius:6px;font-size:12px;font-weight:600;margin-bottom:10px;display:inline-block}
+.br-expand .br-suggest{background:rgba(42,157,74,.06);border:1px solid rgba(42,157,74,.18);padding:10px 12px;border-radius:6px;margin-bottom:10px}
+.br-expand .br-suggest-title{font-size:11px;color:#2a9d4a;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px}
+.br-expand .br-cand{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:4px;cursor:pointer;font-size:12.5px}
+.br-expand .br-cand:hover{background:rgba(0,0,0,.04)}
+.br-expand .br-cand-name{flex:1;min-width:0;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.br-expand .br-cand-amt{font-weight:600;min-width:90px;text-align:right}
+.br-expand .br-cand-date{font-size:11px;color:var(--muted,#777);min-width:80px;text-align:right}
+.br-expand .br-cand-exact{background:rgba(42,157,74,.18);color:#1e7a3a;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:700;margin-left:6px}
+.br-expand select.br-picker{padding:7px 10px;border:1px solid rgba(0,0,0,.15);border-radius:5px;font-size:13px;min-width:220px;flex:1}
+.br-expand .br-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.br-expand .br-btn{padding:7px 14px;border-radius:5px;font-size:12.5px;font-weight:600;cursor:pointer;border:none}
+.br-expand .br-btn-primary{background:var(--accent,#222);color:#fff}
+.br-expand .br-btn-secondary{background:#fff;color:#333;border:1px solid rgba(0,0,0,.18)}
+.br-expand .br-btn-danger{background:#fff;color:#a83232;border:1px solid rgba(220,50,50,.3)}
+.br-expand .br-linked-card{background:rgba(42,157,74,.06);border:1px solid rgba(42,157,74,.2);border-radius:6px;padding:10px 12px;margin-bottom:8px}
+.br-expand .br-linked-card .br-linked-title{font-size:12.5px;font-weight:700;color:#1e7a3a;margin-bottom:4px}
 
 /* ── LIST ── */
 .li{display:flex;align-items:center;padding:11px 0;border-bottom:1px solid var(--border);gap:10px}
@@ -805,7 +831,7 @@ select.fi:focus{background-color:#fff}
 
   <!-- PHASE 1: payment data -->
   <div id="bet-phase-1">
-    <div class="mt">Ny betaling</div>
+    <div class="mt" style="color:var(--muted,#777)">Legg til manuelt (eldre)</div>
     <input type="hidden" id="bet-id">
     <div class="fr">
       <div class="fg"><label class="fl">Dato *</label><input class="fi" id="bet-dato" type="date"></div>
@@ -1428,7 +1454,7 @@ function goTo(pg){
 function updateHdrAddBtn(){
   const btn=document.getElementById('hdrAddBtn');
   if(!btn)return;
-  const labels={innkjop:'+ Nytt innkjøp',produkter:'+ Nytt produkt',salg:'+ Nytt salg',svinn:'+ Nytt svinn',leverandorer:'+ Ny leverandør',betalinger:'+ Ny betaling'};
+  const labels={innkjop:'+ Nytt innkjøp',produkter:'+ Nytt produkt',salg:'+ Nytt salg',svinn:'+ Nytt svinn',leverandorer:'+ Ny leverandør',betalinger:'+ Legg til manuelt (eldre)'};
   const label=labels[currentPage];
   const role=currentUser?.role;
   if(label&&role!=='regnskap'){
@@ -3189,6 +3215,162 @@ function getLatestImportBatch(){
   };
 }
 
+// V1A.2: Find unpaid purchase_invoice candidates for an unmatched tx.
+// Returns sorted array with exact-amount matches first, then date proximity.
+function getMatchCandidatesForTx(tx){
+  const exps=dbAll('expenses');
+  // Filter to unpaid purchase_invoice
+  const unpaid=exps.filter(e=>{
+    if(e.expenseKind!=='purchase_invoice')return false;
+    if(!e.linkedPurchaseId)return false;
+    const ps=getInvoicePaymentStatus(e.linkedPurchaseId);
+    return ps.status!=='paid';
+  });
+  const txAmt=Math.abs(+tx.belop||0);
+  const txDate=tx.dato||'';
+  // Score each
+  const scored=unpaid.map(e=>{
+    const expAmt=+e.totalInclVat||0;
+    const exactMatch=Math.abs(expAmt-txAmt)<0.01;
+    const dueDate=e.dueDate||e.invoiceDate||'';
+    let dateDistance=999;
+    if(dueDate&&txDate){
+      const a=new Date(dueDate),b=new Date(txDate);
+      dateDistance=Math.abs((a-b)/(1000*60*60*24));
+    }
+    return{exp:e,exactMatch,dateDistance,amt:expAmt};
+  });
+  // Sort: exact matches first, then by date proximity
+  scored.sort((a,b)=>{
+    if(a.exactMatch&&!b.exactMatch)return -1;
+    if(!a.exactMatch&&b.exactMatch)return 1;
+    return a.dateDistance-b.dateDistance;
+  });
+  return scored.map(s=>s.exp);
+}
+
+// V1A.2: Load the linked invoice details for a matched row.
+function getLinkedInvoicesForTx(tx){
+  const ids=Array.isArray(tx.linkedeFakturaer)?tx.linkedeFakturaer:[];
+  if(ids.length===0)return [];
+  const exps=dbAll('expenses');
+  return ids.map(id=>exps.find(e=>e.linkedPurchaseId===id)).filter(Boolean);
+}
+
+// V1A.2: Toggle the expanded state of a transaction row.
+window._brExpanded=window._brExpanded||null; // single-expand: only one row open at a time
+function toggleBrRow(txId){
+  window._brExpanded=window._brExpanded===txId?null:txId;
+  renderBetalinger();
+}
+
+// V1A.2: Save a new link (write linkedeFakturaer[] to bankTransactions).
+async function saveBrLink(txId,invoiceId){
+  if(!txId||!invoiceId)return;
+  const tx=dbFind('bankTransactions',txId);
+  if(!tx)return;
+  const current=Array.isArray(tx.linkedeFakturaer)?tx.linkedeFakturaer.slice():[];
+  // Duplicate-link prevention
+  if(current.includes(invoiceId)){
+    showToast('Fakturaen er allerede koblet til denne transaksjonen');
+    return;
+  }
+  current.push(invoiceId);
+  await dbUpdate('bankTransactions',txId,{linkedeFakturaer:current});
+  showToast('Kobling lagret ✓');
+  // Keep the row expanded so user can see the new matched state
+  renderBetalinger();
+}
+
+// V1A.2: Remove a link.
+async function removeBrLink(txId,invoiceId){
+  if(!txId||!invoiceId)return;
+  const tx=dbFind('bankTransactions',txId);
+  if(!tx)return;
+  const current=Array.isArray(tx.linkedeFakturaer)?tx.linkedeFakturaer.slice():[];
+  const updated=current.filter(id=>id!==invoiceId);
+  await dbUpdate('bankTransactions',txId,{linkedeFakturaer:updated});
+  showToast('Kobling fjernet');
+  renderBetalinger();
+}
+
+// V1A.2: render the expand panel for a transaction (module-level — depends only
+// on module helpers + the tx/status args, so no renderBetalinger scope needed).
+function renderBrExpandPanel(tx,status){
+  const isMatched=status==='matched';
+  if(isMatched){
+    // Show linked invoice details
+    const linked=getLinkedInvoicesForTx(tx);
+    const cards=linked.map(e=>{
+      const ps=e.linkedPurchaseId?getInvoicePaymentStatus(e.linkedPurchaseId):null;
+      return `<div class="br-linked-card" onclick="event.stopPropagation()">
+        <div class="br-linked-title">✓ ${escapeHtml(e.supplierName||'Ukjent')}</div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted,#777)">
+          <div><span class="br-exp-label">Beløp</span><div class="br-exp-val">${fmtNOK(e.totalInclVat||0)}</div></div>
+          <div><span class="br-exp-label">Forfallsdato</span><div class="br-exp-val">${fmtDate(e.dueDate||e.invoiceDate||'')}</div></div>
+          <div><span class="br-exp-label">Status</span><div class="br-exp-val">${ps?ps.status:'—'}</div></div>
+        </div>
+        <div class="br-actions">
+          <button class="br-btn br-btn-secondary" onclick="event.stopPropagation();showInvoiceDetail('${e.linkedPurchaseId}')">Se faktura</button>
+          <button class="br-btn br-btn-danger" onclick="event.stopPropagation();removeBrLink('${tx.id}','${e.linkedPurchaseId}')">Koble fra</button>
+        </div>
+      </div>`;
+    }).join('');
+    return `<div class="br-expand" onclick="event.stopPropagation()">
+      <div style="font-size:11px;color:var(--muted,#777);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">Koblede fakturaer</div>
+      ${cards||'<div style="color:var(--muted,#777);font-style:italic">Ingen koblinger funnet</div>'}
+    </div>`;
+  }
+  // Unmatched / review: show link UI with suggestions
+  const candidates=getMatchCandidatesForTx(tx);
+  const exactMatches=candidates.filter(e=>{
+    const expAmt=+e.totalInclVat||0;
+    const txAmt=Math.abs(+tx.belop||0);
+    return Math.abs(expAmt-txAmt)<0.01;
+  });
+  const suggestHtml=exactMatches.length>0?`
+    <div class="br-suggest">
+      <div class="br-suggest-title">⚡ Foreslåtte treff (samme beløp)</div>
+      ${exactMatches.slice(0,5).map(e=>`
+        <div class="br-cand" onclick="event.stopPropagation();saveBrLink('${tx.id}','${e.linkedPurchaseId}')">
+          <span class="br-cand-name">${escapeHtml(e.supplierName||'Ukjent')} · ${escapeHtml(e.invoiceNumber||'')}</span>
+          <span class="br-cand-date">${fmtDate(e.dueDate||e.invoiceDate||'')}</span>
+          <span class="br-cand-amt">${fmtNOK(e.totalInclVat||0)}</span>
+          <span class="br-cand-exact">EKSAKT</span>
+        </div>
+      `).join('')}
+    </div>`:'';
+  // Manual picker fallback — show all unpaid invoices
+  const pickerOptions=candidates.slice(0,50).map(e=>{
+    const expAmt=+e.totalInclVat||0;
+    return `<option value="${e.linkedPurchaseId}">${escapeHtml(e.supplierName||'Ukjent')} · ${escapeHtml(e.invoiceNumber||'')} · ${fmtNOK(expAmt)} · ${fmtDate(e.dueDate||e.invoiceDate||'')}</option>`;
+  }).join('');
+  const pickerId=`br-picker-${tx.id}`;
+  return `<div class="br-expand" onclick="event.stopPropagation()">
+    ${status==='unmatched'?'<div class="br-warn">🚨 Manglende kobling</div>':'<div style="background:rgba(230,144,32,.08);border:1px solid rgba(230,144,32,.25);color:#a86f1f;padding:8px 12px;border-radius:6px;font-size:12px;font-weight:600;margin-bottom:10px;display:inline-block">Klar for gjennomgang</div>'}
+    <div class="br-exp-row">
+      <div><div class="br-exp-label">Dato</div><div class="br-exp-val">${fmtDate(tx.dato)}</div></div>
+      <div><div class="br-exp-label">Beløp</div><div class="br-exp-val">${fmtNOK(tx.belop||0)} (${tx.direction||'?'})</div></div>
+      <div><div class="br-exp-label">Beskrivelse</div><div class="br-exp-val">${escapeHtml(tx.levTekstRaa||'—')}</div></div>
+      ${tx.arkivref?`<div><div class="br-exp-label">Bank ref</div><div class="br-exp-val">${escapeHtml(tx.arkivref)}</div></div>`:''}
+    </div>
+    ${suggestHtml}
+    <div style="margin-top:10px">
+      <div class="br-exp-label" style="margin-bottom:4px">Eller velg manuelt fra ubetalte fakturaer:</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <select id="${pickerId}" class="br-picker">
+          <option value="">— Velg faktura —</option>
+          ${pickerOptions}
+        </select>
+        <button class="br-btn br-btn-primary" onclick="event.stopPropagation();const v=document.getElementById('${pickerId}').value;if(v)saveBrLink('${tx.id}',v);else showToast('Velg en faktura først')">Lagre kobling</button>
+      </div>
+    </div>
+    <div style="margin-top:10px;font-size:11px;color:var(--muted,#777)">
+      ${candidates.length} ubetalte fakturaer tilgjengelig${exactMatches.length>0?` · ${exactMatches.length} eksakte beløpsmatch`:''}
+    </div>
+  </div>`;
+}
+
 // ─────────────────────────────────────────
 // UTGIFTER — read-only expense overview (Phase 1)
 // Reads existing purchases + bankTransactions only. No writes.
@@ -3634,12 +3816,22 @@ function renderBetalinger(){
   const el=document.getElementById('pg-betalinger');if(!el)return;
   // Default period: most recent imported statement's range; fallback to current month
   const latestBatch=getLatestImportBatch();
-  const _filt=window._brFilter||(window._brFilter={
-    from:latestBatch?latestBatch.periodeStart:today().slice(0,7)+'-01',
-    to:latestBatch?latestBatch.periodeSlutt:today(),
-    status:'all',
-    q:''
-  });
+  // V1A.2 fix: re-derive the date range from latestBatch on each render UNTIL the
+  // user manually changes a date input (tracked via _defaultFromBatch). Only the
+  // dates are re-derived — status/q persist so the pills and search keep working.
+  if(!window._brFilter){
+    window._brFilter={
+      from:latestBatch?latestBatch.periodeStart:today().slice(0,7)+'-01',
+      to:latestBatch?latestBatch.periodeSlutt:today(),
+      status:'all',
+      q:'',
+      _defaultFromBatch:!!latestBatch
+    };
+  }else if(window._brFilter._defaultFromBatch&&latestBatch){
+    window._brFilter.from=latestBatch.periodeStart;
+    window._brFilter.to=latestBatch.periodeSlutt;
+  }
+  const _filt=window._brFilter;
 
   // Collect transactions in period
   const allTx=dbAll('bankTransactions');
@@ -3714,9 +3906,9 @@ function renderBetalinger(){
   const filterHtml=`
     <div class="br-filter-row">
       <input type="search" placeholder="Søk i transaksjoner" value="${escapeHtml(_filt.q)}" oninput="window._brFilter.q=this.value;clearTimeout(window._brQT);window._brQT=setTimeout(renderBetalinger,200)" style="flex:1;min-width:140px">
-      <input type="date" value="${_filt.from}" onchange="window._brFilter.from=this.value;renderBetalinger()">
+      <input type="date" value="${_filt.from}" onchange="window._brFilter.from=this.value;window._brFilter._defaultFromBatch=false;renderBetalinger()">
       <span style="color:var(--muted,#777)">–</span>
-      <input type="date" value="${_filt.to}" onchange="window._brFilter.to=this.value;renderBetalinger()">
+      <input type="date" value="${_filt.to}" onchange="window._brFilter.to=this.value;window._brFilter._defaultFromBatch=false;renderBetalinger()">
       ${pill('all','Alle')}
       ${pill('matched','Matchet')}
       ${pill('unmatched','Ikke matchet')}
@@ -3733,7 +3925,8 @@ function renderBetalinger(){
       ?`${tx.linkedeFakturaer.length} faktura${tx.linkedeFakturaer.length===1?'':'er'}`
       :'—';
     const statusLabel={matched:'Matchet',unmatched:'Ikke matchet',review:'Klar for gjennomgang'}[status];
-    return `<div class="br-row">
+    const isExpanded=window._brExpanded===tx.id;
+    const markup=`<div class="br-row ${isExpanded?'br-active':''}" onclick="toggleBrRow('${tx.id}')">
       <span class="br-dot ${status}"></span>
       <span class="br-row-date">${fmtDate(tx.dato)}</span>
       <span class="br-row-desc">${supplier}</span>
@@ -3742,6 +3935,8 @@ function renderBetalinger(){
       <span class="br-row-link">${linkInfo}</span>
       <span class="br-row-chev">›</span>
     </div>`;
+    if(!isExpanded)return markup;
+    return markup+renderBrExpandPanel(tx,status);
   };
 
   const listHtml=filtered.length===0
