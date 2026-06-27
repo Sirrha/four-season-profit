@@ -130,6 +130,32 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 .br-expand .br-btn-danger{background:#fff;color:#a83232;border:1px solid rgba(220,50,50,.3)}
 .br-expand .br-linked-card{background:rgba(42,157,74,.06);border:1px solid rgba(42,157,74,.2);border-radius:6px;padding:10px 12px;margin-bottom:8px}
 .br-expand .br-linked-card .br-linked-title{font-size:12.5px;font-weight:700;color:#1e7a3a;margin-bottom:4px}
+/* V2B — list-of-statements landing view */
+.bs-upload-btn{display:flex;align-items:center;gap:8px;padding:12px 18px;background:var(--accent,#222);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;margin:14px 0;width:100%;justify-content:center}
+.bs-upload-btn:hover{opacity:0.9}
+.bs-list{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.bs-row{display:flex;align-items:center;gap:12px;padding:14px 16px;background:#fff;border:1px solid var(--border,rgba(0,0,0,.08));border-radius:8px;cursor:pointer;transition:background .12s,border-color .12s}
+.bs-row:hover{background:rgba(0,0,0,.025);border-color:rgba(0,0,0,.18)}
+.bs-row-main{flex:1;min-width:0}
+.bs-row-period{font-size:14px;font-weight:600;color:var(--text,#222)}
+.bs-row-meta{font-size:11.5px;color:var(--muted,#777);margin-top:2px}
+.bs-row-prog{font-size:12px;color:var(--muted,#777);min-width:140px;text-align:right}
+.bs-row-badge{min-width:140px;text-align:right}
+.bs-row-chev{color:var(--muted,#777);font-size:18px;width:14px;text-align:center}
+.bs-empty{padding:32px 18px;text-align:center;color:var(--muted,#777);font-style:italic;background:rgba(0,0,0,.025);border-radius:8px;margin-top:14px;line-height:1.6}
+/* V2B — statement status badges */
+.bs-badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+.bs-badge-historical{background:rgba(120,120,120,.15);color:#555}
+.bs-badge-closed{background:rgba(42,157,74,.18);color:#1e7a3a}
+.bs-badge-reconciling{background:rgba(230,144,32,.15);color:#a86f1f}
+.bs-badge-pending{background:rgba(45,108,180,.15);color:#1f4f8a}
+/* V2B — scoped view header */
+.bs-header-card{background:#fff;border:1px solid var(--border,rgba(0,0,0,.08));border-radius:8px;padding:14px 16px;margin:14px 0}
+.bs-header-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.bs-back{color:var(--accent,#222);font-size:13px;font-weight:500;cursor:pointer;text-decoration:none}
+.bs-back:hover{text-decoration:underline}
+.bs-header-period{font-size:15px;font-weight:600;color:var(--text,#222);margin-bottom:4px}
+.bs-header-meta{font-size:11.5px;color:var(--muted,#777)}
 
 /* ── LIST ── */
 .li{display:flex;align-items:center;padding:11px 0;border-bottom:1px solid var(--border);gap:10px}
@@ -3812,38 +3838,152 @@ async function migrateLeverandorer(){
 // ─────────────────────────────────────────
 let betFilter='mnd';
 let betLevFilter='alle';
+
+// ─────────────────────────────────────────
+// V2B — Statement scoping + list-of-statements landing
+// ─────────────────────────────────────────
+// V2B: active statement scoping. null = list-of-statements view,
+// otherwise = scoped reconciliation view for that statement.
+window._activeStatement=window._activeStatement||null;
+
+// V2B: enter a statement (sets active + re-renders)
+function enterBankStatement(stmtId){
+  window._activeStatement=stmtId;
+  // Reset expand state when entering a statement (statement IS the period)
+  window._brExpanded=null;
+  renderBetalinger();
+}
+
+// V2B: exit back to list-of-statements view
+function exitBankStatement(){
+  window._activeStatement=null;
+  window._brExpanded=null;
+  renderBetalinger();
+}
+
+// V2B: V2C placeholder — will eventually open the bank statement scanner
+function openNewStatementUpload(){
+  showToast('Kommer i V2C — scanner-integrasjon');
+}
+
+// V2B: compute reconciliation progress for a statement
+function getStatementProgress(stmtId){
+  const txs=dbAll('bankTransactions').filter(t=>t.statementId===stmtId);
+  let matched=0,unmatched=0,review=0;
+  txs.forEach(t=>{
+    const linked=Array.isArray(t.linkedeFakturaer)&&t.linkedeFakturaer.length>0;
+    if(linked){matched++;}
+    else if(t.direction==='in'){review++;}
+    else{unmatched++;}
+  });
+  return {total:txs.length,matched,unmatched,review};
+}
+
+// V2B: human-readable status badge for a statement
+function statementStatusBadge(stmt){
+  if(stmt.historical)return {label:'Historisk',cls:'bs-badge-historical'};
+  if(stmt.status==='closed')return {label:'Lukket ✓',cls:'bs-badge-closed'};
+  if(stmt.status==='reconciling')return {label:'Under avstemming',cls:'bs-badge-reconciling'};
+  if(stmt.status==='pending_review')return {label:'Trenger gjennomgang',cls:'bs-badge-pending'};
+  return {label:stmt.status||'?',cls:'bs-badge-pending'};
+}
+
+// V2B: render the list-of-statements landing view
+function renderStatementsList(){
+  const stmts=dbAll('bankStatements').slice().sort((a,b)=>{
+    // Recent first, historical last
+    if(a.historical&&!b.historical)return 1;
+    if(!a.historical&&b.historical)return -1;
+    return (b.periodEnd||'').localeCompare(a.periodEnd||'');
+  });
+
+  const uploadBtn=`<button class="bs-upload-btn" onclick="openNewStatementUpload()">📄 Last opp ny kontoutskrift</button>`;
+
+  if(stmts.length===0){
+    return uploadBtn+`<div class="bs-empty">Ingen kontoutskrifter ennå.<br>Last opp en for å starte avstemming.</div>`;
+  }
+
+  const rowsHtml=stmts.map(s=>{
+    const prog=getStatementProgress(s.id);
+    const badge=statementStatusBadge(s);
+    const periodLabel=s.periodStart&&s.periodEnd
+      ?`${fmtDate(s.periodStart)} – ${fmtDate(s.periodEnd)}`
+      :'(periode ukjent)';
+    const progLabel=prog.total===0
+      ?'Ingen transaksjoner'
+      :`${prog.matched}/${prog.total} koblet${prog.unmatched>0?` · ${prog.unmatched} mangler`:''}`;
+    return `<div class="bs-row" onclick="enterBankStatement('${s.id}')">
+      <div class="bs-row-main">
+        <div class="bs-row-period">${escapeHtml(periodLabel)}</div>
+        <div class="bs-row-meta">${escapeHtml(s.account||'')} · ${escapeHtml(s.bankProvider||'')}</div>
+      </div>
+      <div class="bs-row-prog">${progLabel}</div>
+      <div class="bs-row-badge"><span class="bs-badge ${badge.cls}">${badge.label}</span></div>
+      <span class="bs-row-chev">›</span>
+    </div>`;
+  }).join('');
+
+  return uploadBtn+`<div class="bs-list">${rowsHtml}</div>`;
+}
+
+// V2B: render the statement header (visible at top of scoped view)
+function renderStatementHeader(stmt){
+  if(!stmt)return '';
+  const badge=statementStatusBadge(stmt);
+  const prog=getStatementProgress(stmt.id);
+  const periodLabel=stmt.periodStart&&stmt.periodEnd
+    ?`${fmtDate(stmt.periodStart)} – ${fmtDate(stmt.periodEnd)}`
+    :'(periode ukjent)';
+  return `<div class="bs-header-card">
+    <div class="bs-header-row">
+      <a class="bs-back" onclick="exitBankStatement()">← Tilbake til kontoutskrifter</a>
+      <span class="bs-badge ${badge.cls}">${badge.label}</span>
+    </div>
+    <div class="bs-header-period">${escapeHtml(periodLabel)}</div>
+    <div class="bs-header-meta">
+      ${escapeHtml(stmt.account||'')} · ${escapeHtml(stmt.bankProvider||'')} ·
+      ${prog.total} transaksjoner · ${prog.matched} koblet
+    </div>
+  </div>`;
+}
+
 function renderBetalinger(){
   const el=document.getElementById('pg-betalinger');if(!el)return;
-  // Default period: most recent imported statement's range; fallback to current month
-  const latestBatch=getLatestImportBatch();
-  // V1A.2 fix: re-derive the date range from latestBatch on each render UNTIL the
-  // user manually changes a date input (tracked via _defaultFromBatch). Only the
-  // dates are re-derived — status/q persist so the pills and search keep working.
+
+  // Page title block (shared)
+  const pageTitle=`
+    <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:6px">
+      <div style="font-size:11px;color:var(--muted,#777);text-transform:uppercase;letter-spacing:.5px">SORMENA · FOUR SEASON AS</div>
+      <h1 style="margin:0;font-size:22px;font-weight:700">Bankavstemming</h1>
+    </div>`;
+
+  // V2B: branch on active statement
+  if(!window._activeStatement){
+    // List-of-statements landing view
+    el.innerHTML=pageTitle+renderStatementsList();
+    return;
+  }
+
+  // Scoped view — resolve the active statement
+  const activeStmt=dbFind('bankStatements',window._activeStatement);
+  if(!activeStmt){
+    // Statement was deleted/unavailable while user was viewing it — bail to list
+    window._activeStatement=null;
+    renderBetalinger();
+    return;
+  }
+
+  // V1A.2 filter setup — scoped to this statement (no date range: statement IS the period)
   if(!window._brFilter){
-    window._brFilter={
-      from:latestBatch?latestBatch.periodeStart:today().slice(0,7)+'-01',
-      to:latestBatch?latestBatch.periodeSlutt:today(),
-      status:'all',
-      q:'',
-      _defaultFromBatch:!!latestBatch
-    };
-  }else if(window._brFilter._defaultFromBatch&&latestBatch){
-    window._brFilter.from=latestBatch.periodeStart;
-    window._brFilter.to=latestBatch.periodeSlutt;
+    window._brFilter={status:'all',q:''};
   }
   const _filt=window._brFilter;
 
-  // Collect transactions in period
-  const allTx=dbAll('bankTransactions');
-  const inPeriod=allTx.filter(t=>{
-    if(!t.dato)return false;
-    if(_filt.from&&t.dato<_filt.from)return false;
-    if(_filt.to&&t.dato>_filt.to)return false;
-    return true;
-  });
+  // Read transactions for THIS statement only
+  const scopedTx=dbAll('bankTransactions').filter(t=>t.statementId===window._activeStatement);
 
-  // Status filter
-  const filtered=inPeriod.filter(t=>{
+  // Status + search filter
+  const filtered=scopedTx.filter(t=>{
     if(_filt.status!=='all'&&getBankTxStatus(t)!==_filt.status)return false;
     if(_filt.q){
       const q=_filt.q.toLowerCase();
@@ -3856,41 +3996,11 @@ function renderBetalinger(){
   // Sort by date desc (most recent first)
   filtered.sort((a,b)=>(b.dato||'').localeCompare(a.dato||''));
 
-  // Compute summary across IN-PERIOD set (not the filtered subset)
-  const summary=getBankReconSummary(inPeriod);
+  // Summary across the full scoped set (not the filtered subset)
+  const summary=getBankReconSummary(scopedTx);
 
-  // Compute closing balance approximation (last tx in period's running balance — best-effort)
-  // For V1A.1: skip — leave saldo card empty unless trivially computable. Defer to V1A.3.
-
-  // Header
-  const headerHtml=`
-    <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:14px">
-      <div style="font-size:11px;color:var(--muted,#777);text-transform:uppercase;letter-spacing:.5px">SORMENA · FOUR SEASON AS</div>
-      <h1 style="margin:0;font-size:22px;font-weight:700">Bankavstemming</h1>
-      <div style="font-size:12.5px;color:var(--muted,#777)">${latestBatch?'Kontoutskrift lastet opp og klar for kobling':'Last opp kontoutskrift via skanneren for å starte'}</div>
-    </div>`;
-
-  // Metadata card (if recent import exists)
-  const metaHtml=latestBatch?`
-    <div class="br-meta">
-      <div style="font-size:24px">📄</div>
-      <div style="flex:1;min-width:120px">
-        <div class="br-meta-label">Sist importert</div>
-        <div class="br-meta-val">${fmtDate(latestBatch.opprettet?.slice(0,10)||'')} av ${escapeHtml(latestBatch.opprettetAv||'')}</div>
-      </div>
-      <div style="min-width:120px">
-        <div class="br-meta-label">Periode</div>
-        <div class="br-meta-val">${fmtDate(latestBatch.periodeStart)} – ${fmtDate(latestBatch.periodeSlutt)}</div>
-      </div>
-      <div style="min-width:120px">
-        <div class="br-meta-label">Konto</div>
-        <div class="br-meta-val">${escapeHtml(latestBatch.konto||'—')}</div>
-      </div>
-      <div style="min-width:80px">
-        <div class="br-meta-label">Antall</div>
-        <div class="br-meta-val" style="color:var(--ok,#2a9d4a)">✓ ${latestBatch.count} transaksjoner</div>
-      </div>
-    </div>`:'';
+  // V2B: statement header card (replaces legacy import-batch meta card)
+  const headerHtml=renderStatementHeader(activeStmt);
 
   // Summary counter row
   const summaryHtml=`
@@ -3901,21 +4011,18 @@ function renderBetalinger(){
       <div class="sc"><div class="sl">Klar for gjennomgang</div><div class="sv" style="color:var(--warn,#e69020)">${summary.review}</div></div>
     </div>`;
 
-  // Filter row
+  // Filter row — V2B: date-range inputs removed (statement IS the period). Search + pills only.
   const pill=(val,label)=>`<button class="br-pill ${_filt.status===val?'active':''}" onclick="window._brFilter.status='${val}';renderBetalinger()">${label}</button>`;
   const filterHtml=`
     <div class="br-filter-row">
       <input type="search" placeholder="Søk i transaksjoner" value="${escapeHtml(_filt.q)}" oninput="window._brFilter.q=this.value;clearTimeout(window._brQT);window._brQT=setTimeout(renderBetalinger,200)" style="flex:1;min-width:140px">
-      <input type="date" value="${_filt.from}" onchange="window._brFilter.from=this.value;window._brFilter._defaultFromBatch=false;renderBetalinger()">
-      <span style="color:var(--muted,#777)">–</span>
-      <input type="date" value="${_filt.to}" onchange="window._brFilter.to=this.value;window._brFilter._defaultFromBatch=false;renderBetalinger()">
       ${pill('all','Alle')}
       ${pill('matched','Matchet')}
       ${pill('unmatched','Ikke matchet')}
       ${pill('review','Klar for gjennomgang')}
     </div>`;
 
-  // Transaction list
+  // Transaction list (V1A.2 mechanics intact)
   const rowHtml=tx=>{
     const status=getBankTxStatus(tx);
     const isIn=tx.direction==='in';
@@ -3940,11 +4047,11 @@ function renderBetalinger(){
   };
 
   const listHtml=filtered.length===0
-    ?`<div style="text-align:center;padding:40px 20px;color:var(--muted,#777)">Ingen transaksjoner i denne perioden${_filt.q||_filt.status!=='all'?' for valgte filtre':''}.</div>`
+    ?`<div style="text-align:center;padding:40px 20px;color:var(--muted,#777)">Ingen transaksjoner i denne kontoutskriften${_filt.q||_filt.status!=='all'?' for valgte filtre':''}.</div>`
     :`<div class="card" style="padding:0;overflow:hidden">${filtered.map(rowHtml).join('')}</div>
-       <div style="text-align:center;font-size:11.5px;color:var(--muted,#777);margin-top:10px">Viser ${filtered.length} av ${inPeriod.length} transaksjoner i perioden</div>`;
+       <div style="text-align:center;font-size:11.5px;color:var(--muted,#777);margin-top:10px">Viser ${filtered.length} av ${scopedTx.length} transaksjoner i kontoutskriften</div>`;
 
-  el.innerHTML=headerHtml+metaHtml+summaryHtml+filterHtml+listHtml;
+  el.innerHTML=pageTitle+headerHtml+summaryHtml+filterHtml+listHtml;
 }
 // ─────────────────────────────────────────
 // BETALING MODAL — Phase 1 (data) + Phase 2 (link to invoices)
