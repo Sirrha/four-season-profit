@@ -1000,7 +1000,7 @@ const ARSAK={utgatt:'Utgått dato',skadet:'Skadet/knust',tyveri:'Tyveri/svinn',a
 // ─────────────────────────────────────────
 // LOCAL CACHE  (kept in sync by Firestore listeners)
 // ─────────────────────────────────────────
-let LOCAL={products:[],purchases:[],sales:[],svinn:[],leverandorer:[],dagsalg:[],innboks:[],ansatte:[],vakter:[],payments:[],bankTransactions:[],expenses:[],recurring_templates:[],expense_taxonomy:[]};
+let LOCAL={products:[],purchases:[],sales:[],svinn:[],leverandorer:[],dagsalg:[],innboks:[],ansatte:[],vakter:[],payments:[],bankTransactions:[],bankStatements:[],expenses:[],recurring_templates:[],expense_taxonomy:[]};
 let db=null; // Firestore instance
 let storage = null; // Cloud Storage instance
 
@@ -1114,7 +1114,7 @@ const WRITE_TO_PURCHASES=false;
 function startListeners(){
   // Reset per-collection flags so re-starting listeners (tenant switch, etc.) works.
   Object.keys(firstSnapshotSeen).forEach(k=>delete firstSnapshotSeen[k]);
-  const cols=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter','payments','bankTransactions','expenses','recurring_templates','expense_taxonomy'];
+  const cols=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter','payments','bankTransactions','bankStatements','expenses','recurring_templates','expense_taxonomy'];
   cols.forEach(col=>{
     listeners[col]=tenantCol(col).onSnapshot(snap=>{
       LOCAL[col]=snap.docs.map(d=>({id:d.id,...d.data()}));
@@ -4110,7 +4110,8 @@ async function saveBetaling(){
     notat:document.getElementById('bet-notat').value.trim(),
     type:'supplier_payment',
     direction:'out',
-    period
+    period,
+    statementId:null
   };
   await tenantCol('bankTransactions').doc(newId).set(payment);
   showToast(`Betaling lagret · ${fmtNOK(belop)}`);
@@ -5552,6 +5553,7 @@ async function migratePaymentsToBankTransactions(){
         type:'supplier_payment',
         direction:'out',
         period,
+        statementId:null,
         migratedFromPayments:true,
         migratedAt
       });
@@ -5564,6 +5566,163 @@ async function migratePaymentsToBankTransactions(){
     showToast('Migrasjon av betalinger feilet — prøver igjen ved neste oppstart','err');
   }
 }
+
+// V2A: Backfill bankStatements + statementId field.
+// Groups existing bankTransactions into statement containers:
+//   - AI imports (importBatchId set) → one statement per batch
+//   - Manual/migrated (no importBatchId) → one historical-prelinje bucket
+// Idempotent via _meta/migrations sentinel. Per-tx skip if statementId set.
+// All backfilled statements get historical:true (NOT reconciled).
+// Pre-line transactions = the calendar-line decision (2026-07-01 is the
+// boundary; pre-line data is best-effort historical, not audited).
+// NOT called automatically — exposed on window for supervised invocation.
+async function backfillStatementsV2(opts={}){
+  const tenantId=TENANT_ID;
+  if(!tenantId){console.error('[V2A] No tenantId — abort');return;}
+
+  // Idempotent sentinel check
+  const metaSnap=await tenantCol('_meta').doc('migrations').get();
+  const metaData=metaSnap.exists?metaSnap.data():{};
+  if(metaData.backfillStatementsV2===true && !opts.force){
+    console.log('[V2A] Already migrated. Pass {force:true} to re-run.');
+    return;
+  }
+
+  // Gather all bankTransactions
+  const allTx=dbAll('bankTransactions');
+  if(allTx.length===0){
+    console.log('[V2A] No bankTransactions to backfill.');
+    // Still set sentinel so we don't re-check
+    await tenantCol('_meta').doc('migrations').set({
+      ...metaData,
+      backfillStatementsV2:true,
+      backfillStatementsV2At:new Date().toISOString()
+    },{merge:true});
+    return;
+  }
+
+  // DRY RUN: classify without writing
+  const byBatch={};
+  const noBatch=[];
+  let alreadyHasStatementId=0;
+
+  allTx.forEach(tx=>{
+    if(tx.statementId){alreadyHasStatementId++;return;}
+    if(tx.importBatchId){
+      (byBatch[tx.importBatchId]=byBatch[tx.importBatchId]||[]).push(tx);
+    } else {
+      noBatch.push(tx);
+    }
+  });
+
+  const batchCount=Object.keys(byBatch).length;
+  const noBatchCount=noBatch.length;
+  const totalToBackfill=allTx.length-alreadyHasStatementId;
+
+  console.log('═══ V2A BACKFILL DRY RUN ═══');
+  console.log(`Total bankTransactions: ${allTx.length}`);
+  console.log(`Already has statementId (skip): ${alreadyHasStatementId}`);
+  console.log(`To backfill: ${totalToBackfill}`);
+  console.log(`  From AI imports → ${batchCount} new statements`);
+  console.log(`  No-batch → 1 historical-prelinje statement (${noBatchCount} txs)`);
+  console.log('═══ END DRY RUN ═══');
+
+  if(opts.dryRun){
+    console.log('[V2A] dryRun:true — no writes performed.');
+    return;
+  }
+
+  // EXECUTE: create statements + update transactions
+  console.log('[V2A] Executing backfill...');
+
+  // 1. Create historical-prelinje statement if needed
+  if(noBatchCount>0){
+    const prelinjeId='historical-prelinje-'+tenantId;
+    const existing=dbFind('bankStatements',prelinjeId);
+    if(!existing){
+      const sortedDates=noBatch.map(t=>t.dato).filter(Boolean).sort();
+      const prelinjeDoc={
+        id:prelinjeId,
+        tenantId,
+        periodStart:sortedDates[0]||'2020-01-01',
+        periodEnd:sortedDates[sortedDates.length-1]||'2026-06-30',
+        account:'historisk-samlebatch',
+        openingBalance:null,
+        closingBalance:null,
+        status:'closed',
+        importBatchId:null,
+        historical:true,
+        bankProvider:'DNB',
+        uploadedAt:new Date().toISOString(),
+        uploadedBy:'system-backfill',
+        closedAt:new Date().toISOString(),
+        closedBy:'system-backfill',
+        reopenedAt:null,
+        reopenedBy:null,
+        reconciliationSummary:null
+      };
+      await tenantCol('bankStatements').doc(prelinjeId).set(prelinjeDoc);
+      console.log(`[V2A] Created historical-prelinje statement (${noBatchCount} txs)`);
+    }
+    // Update each no-batch tx
+    for(const tx of noBatch){
+      await tenantCol('bankTransactions').doc(tx.id).update({statementId:prelinjeId});
+    }
+  }
+
+  // 2. Create per-batch statements + update transactions
+  for(const batchId of Object.keys(byBatch)){
+    const batchTxs=byBatch[batchId];
+    const stmtId='historical-'+batchId;
+    const existing=dbFind('bankStatements',stmtId);
+    if(!existing){
+      const sortedDates=batchTxs.map(t=>t.dato).filter(Boolean).sort();
+      const stmtDoc={
+        id:stmtId,
+        tenantId,
+        periodStart:sortedDates[0]||null,
+        periodEnd:sortedDates[sortedDates.length-1]||null,
+        account:batchTxs[0]?.kontonummer||batchTxs[0]?.bankkonto||null,
+        openingBalance:null,
+        closingBalance:null,
+        status:'closed',
+        importBatchId:batchId,
+        historical:true,
+        bankProvider:'DNB',
+        uploadedAt:new Date().toISOString(),
+        uploadedBy:'system-backfill',
+        closedAt:new Date().toISOString(),
+        closedBy:'system-backfill',
+        reopenedAt:null,
+        reopenedBy:null,
+        reconciliationSummary:null
+      };
+      await tenantCol('bankStatements').doc(stmtId).set(stmtDoc);
+      console.log(`[V2A] Created historical statement for batch ${batchId} (${batchTxs.length} txs)`);
+    }
+    for(const tx of batchTxs){
+      await tenantCol('bankTransactions').doc(tx.id).update({statementId:stmtId});
+    }
+  }
+
+  // Set sentinel
+  await tenantCol('_meta').doc('migrations').set({
+    ...metaData,
+    backfillStatementsV2:true,
+    backfillStatementsV2At:new Date().toISOString(),
+    backfillStatementsV2Stats:{
+      totalTx:allTx.length,
+      backfilled:totalToBackfill,
+      statementsCreated:batchCount+(noBatchCount>0?1:0),
+      historicalPrelinjeTxs:noBatchCount
+    }
+  },{merge:true});
+
+  console.log('[V2A] Backfill complete. Sentinel set.');
+}
+
+// Expose for manual invocation from console
+window.backfillStatementsV2=backfillStatementsV2;
 
 async function backfillPurchasesToExpenses(){
   // Phase 2b: one-shot mirror of existing purchases into expenses for any
@@ -6621,6 +6780,7 @@ async function confirmBankStatementImport(){
       type:'supplier_payment',
       direction:dir,
       period,
+      statementId:null,
       // V1 Session 1 — bank scanner fields
       importBatchId,
       rawDescription:tx.beskrivelse||'',
