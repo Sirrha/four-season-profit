@@ -156,6 +156,12 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 .bs-back:hover{text-decoration:underline}
 .bs-header-period{font-size:15px;font-weight:600;color:var(--text,#222);margin-bottom:4px}
 .bs-header-meta{font-size:11.5px;color:var(--muted,#777)}
+/* V2C — Stage 1 pending-review banner */
+.bs-stage1-banner{background:rgba(45,108,180,.07);border:1px solid rgba(45,108,180,.25);border-radius:8px;padding:14px 16px;margin:8px 0 14px}
+.bs-stage1-title{font-size:13px;font-weight:700;color:#1f4f8a;margin-bottom:6px}
+.bs-stage1-body{font-size:12.5px;color:var(--text,#333);line-height:1.5;margin-bottom:10px}
+.bs-stage1-btn{padding:9px 16px;background:#1f4f8a;color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer}
+.bs-stage1-btn:hover{background:#163a66}
 
 /* ── LIST ── */
 .li{display:flex;align-items:center;padding:11px 0;border-bottom:1px solid var(--border);gap:10px}
@@ -3863,7 +3869,22 @@ function exitBankStatement(){
 
 // V2B: V2C placeholder — will eventually open the bank statement scanner
 function openNewStatementUpload(){
-  showToast('Kommer i V2C — scanner-integrasjon');
+  // V2C: open the AI scanner in bank-statement mode
+  if(typeof openBankStatementScanner==='function'){
+    openBankStatementScanner();
+  } else {
+    showToast('Skanner ikke tilgjengelig — kontakt support','err');
+    console.error('[V2C] openBankStatementScanner not found');
+  }
+}
+
+// V2C: confirm Stage 1 review — flips pending_review → reconciling
+async function confirmStage1Review(stmtId){
+  if(!stmtId)return;
+  if(!confirm('Bekreft at skannet data er korrekt og start avstemming?'))return;
+  await tenantCol('bankStatements').doc(stmtId).update({status:'reconciling'});
+  showToast('Avstemming startet — koble transaksjoner til fakturaer');
+  renderBetalinger();
 }
 
 // V2B: compute reconciliation progress for a statement
@@ -4002,6 +4023,15 @@ function renderBetalinger(){
   // V2B: statement header card (replaces legacy import-batch meta card)
   const headerHtml=renderStatementHeader(activeStmt);
 
+  // V2C: Stage 1 pending-review banner
+  const stage1BannerHtml=activeStmt.status==='pending_review'
+    ? `<div class="bs-stage1-banner">
+        <div class="bs-stage1-title">📋 Trinn 1: Gjennomgang av skannet data</div>
+        <div class="bs-stage1-body">Bekreft at AI-en har lest kontoutskriften riktig før du starter avstemming. Klikk på enkelttransaksjoner for å rette feil.</div>
+        <button class="bs-stage1-btn" onclick="confirmStage1Review('${activeStmt.id}')">✓ Bekreft og start avstemming</button>
+      </div>`
+    : '';
+
   // Summary counter row
   const summaryHtml=`
     <div class="br-summary">
@@ -4051,7 +4081,7 @@ function renderBetalinger(){
     :`<div class="card" style="padding:0;overflow:hidden">${filtered.map(rowHtml).join('')}</div>
        <div style="text-align:center;font-size:11.5px;color:var(--muted,#777);margin-top:10px">Viser ${filtered.length} av ${scopedTx.length} transaksjoner i kontoutskriften</div>`;
 
-  el.innerHTML=pageTitle+headerHtml+summaryHtml+filterHtml+listHtml;
+  el.innerHTML=pageTitle+headerHtml+stage1BannerHtml+summaryHtml+filterHtml+listHtml;
 }
 // ─────────────────────────────────────────
 // BETALING MODAL — Phase 1 (data) + Phase 2 (link to invoices)
@@ -6854,6 +6884,37 @@ async function confirmBankStatementImport(){
     showToast('Ingen transaksjoner å importere','err');return;
   }
   const importBatchId=uid();
+
+  // V2C: create the bankStatement doc BEFORE the transaction loop.
+  // Period bounds + balances derived from the scan data (periode is a
+  // DD.MM.YYYY string, so period bounds come from the ISO tx dates).
+  const newStatementId='stmt-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+  const txDates=data.transaksjoner.map(t=>t.dato).filter(Boolean).sort();
+  const ob=data.startsaldo!=null&&!isNaN(parseFloat(data.startsaldo))?parseFloat(data.startsaldo):null;
+  const cb=data.sluttsaldo!=null&&!isNaN(parseFloat(data.sluttsaldo))?parseFloat(data.sluttsaldo):null;
+  const statementDoc={
+    id:newStatementId,
+    tenantId:TENANT_ID,
+    periodStart:txDates[0]||null,
+    periodEnd:txDates[txDates.length-1]||null,
+    account:data.kontonummer||null,
+    openingBalance:ob,
+    closingBalance:cb,
+    status:'pending_review',
+    importBatchId:importBatchId,
+    historical:false,
+    bankProvider:'DNB',
+    uploadedAt:new Date().toISOString(),
+    uploadedBy:currentUser?.name||'ai-skann',
+    closedAt:null,
+    closedBy:null,
+    reopenedAt:null,
+    reopenedBy:null,
+    reconciliationSummary:null
+  };
+  await tenantCol('bankStatements').doc(newStatementId).set(statementDoc);
+  console.log('[V2C] Created bankStatement',newStatementId,'for batch',importBatchId);
+
   const all=dbAll('bankTransactions');
   let saved=0,skipped=0,errors=0;
   for(const tx of data.transaksjoner){
@@ -6887,7 +6948,7 @@ async function confirmBankStatementImport(){
       type:'supplier_payment',
       direction:dir,
       period,
-      statementId:null,
+      statementId:newStatementId,
       // V1 Session 1 — bank scanner fields
       importBatchId,
       rawDescription:tx.beskrivelse||'',
@@ -6907,6 +6968,10 @@ async function confirmBankStatementImport(){
   showToast(msg,errors>0?'err':'ok');
   cancelScanner();
   try{await markInnboksLinkedDone();}catch(e){console.error('[bank-import] markInnboksLinkedDone failed',e);}
+  // V2C: land in the new statement's scoped Stage 1 review view
+  window._activeStatement=newStatementId;
+  window._brFilter=null;
+  window._brExpanded=null;
   goTo('betalinger');
 }
 
