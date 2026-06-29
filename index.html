@@ -1329,9 +1329,24 @@ function getInvoicePaymentStatus(invoiceId){
   }
   // Filter on type: only supplier payments count toward invoice status. !type catches any pre-type-field records (defensive).
   const linked=dbAll('bankTransactions').filter(p=>(p.type==='supplier_payment'||!p.type)&&(p.linkedeFakturaer||[]).includes(invoiceId));
-  // Even-split attribution across each payment's linked invoices — refined in STEP 5 if accountant needs per-invoice splits.
+  // V2C.1: prefer linkedAllocations (explicit per-invoice amounts) when present;
+  // fall back to legacy even-split for pre-V2C.1 txs (zero drift, Q-A: A1).
   let paidAmount=0;
-  for(const p of linked){const n=(p.linkedeFakturaer||[]).length||1;paidAmount+=(+p.belop||0)/n}
+  for(const p of linked){
+    const allocs=p.linkedAllocations||[];
+    if(allocs.length>0){
+      allocs.forEach(a=>{
+        if(a&&a.invoiceId===invoiceId&&a.type==='invoice_payment'){
+          paidAmount+=Number(a.amountApplied)||0;
+        }
+      });
+    } else {
+      const linkedIds=(p.linkedeFakturaer||[]);
+      if(linkedIds.includes(invoiceId)){
+        paidAmount+=Math.abs(Number(p.belop)||0)/(linkedIds.length||1);
+      }
+    }
+  }
   const paid=linked.length>0;
   const status=!paid?'unpaid':(paidAmount+0.005<total?'partial':'paid');
   // V0.5 forfallsdato awareness: ISO YYYY-MM-DD format makes string comparison valid.
@@ -3308,7 +3323,21 @@ async function saveBrLink(txId,invoiceId){
     return;
   }
   current.push(invoiceId);
-  await dbUpdate('bankTransactions',txId,{linkedeFakturaer:current});
+  // V2C.1: rebuild linkedAllocations in lockstep. belop/n per invoice — matches backfill (Q-A: A1).
+  const belop=Math.abs(Number(tx.belop)||0);
+  const perInvoice=current.length>0?belop/current.length:0;
+  const newAllocs=current.map(invId=>{
+    const exp=dbAll('expenses').find(e=>e.expenseKind==='purchase_invoice'&&e.linkedPurchaseId===invId);
+    return {
+      invoiceId:invId,
+      amountApplied:perInvoice,
+      type:'invoice_payment',
+      leverandorId:exp?exp.leverandorId:null,
+      source:'user_manual',
+      note:''
+    };
+  });
+  await dbUpdate('bankTransactions',txId,{linkedeFakturaer:current,linkedAllocations:newAllocs});
   showToast('Kobling lagret ✓');
   // Keep the row expanded so user can see the new matched state
   renderBetalinger();
@@ -3321,7 +3350,21 @@ async function removeBrLink(txId,invoiceId){
   if(!tx)return;
   const current=Array.isArray(tx.linkedeFakturaer)?tx.linkedeFakturaer.slice():[];
   const updated=current.filter(id=>id!==invoiceId);
-  await dbUpdate('bankTransactions',txId,{linkedeFakturaer:updated});
+  // V2C.1: rebuild linkedAllocations in lockstep. belop/n per invoice — matches backfill (Q-A: A1).
+  const belop=Math.abs(Number(tx.belop)||0);
+  const perInvoice=updated.length>0?belop/updated.length:0;
+  const newAllocs=updated.map(invId=>{
+    const exp=dbAll('expenses').find(e=>e.expenseKind==='purchase_invoice'&&e.linkedPurchaseId===invId);
+    return {
+      invoiceId:invId,
+      amountApplied:perInvoice,
+      type:'invoice_payment',
+      leverandorId:exp?exp.leverandorId:null,
+      source:'user_manual',
+      note:''
+    };
+  });
+  await dbUpdate('bankTransactions',txId,{linkedeFakturaer:updated,linkedAllocations:newAllocs});
   showToast('Kobling fjernet');
   renderBetalinger();
 }
@@ -5861,6 +5904,70 @@ async function backfillStatementsV2(opts={}){
 // Expose for manual invocation from console
 window.backfillStatementsV2=backfillStatementsV2;
 
+// ─────────────────────────────────────────
+// V2C.1 — Allocation schema backfill
+// Converts linkedeFakturaer[] to linkedAllocations[] with belop/n.
+// Per Q-A: A1 — preserves current paid amounts EXACTLY (zero drift).
+// Idempotent via _meta/migrations sentinel. NOT auto-run.
+// ─────────────────────────────────────────
+async function backfillAllocationsV2C1(){
+  console.log('[backfill-allocations-v2c1] starting');
+
+  const metaRef=tenantCol('_meta').doc('migrations');
+  const meta=await metaRef.get();
+  const metaData=meta.exists?meta.data():{};
+  if(metaData.allocationsV2C1){
+    console.log('[backfill-allocations-v2c1] already complete, skipping');
+    return {skipped:true, completedAt:metaData.allocationsV2C1};
+  }
+
+  const txs=dbAll('bankTransactions');
+  let migrated=0;
+  let alreadyHad=0;
+  let emptyLinks=0;
+
+  for(const tx of txs){
+    if(tx.linkedAllocations&&tx.linkedAllocations.length>0){
+      alreadyHad++;
+      continue;
+    }
+
+    const oldLinks=tx.linkedeFakturaer||[];
+    if(oldLinks.length===0){
+      await tenantCol('bankTransactions').doc(tx.id).update({linkedAllocations:[]});
+      emptyLinks++;
+      continue;
+    }
+
+    const belop=Math.abs(Number(tx.belop)||0);
+    const perInvoice=belop/oldLinks.length;
+
+    const allocs=oldLinks.map(invoiceId=>{
+      const exp=dbAll('expenses').find(e=>e.expenseKind==='purchase_invoice'&&e.linkedPurchaseId===invoiceId);
+      return {
+        invoiceId:invoiceId,
+        amountApplied:perInvoice,
+        type:'invoice_payment',
+        leverandorId:exp?exp.leverandorId:null,
+        source:'migrated',
+        note:'',
+        migratedAt:new Date().toISOString()
+      };
+    });
+
+    await tenantCol('bankTransactions').doc(tx.id).update({linkedAllocations:allocs});
+    migrated++;
+  }
+
+  await metaRef.set({allocationsV2C1:new Date().toISOString()}, {merge:true});
+
+  const result={migrated, alreadyHad, emptyLinks, complete:true};
+  console.log('[backfill-allocations-v2c1] complete:', result);
+  return result;
+}
+
+window.backfillAllocationsV2C1=backfillAllocationsV2C1;
+
 async function backfillPurchasesToExpenses(){
   // Phase 2b: one-shot mirror of existing purchases into expenses for any
   // purchase that predates shadow-write (bc8e13a, 2026-05-26). Idempotent —
@@ -6942,6 +7049,7 @@ async function confirmBankStatementImport(){
       bankReference:ref,
       metode:'transfer',
       linkedeFakturaer:[],
+      linkedAllocations:[],
       opprettetAv:currentUser?.name||'ai-skann',
       opprettet:new Date().toISOString(),
       notat:'',
