@@ -183,6 +183,36 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 @media (max-width: 768px){
   .br-pick-list{max-height:50vh}
 }
+/* V2C.3 — Allocation builder */
+.br-alloc-section{margin:12px 0;padding:10px 12px;background:rgba(0,0,0,.02);border:1px solid var(--border,rgba(0,0,0,.08));border-radius:6px}
+.br-alloc-empty{padding:10px 12px;text-align:center;color:var(--muted,#777);font-size:12.5px;font-style:italic}
+.br-alloc-list{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
+.br-alloc-row{display:flex;align-items:center;gap:8px;padding:8px 10px;background:#fff;border:1px solid var(--border,rgba(0,0,0,.1));border-radius:5px;font-size:12.5px}
+.br-alloc-type{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap}
+.br-alloc-type-invoice_payment{background:rgba(42,157,74,.15);color:#1e7a3a}
+.br-alloc-type-supplier_credit{background:rgba(230,144,32,.15);color:#a86f1f}
+.br-alloc-type-expected_refund{background:rgba(45,108,180,.15);color:#1f4f8a}
+.br-alloc-type-unapplied_review{background:rgba(168,50,50,.15);color:#a83232}
+.br-alloc-label{flex:1;min-width:0;color:var(--text,#222);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.br-alloc-amount{width:110px;padding:4px 8px;border:1px solid var(--border,rgba(0,0,0,.15));border-radius:4px;font-size:12.5px;text-align:right;font-family:inherit}
+.br-alloc-amount[readonly]{background:rgba(0,0,0,.03);color:var(--muted,#666)}
+.br-alloc-currency{font-size:11px;color:var(--muted,#777)}
+.br-alloc-remove{padding:0 8px;background:transparent;border:none;color:#a83232;font-size:18px;cursor:pointer;line-height:1}
+.br-alloc-remove:hover{color:#600}
+.br-alloc-balanced{padding:8px 12px;background:rgba(42,157,74,.1);border:1px solid rgba(42,157,74,.3);border-radius:5px;color:#1e7a3a;font-size:13px;font-weight:600;text-align:center}
+.br-alloc-overflow{padding:8px 12px;background:rgba(168,50,50,.1);border:1px solid rgba(168,50,50,.3);border-radius:5px;color:#a83232;font-size:12.5px;text-align:center}
+.br-alloc-remainder{padding:10px 12px;background:rgba(230,144,32,.05);border:1px solid rgba(230,144,32,.25);border-radius:5px}
+.br-alloc-remainder-label{font-size:13px;color:var(--text,#333);margin-bottom:8px}
+.br-alloc-warn{font-size:11.5px;color:#a86f1f;margin-bottom:8px;font-style:italic}
+.br-alloc-actions{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.br-alloc-actions .br-btn{font-size:12px;padding:6px 10px}
+.br-alloc-actions .br-btn:disabled{opacity:.5;cursor:not-allowed}
+.br-alloc-hint{font-size:11px;color:var(--muted,#777);font-style:italic}
+@media (max-width: 768px){
+  .br-alloc-row{flex-wrap:wrap}
+  .br-alloc-amount{width:90px}
+  .br-alloc-actions .br-btn{flex:1;min-width:120px}
+}
 
 /* ── LIST ── */
 .li{display:flex;align-items:center;padding:11px 0;border-bottom:1px solid var(--border);gap:10px}
@@ -3488,11 +3518,20 @@ function renderBrExpandPanel(tx,status){
       ${tx.arkivref?`<div><div class="br-exp-label">Bank ref</div><div class="br-exp-val">${escapeHtml(tx.arkivref)}</div></div>`:''}
     </div>
     ${suggestHtml}
+    <div class="br-alloc-section">
+      <div class="br-exp-label" style="margin-bottom:6px">Allokeringer</div>
+      ${renderAllocationsList(tx.id)}
+      ${renderRemainderSection(tx.id)}
+    </div>
     <div style="margin-top:10px">
-      <div class="br-exp-label" style="margin-bottom:4px">Eller velg manuelt fra ubetalte fakturaer:</div>
+      <div class="br-exp-label" style="margin-bottom:4px">Søk og legg til faktura:</div>
       ${pickerHtml}
       <div style="margin-top:8px">
-        <button class="br-btn br-btn-primary" onclick="event.stopPropagation();const v=document.getElementById('br-picker-${tx.id}').value;if(v)saveBrLink('${tx.id}',v);else showToast('Velg en faktura først')">Lagre kobling</button>
+        ${(()=>{
+          const draftAllocs=getDraftAllocs(tx.id);
+          const balanced=isFullyAllocated(tx,draftAllocs);
+          return `<button class="br-btn br-btn-primary" ${balanced?'':'disabled'} onclick="event.stopPropagation();saveAllocations('${tx.id}')">Lagre kobling${balanced?'':' (ikke balansert)'}</button>`;
+        })()}
       </div>
     </div>
     <div style="margin-top:10px;font-size:11px;color:var(--muted,#777)">
@@ -3555,15 +3594,31 @@ function renderPickerResultRow(candidate,txId,isSelected){
   </div>`;
 }
 
+// V2C.3: clicking a picker row adds an invoice_payment allocation
+// (amountApplied = min(invoice total, remaining)) instead of single-select.
 function selectPickerInvoice(txId,invoiceId){
-  const hidden=document.getElementById('br-picker-'+txId);
-  if(hidden)hidden.value=invoiceId;
-  const listEl=document.getElementById('br-pick-list-'+txId);
-  if(listEl){
-    listEl.querySelectorAll('.br-pick-row').forEach(el=>el.classList.remove('selected'));
-    const clicked=listEl.querySelector(`[onclick*="'${invoiceId}'"]`);
-    if(clicked)clicked.classList.add('selected');
+  const tx=dbFind('bankTransactions',txId);
+  if(!tx)return;
+  const allCandidates=getMatchCandidatesForTx(tx);
+  const candidate=allCandidates.find(c=>c.linkedPurchaseId===invoiceId);
+  if(!candidate)return;
+  const allocs=getDraftAllocs(txId);
+  if(allocs.some(a=>a.invoiceId===invoiceId&&a.type==='invoice_payment')){
+    showToast('Fakturaen er allerede koblet');
+    return;
   }
+  const remainder=computeRemainder(tx,allocs);
+  const invoiceTotal=Number(candidate.totalInclVat)||0;
+  const amountApplied=Math.min(invoiceTotal,Math.max(0,remainder));
+  allocs.push({
+    invoiceId:invoiceId,
+    amountApplied:amountApplied,
+    type:'invoice_payment',
+    leverandorId:candidate.leverandorId||null,
+    source:'user_manual',
+    note:''
+  });
+  renderBetalinger();
 }
 
 function rerenderPickerList(txId){
@@ -3599,6 +3654,191 @@ function togglePickerSupplierFilter(txId){
   const bannerEl=document.getElementById('br-pick-banner-'+txId);
   if(bannerEl)bannerEl.style.display=window._brPickerSupplierFilter[txId]?'':'none';
   rerenderPickerList(txId);
+}
+
+// ─────────────────────────────────────────
+// V2C.3 — Allocation builder state + helpers
+// Draft allocations live in window._brAllocs[txId] until saved.
+// Each entry: {invoiceId, amountApplied, type, leverandorId, source, note}
+// ─────────────────────────────────────────
+function getDraftAllocs(txId){
+  if(!window._brAllocs)window._brAllocs={};
+  if(!window._brAllocs[txId]){
+    const tx=dbFind('bankTransactions',txId);
+    const existing=(tx&&Array.isArray(tx.linkedAllocations))?tx.linkedAllocations:[];
+    window._brAllocs[txId]=existing.map(a=>({...a}));
+  }
+  return window._brAllocs[txId];
+}
+
+function clearDraftAllocs(txId){
+  if(window._brAllocs)delete window._brAllocs[txId];
+}
+
+function computeRemainder(tx,allocs){
+  const belop=Math.abs(Number(tx.belop)||0);
+  const allocated=(allocs||[]).reduce((sum,a)=>sum+(Number(a.amountApplied)||0),0);
+  return belop-allocated;
+}
+
+function isFullyAllocated(tx,allocs){
+  return Math.abs(computeRemainder(tx,allocs))<=0.01;
+}
+
+function renderAllocationsList(txId){
+  const tx=dbFind('bankTransactions',txId);
+  if(!tx)return '';
+  const allocs=getDraftAllocs(txId);
+  if(allocs.length===0){
+    return '<div class="br-alloc-empty">Ingen allokeringer ennå. Velg en faktura under for å starte.</div>';
+  }
+  const rows=allocs.map((a,idx)=>{
+    let label='';
+    let typeLabel='';
+    if(a.type==='invoice_payment'){
+      const exp=dbAll('expenses').find(e=>e.expenseKind==='purchase_invoice'&&e.linkedPurchaseId===a.invoiceId);
+      const supplierName=exp?(exp.supplierName||'—'):'—';
+      const invNum=exp?(exp.invoiceNumber||'—'):'—';
+      label=`${escapeHtml(supplierName)} · ${escapeHtml(invNum)}`;
+      typeLabel='Faktura';
+    } else {
+      const supplier=a.leverandorId?((dbFind('leverandorer',a.leverandorId)||{}).navn||'—'):'—';
+      if(a.type==='supplier_credit'){
+        label=`${escapeHtml(supplier)} · forskudd/kredit`;
+        typeLabel='Kredit';
+      } else if(a.type==='expected_refund'){
+        label=`${escapeHtml(supplier)} · forventet refusjon`;
+        typeLabel='Refusjon';
+      } else if(a.type==='unapplied_review'){
+        label=`${escapeHtml(supplier)} · til gjennomgang${a.note?' — '+escapeHtml(a.note):''}`;
+        typeLabel='Gjennomgang';
+      }
+    }
+    return `<div class="br-alloc-row">
+      <span class="br-alloc-type br-alloc-type-${a.type}">${typeLabel}</span>
+      <span class="br-alloc-label">${label}</span>
+      <input type="number" step="0.01" min="0" class="br-alloc-amount" value="${(Number(a.amountApplied)||0).toFixed(2)}" onchange="editAllocationAmount('${txId}',${idx},this.value)" ${a.type==='invoice_payment'?'':'readonly'}>
+      <span class="br-alloc-currency">kr</span>
+      <button class="br-alloc-remove" onclick="removeAllocation('${txId}',${idx})" title="Fjern">×</button>
+    </div>`;
+  }).join('');
+  return `<div class="br-alloc-list">${rows}</div>`;
+}
+
+function renderRemainderSection(txId){
+  const tx=dbFind('bankTransactions',txId);
+  if(!tx)return '';
+  const allocs=getDraftAllocs(txId);
+  const remainder=computeRemainder(tx,allocs);
+  const supplierForCredit=inferSupplierFromTx(tx);
+  if(Math.abs(remainder)<=0.01){
+    return '<div class="br-alloc-balanced">✓ Fullt fordelt — klar til å lagre</div>';
+  }
+  if(remainder<0){
+    return `<div class="br-alloc-overflow">⚠ Allokering overstiger transaksjonsbeløpet med ${fmtNOK(Math.abs(remainder))}. Juster beløp før lagring.</div>`;
+  }
+  const supplierWarn=!supplierForCredit?'<div class="br-alloc-warn">Leverandør ikke identifisert. Velg en faktura først for å hente leverandør.</div>':'';
+  const disabled=!supplierForCredit?'disabled':'';
+  return `<div class="br-alloc-remainder">
+    <div class="br-alloc-remainder-label">Resterende: <strong>${fmtNOK(remainder)}</strong></div>
+    ${supplierWarn}
+    <div class="br-alloc-actions">
+      <button class="br-btn br-btn-secondary" onclick="addCreditAllocation('${txId}')" ${disabled}>Lagre som forskudd/kredit</button>
+      <button class="br-btn br-btn-secondary" onclick="addRefundAllocation('${txId}')" ${disabled}>Forvent refusjon</button>
+      <button class="br-btn br-btn-secondary" onclick="addReviewAllocation('${txId}')">Send til gjennomgang</button>
+    </div>
+    <div class="br-alloc-hint">Eller velg en til faktura i listen under.</div>
+  </div>`;
+}
+
+function editAllocationAmount(txId,idx,value){
+  const allocs=getDraftAllocs(txId);
+  if(!allocs[idx])return;
+  allocs[idx].amountApplied=Math.max(0,Number(value)||0);
+  renderBetalinger();
+}
+
+function removeAllocation(txId,idx){
+  const allocs=getDraftAllocs(txId);
+  if(idx<0||idx>=allocs.length)return;
+  allocs.splice(idx,1);
+  renderBetalinger();
+}
+
+function addCreditAllocation(txId){
+  const tx=dbFind('bankTransactions',txId);
+  if(!tx)return;
+  const allocs=getDraftAllocs(txId);
+  const remainder=computeRemainder(tx,allocs);
+  if(remainder<=0.01)return;
+  const leverandorId=inferSupplierFromTx(tx);
+  if(!leverandorId){showToast('Velg en faktura først for å identifisere leverandør');return;}
+  allocs.push({
+    invoiceId:null, amountApplied:remainder, type:'supplier_credit',
+    leverandorId:leverandorId, source:'user_manual', note:''
+  });
+  renderBetalinger();
+}
+
+function addRefundAllocation(txId){
+  const tx=dbFind('bankTransactions',txId);
+  if(!tx)return;
+  const allocs=getDraftAllocs(txId);
+  const remainder=computeRemainder(tx,allocs);
+  if(remainder<=0.01)return;
+  const leverandorId=inferSupplierFromTx(tx);
+  if(!leverandorId){showToast('Velg en faktura først for å identifisere leverandør');return;}
+  allocs.push({
+    invoiceId:null, amountApplied:remainder, type:'expected_refund',
+    leverandorId:leverandorId, source:'user_manual', note:''
+  });
+  renderBetalinger();
+}
+
+function addReviewAllocation(txId){
+  const tx=dbFind('bankTransactions',txId);
+  if(!tx)return;
+  const allocs=getDraftAllocs(txId);
+  const remainder=computeRemainder(tx,allocs);
+  if(remainder<=0.01)return;
+  const note=prompt('Hvorfor sendes denne resten til gjennomgang? (kort begrunnelse)');
+  if(note===null)return;
+  const trimmed=(note||'').trim();
+  if(!trimmed){showToast('Begrunnelse må fylles inn');return;}
+  allocs.push({
+    invoiceId:null, amountApplied:remainder, type:'unapplied_review',
+    leverandorId:inferSupplierFromTx(tx)||null,
+    source:'user_manual', note:trimmed
+  });
+  renderBetalinger();
+}
+
+async function saveAllocations(txId){
+  const tx=dbFind('bankTransactions',txId);
+  if(!tx)return;
+  const allocs=getDraftAllocs(txId);
+  if(!isFullyAllocated(tx,allocs)){
+    showToast('Allokering må summere til transaksjonsbeløpet før lagring');
+    return;
+  }
+  const invoiceIds=allocs
+    .filter(a=>a.type==='invoice_payment'&&a.invoiceId)
+    .map(a=>a.invoiceId);
+  const cleanAllocs=allocs.map(a=>({
+    invoiceId:a.invoiceId||null,
+    amountApplied:Number(a.amountApplied)||0,
+    type:a.type,
+    leverandorId:a.leverandorId||null,
+    source:a.source||'user_manual',
+    note:a.note||''
+  }));
+  await dbUpdate('bankTransactions',txId,{
+    linkedeFakturaer:invoiceIds,
+    linkedAllocations:cleanAllocs
+  });
+  clearDraftAllocs(txId);
+  showToast('Allokering lagret ✓');
+  renderBetalinger();
 }
 
 // ─────────────────────────────────────────
