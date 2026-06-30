@@ -1083,7 +1083,7 @@ const ARSAK={utgatt:'Utgått dato',skadet:'Skadet/knust',tyveri:'Tyveri/svinn',a
 // ─────────────────────────────────────────
 // LOCAL CACHE  (kept in sync by Firestore listeners)
 // ─────────────────────────────────────────
-let LOCAL={products:[],purchases:[],sales:[],svinn:[],leverandorer:[],dagsalg:[],innboks:[],ansatte:[],vakter:[],payments:[],bankTransactions:[],bankStatements:[],expenses:[],recurring_templates:[],expense_taxonomy:[]};
+let LOCAL={products:[],purchases:[],sales:[],svinn:[],leverandorer:[],dagsalg:[],innboks:[],ansatte:[],vakter:[],payments:[],bankTransactions:[],bankStatements:[],expenses:[],recurring_templates:[],expense_taxonomy:[],documents:[]};
 let db=null; // Firestore instance
 let storage = null; // Cloud Storage instance
 
@@ -1197,7 +1197,7 @@ const WRITE_TO_PURCHASES=false;
 function startListeners(){
   // Reset per-collection flags so re-starting listeners (tenant switch, etc.) works.
   Object.keys(firstSnapshotSeen).forEach(k=>delete firstSnapshotSeen[k]);
-  const cols=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter','payments','bankTransactions','bankStatements','expenses','recurring_templates','expense_taxonomy'];
+  const cols=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter','payments','bankTransactions','bankStatements','expenses','recurring_templates','expense_taxonomy','documents'];
   cols.forEach(col=>{
     listeners[col]=tenantCol(col).onSnapshot(snap=>{
       LOCAL[col]=snap.docs.map(d=>({id:d.id,...d.data()}));
@@ -3839,6 +3839,143 @@ async function saveAllocations(txId){
   clearDraftAllocs(txId);
   showToast('Allokering lagret ✓');
   renderBetalinger();
+}
+
+// ═════════════════════════════════════════
+// V2C.4 — documents collection schema reference
+// ═════════════════════════════════════════
+// Subcollection: tenantCol('documents') — registered in LOCAL init +
+// startListeners cols array (same pattern as bankStatements). Reads via
+// dbAll('documents') / dbFind('documents',id); writes via dbAdd/dbUpdate.
+//
+// Common fields (all docTypes):
+//   id, tenantId, docType, storageRef, fileName, mimeType,
+//   fileSize, uploadedAt, uploadedBy, source, status,
+//   processedAt, aiExtracted, aiConfidence, aiMetadata
+//
+// docType = 'purchase_invoice':
+//   linkedPurchaseId    string — matches expense.linkedPurchaseId
+//
+// docType = 'payment_settlement':
+//   linkedBankTransactionId  string — the bank tx this settles
+//   affectedInvoiceIds       string[] — invoices covered
+//
+// docType = 'historical_supplier_document':
+//   leverandorId        string — supplier this archives under
+//   documentDate        string — ISO date YYYY-MM-DD
+//   documentReference   string — user-typed reference
+//   notes               string — free-form
+//
+// Reverse references on other collections (additive at read-time):
+//   bankTransactions.linkedDocumentIds       (V2C.6 populates)
+//   expenses.linkedDocumentIds               (V2C.5 may populate)
+//   leverandorer.archivedDocumentIds         (V2C.7 populates)
+//   linkedAllocations[].sourceDocumentId     (V2C.6 populates)
+//
+// All reverse refs default empty/null when missing. NO writes to
+// existing records during V2C.4.
+// ═════════════════════════════════════════
+
+async function createDocument(docData){
+  const validTypes=['purchase_invoice','payment_settlement','historical_supplier_document'];
+  if(!validTypes.includes(docData.docType)){
+    throw new Error('Invalid docType: '+docData.docType);
+  }
+  const now=new Date().toISOString();
+  const record={
+    tenantId:TENANT_ID,
+    docType:docData.docType,
+    storageRef:docData.storageRef||null,
+    fileName:docData.fileName||'',
+    mimeType:docData.mimeType||'',
+    fileSize:Number(docData.fileSize)||0,
+    uploadedAt:docData.uploadedAt||now,
+    uploadedBy:docData.uploadedBy||(currentUser&&currentUser.name)||'ai-skann',
+    source:docData.source||'manual_upload',
+    linkedPurchaseId:docData.linkedPurchaseId||null,
+    linkedBankTransactionId:docData.linkedBankTransactionId||null,
+    affectedInvoiceIds:Array.isArray(docData.affectedInvoiceIds)?docData.affectedInvoiceIds:[],
+    leverandorId:docData.leverandorId||null,
+    documentDate:docData.documentDate||null,
+    documentReference:docData.documentReference||'',
+    notes:docData.notes||'',
+    status:docData.status||'pending',
+    processedAt:docData.processedAt||null,
+    aiExtracted:docData.aiExtracted===true,
+    aiConfidence:typeof docData.aiConfidence==='number'?docData.aiConfidence:null,
+    aiMetadata:docData.aiMetadata||{}
+  };
+  return await dbAdd('documents',record);
+}
+
+function getDocumentById(docId){
+  return (dbAll('documents')||[]).find(d=>d.id===docId)||null;
+}
+
+function getDocumentsByType(docType){
+  return (dbAll('documents')||[]).filter(d=>d.docType===docType);
+}
+
+function resolveTxAffectedInvoices(txId){
+  const tx=dbFind('bankTransactions',txId);
+  if(!tx)return [];
+  const allocs=Array.isArray(tx.linkedAllocations)?tx.linkedAllocations:[];
+  return allocs
+    .filter(a=>a.type==='invoice_payment'&&a.invoiceId)
+    .map(a=>a.invoiceId);
+}
+
+function getDocumentsForBankTx(txId){
+  if(!txId)return [];
+  const affectedInvs=resolveTxAffectedInvoices(txId);
+  const all=dbAll('documents')||[];
+  return all.filter(d=>
+    d.linkedBankTransactionId===txId ||
+    (Array.isArray(d.affectedInvoiceIds) && d.affectedInvoiceIds.length>0 &&
+     affectedInvs.some(invId=>d.affectedInvoiceIds.includes(invId)))
+  );
+}
+
+function getDocumentsForInvoice(invoiceId){
+  if(!invoiceId)return [];
+  return (dbAll('documents')||[]).filter(d=>
+    d.linkedPurchaseId===invoiceId ||
+    (Array.isArray(d.affectedInvoiceIds) && d.affectedInvoiceIds.includes(invoiceId))
+  );
+}
+
+function getDocumentsForSupplier(supplierId){
+  if(!supplierId)return [];
+  return (dbAll('documents')||[]).filter(d=>d.leverandorId===supplierId);
+}
+
+async function linkDocumentToBankTx(docId,txId){
+  const doc=getDocumentById(docId);
+  if(!doc)throw new Error('Document not found: '+docId);
+  await dbUpdate('documents',docId,{
+    linkedBankTransactionId:txId,
+    status:'processed',
+    processedAt:new Date().toISOString()
+  });
+}
+
+async function linkDocumentToInvoice(docId,invoiceId){
+  const doc=getDocumentById(docId);
+  if(!doc)throw new Error('Document not found: '+docId);
+  await dbUpdate('documents',docId,{
+    linkedPurchaseId:invoiceId,
+    status:'processed',
+    processedAt:new Date().toISOString()
+  });
+}
+
+async function archiveDocument(docId){
+  const doc=getDocumentById(docId);
+  if(!doc)throw new Error('Document not found: '+docId);
+  await dbUpdate('documents',docId,{
+    status:'archived',
+    processedAt:doc.processedAt||new Date().toISOString()
+  });
 }
 
 // ─────────────────────────────────────────
