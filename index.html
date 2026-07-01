@@ -3582,10 +3582,29 @@ function inferSupplierFromTx(tx){
   return null;
 }
 
+// V2C.2.2: normalize supplier name for fallback matching when
+// legacy/imported invoices have empty leverandorId but matching
+// supplierName. Case-fold + collapse whitespace + strip punctuation.
+function normalizeSupplierName(name){
+  return (name||'').toLowerCase().trim().replace(/\s+/g,' ').replace(/[.,\/\\]/g,'');
+}
+
 function filterPickerCandidates(candidates,query,supplierFilter){
   let list=candidates;
   if(supplierFilter){
-    list=list.filter(c=>c.leverandorId===supplierFilter);
+    // V2C.2.2: primary ID match, fallback to normalized name match
+    // when candidate.leverandorId is empty (legacy/imported invoices)
+    const supplierRec=dbFind('leverandorer',supplierFilter);
+    const targetNameNorm=supplierRec?normalizeSupplierName(supplierRec.navn||''):'';
+    list=list.filter(c=>{
+      if(c.leverandorId===supplierFilter)return true;
+      // Fallback: only when candidate has empty leverandorId
+      if(!c.leverandorId&&targetNameNorm){
+        const candNameNorm=normalizeSupplierName(c.supplierName||'');
+        if(candNameNorm&&candNameNorm===targetNameNorm)return true;
+      }
+      return false;
+    });
   }
   const q=(query||'').trim().toLowerCase();
   if(!q)return list;
