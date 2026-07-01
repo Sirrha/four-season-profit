@@ -236,6 +236,49 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
   .br-doc-row{flex-wrap:wrap}
   .br-docs-actions .br-btn{flex:1;min-width:130px}
 }
+/* V2C.8A — Leverandør detail page */
+#pg-leverandor{padding:12px}
+.lev-header-bar{margin-bottom:12px}
+.lev-back-btn{padding:6px 12px;background:transparent;border:1px solid var(--border,rgba(0,0,0,.15));border-radius:4px;font-size:13px;cursor:pointer;color:var(--text,#333)}
+.lev-back-btn:hover{background:rgba(0,0,0,.04)}
+.lev-header{padding:14px 16px;background:rgba(45,108,180,.05);border:1px solid var(--border,rgba(0,0,0,.08));border-radius:6px;margin-bottom:14px}
+.lev-name{font-size:20px;font-weight:700;color:var(--text,#222);margin-bottom:4px}
+.lev-meta{font-size:12.5px;color:var(--muted,#666);margin-top:2px}
+.lev-balance-card{padding:14px 16px;background:linear-gradient(180deg,rgba(230,144,32,.06),rgba(230,144,32,.02));border:1px solid rgba(230,144,32,.2);border-radius:6px;margin-bottom:14px}
+.lev-balance-label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted,#a86f1f);font-weight:600;margin-bottom:6px}
+.lev-balance-amount{font-size:24px;font-weight:700;color:#a86f1f}
+.lev-section{margin-bottom:16px;padding:12px 14px;background:#fff;border:1px solid var(--border,rgba(0,0,0,.08));border-radius:6px}
+.lev-section-title{font-size:13px;font-weight:600;color:var(--text,#333);text-transform:uppercase;letter-spacing:.3px;margin-bottom:10px}
+.lev-empty-row{padding:10px;color:var(--muted,#888);font-size:12.5px;font-style:italic;text-align:center}
+.lev-inv-header,.lev-inv-row{display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:8px;padding:6px 4px;font-size:12px}
+.lev-inv-header{font-weight:600;color:var(--muted,#666);border-bottom:1px solid var(--border,rgba(0,0,0,.08))}
+.lev-inv-row{border-bottom:1px solid rgba(0,0,0,.03)}
+.lev-badge{padding:2px 7px;border-radius:9px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+.lev-badge-paid{background:rgba(42,157,74,.15);color:#1e7a3a}
+.lev-badge-partial{background:rgba(230,144,32,.15);color:#a86f1f}
+.lev-badge-unpaid{background:rgba(200,50,50,.12);color:#a83232}
+.lev-badge-unknown{background:rgba(120,120,120,.15);color:#555}
+.lev-doc-row{display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(0,0,0,.02);border-radius:4px;margin-bottom:6px;font-size:12.5px}
+.lev-doc-badge{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap}
+.lev-doc-badge-purchase_invoice{background:rgba(42,157,74,.15);color:#1e7a3a}
+.lev-doc-badge-receipt{background:rgba(230,144,32,.15);color:#a86f1f}
+.lev-doc-badge-other_supporting_document{background:rgba(120,120,120,.15);color:#555}
+.lev-doc-badge-payment_settlement{background:rgba(45,108,180,.15);color:#1f4f8a}
+.lev-doc-badge-historical_supplier_document{background:rgba(150,50,150,.15);color:#743374}
+.lev-doc-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lev-doc-action{padding:3px 8px;background:rgba(0,0,0,.05);border:1px solid var(--border,rgba(0,0,0,.15));border-radius:3px;font-size:11px;cursor:pointer}
+.lev-doc-action:hover{background:rgba(0,0,0,.08)}
+.lev-inb-row{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:rgba(230,144,32,.04);border-radius:4px;margin-bottom:6px;font-size:12.5px}
+.lev-inb-name{flex:1;font-weight:500}
+.lev-inb-meta{color:var(--muted,#a86f1f);font-size:11.5px;font-weight:600}
+.lev-pay-row{display:grid;grid-template-columns:1fr 1fr 2fr 1fr;gap:8px;padding:6px 4px;font-size:12px;border-bottom:1px solid rgba(0,0,0,.03)}
+.br-lev-link-btn{padding:5px 10px;background:rgba(45,108,180,.08);border:1px solid rgba(45,108,180,.25);border-radius:4px;font-size:12px;color:#1f4f8a;cursor:pointer;margin-bottom:8px}
+.br-lev-link-btn:hover{background:rgba(45,108,180,.15)}
+@media (max-width: 768px){
+  .lev-inv-header{display:none}
+  .lev-inv-row{grid-template-columns:1fr 1fr;padding:8px 4px}
+  .lev-pay-row{grid-template-columns:1fr 1fr}
+}
 
 /* ── LIST ── */
 .li{display:flex;align-items:center;padding:11px 0;border-bottom:1px solid var(--border);gap:10px}
@@ -592,6 +635,7 @@ select.fi:focus{background-color:#fff}
 <div class="page" id="pg-timeliste"></div>
 <div class="page" id="pg-betalinger"></div>
 <div class="page" id="pg-okonomi"></div>
+<div class="page" id="pg-leverandor"></div>
 
 <button class="fab" id="fabBtn">+</button>
 
@@ -1557,7 +1601,7 @@ document.querySelectorAll('.ov').forEach(ov=>ov.addEventListener('click',e=>{if(
 // NAVIGATION
 // ─────────────────────────────────────────
 let currentPage='oversikt';
-const pageTitles={oversikt:'Oversikt',produkter:'Produktregister',leverandorer:'Leverandører',innboks:'Innboks',innkjop:'Innkjøp & Fakturaer',salg:'Salgslogg',svinn:'Svinn & Justering',rapporter:'Rapporter',timeliste:'Timeliste & Ansatte',betalinger:'Bankavstemming',okonomi:'Økonomi'};
+const pageTitles={oversikt:'Oversikt',produkter:'Produktregister',leverandorer:'Leverandører',innboks:'Innboks',innkjop:'Innkjøp & Fakturaer',salg:'Salgslogg',svinn:'Svinn & Justering',rapporter:'Rapporter',timeliste:'Timeliste & Ansatte',betalinger:'Bankavstemming',okonomi:'Økonomi',leverandor:'Leverandør'};
 function goTo(pg){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nb').forEach(b=>b.classList.remove('active'));
@@ -1596,7 +1640,7 @@ document.getElementById('fabBtn').addEventListener('click',()=>{
 });
 function handleExport(){if(currentPage==='produkter')exportCSV('products');else if(currentPage==='innkjop')exportCSV('purchases')}
 function renderPage(pg){
-  const fn={oversikt:renderOversikt,produkter:renderProdukter,leverandorer:renderLeverandorer,innboks:renderInnboks,innkjop:renderInnkjop,salg:renderSalg,svinn:renderSvinn,rapporter:renderRapporter,timeliste:renderTimeliste,betalinger:renderBetalinger,okonomi:renderUtgifter};
+  const fn={oversikt:renderOversikt,produkter:renderProdukter,leverandorer:renderLeverandorer,innboks:renderInnboks,innkjop:renderInnkjop,salg:renderSalg,svinn:renderSvinn,rapporter:renderRapporter,timeliste:renderTimeliste,betalinger:renderBetalinger,okonomi:renderUtgifter,leverandor:renderLeverandor};
   if(fn[pg])fn[pg]();
 }
 
@@ -3517,6 +3561,8 @@ function renderBrExpandPanel(tx,status){
   const initialFiltered=filterPickerCandidates(candidates,'',supplierFilter);
   const initialVisible=initialFiltered.slice(0,50);
   const pickerSupplierName=supplierFilter?((dbFind('leverandorer',supplierFilter)||{}).navn||''):'';
+  // V2C.8A: link to the read-only supplier detail page, only when a supplier is inferred
+  const _levBtn=inferredSupplier?`<button class="br-lev-link-btn" onclick="event.stopPropagation();openLeverandorPage('${inferredSupplier}')">Se leverandør →</button>`:'';
   const pickerHtml=`
     <div class="br-pick-wrap">
       <input type="search" id="br-pick-search-${tx.id}" class="br-pick-search" placeholder="Søk leverandør / fakturanr / beløp / dato..." oninput="clearTimeout(window._brPickQT);window._brPickQT=setTimeout(()=>rerenderPickerList('${tx.id}'),150)">
@@ -3540,6 +3586,7 @@ function renderBrExpandPanel(tx,status){
       <div><div class="br-exp-label">Beskrivelse</div><div class="br-exp-val">${escapeHtml(getTxDisplayDescription(tx))}</div></div>
       ${tx.arkivref?`<div><div class="br-exp-label">Bank ref</div><div class="br-exp-val">${escapeHtml(tx.arkivref)}</div></div>`:''}
     </div>
+    ${_levBtn}
     ${suggestHtml}
     ${renderDocumentsSection(tx.id)}
     <div class="br-alloc-section">
@@ -4203,6 +4250,272 @@ function renderDocumentsSection(txId){
     </div>
     <input type="file" id="br-doc-file-${txId}" accept="image/*,application/pdf" style="display:none">
     <div id="br-doc-uploading-${txId}" class="br-docs-uploading" style="display:none">Laster opp — vent...</div>
+  </div>`;
+}
+
+// ═════════════════════════════════════════
+// V2C.8A — Leverandør detail data aggregation
+// Read-only aggregation across expenses, documents, innboks,
+// bankTransactions per supplier. Uses V2C.2.2 normalizeSupplierName
+// for fallback name matching on legacy data with empty leverandorId.
+// ═════════════════════════════════════════
+
+function getInvoicesForSupplier(levId){
+  const supplier=dbFind('leverandorer',levId);
+  if(!supplier)return [];
+  const targetName=normalizeSupplierName(supplier.navn||'');
+  const all=dbAll('expenses')||[];
+  return all.filter(e=>{
+    if(e.expenseKind!=='purchase_invoice')return false;
+    if(e.leverandorId===levId)return true;
+    if(!e.leverandorId&&targetName){
+      const en=normalizeSupplierName(e.supplierName||'');
+      if(en&&en===targetName)return true;
+    }
+    return false;
+  });
+}
+
+function getBankPaymentsForSupplier(levId){
+  const all=dbAll('bankTransactions')||[];
+  return all.filter(t=>{
+    const allocs=Array.isArray(t.linkedAllocations)?t.linkedAllocations:[];
+    if(allocs.some(a=>a.leverandorId===levId))return true;
+    try{
+      const inferred=typeof inferSupplierFromTx==='function'?inferSupplierFromTx(t):null;
+      if(inferred===levId)return true;
+    }catch(e){/* silent */}
+    return false;
+  });
+}
+
+function getDocumentsForSupplierPage(levId){
+  const supplier=dbFind('leverandorer',levId);
+  if(!supplier)return [];
+  const targetName=normalizeSupplierName(supplier.navn||'');
+  const invoiceIds=new Set(getInvoicesForSupplier(levId).map(i=>i.linkedPurchaseId).filter(x=>x));
+  const txIds=new Set(getBankPaymentsForSupplier(levId).map(t=>t.id));
+  const all=dbAll('documents')||[];
+  return all.filter(d=>{
+    if(d.status==='archived')return false;
+    if(d.leverandorId===levId)return true;
+    if(d.linkedPurchaseId&&invoiceIds.has(d.linkedPurchaseId))return true;
+    if(d.linkedBankTransactionId&&txIds.has(d.linkedBankTransactionId))return true;
+    if(!d.leverandorId&&targetName){
+      const dn=normalizeSupplierName(d.supplierName||'');
+      if(dn&&dn===targetName)return true;
+    }
+    return false;
+  });
+}
+
+function getInnboksDraftsForSupplier(levId){
+  const supplier=dbFind('leverandorer',levId);
+  if(!supplier)return [];
+  const targetName=normalizeSupplierName(supplier.navn||'');
+  const nameWords=targetName.split(' ').filter(w=>w.length>3);
+  const all=dbAll('innboks')||[];
+  return all.filter(item=>{
+    // Only pending drafts (innboks status is 'pending' | 'done')
+    const st=(item.status||'').toLowerCase();
+    if(st==='done'||st==='processed'||st==='archived')return false;
+    if(item.leverandorId===levId)return true;
+    // Best-effort fuzzy: filename (filnavn) containing distinctive supplier words
+    const fn=(item.filnavn||'').toLowerCase();
+    if(fn&&nameWords.length&&nameWords.some(w=>fn.includes(w)))return true;
+    return false;
+  });
+}
+
+function getSupplierInvoiceStatus(invoice){
+  if(!invoice||!invoice.linkedPurchaseId)return {status:'unknown',paid:0,remaining:Number(invoice&&invoice.totalInclVat)||0};
+  const invTotal=Number(invoice.totalInclVat)||0;
+  const allBankTxs=dbAll('bankTransactions')||[];
+  let paidSum=0;
+  allBankTxs.forEach(t=>{
+    const allocs=Array.isArray(t.linkedAllocations)?t.linkedAllocations:[];
+    allocs.forEach(a=>{
+      if(a.type==='invoice_payment'&&a.invoiceId===invoice.linkedPurchaseId){
+        paidSum+=Number(a.amountApplied)||0;
+      }
+    });
+  });
+  const remaining=Math.max(0,invTotal-paidSum);
+  let status='unpaid';
+  if(paidSum>=invTotal-0.01)status='paid';
+  else if(paidSum>0)status='partial';
+  return {status,paid:paidSum,remaining};
+}
+
+function computeSupplierUnpaidTotal(levId){
+  // Alloc-aware sum of remaining across all supplier invoices. No purchases
+  // lookup — the expense mirror carries totalInclVat, paid comes from allocations.
+  const invoices=getInvoicesForSupplier(levId);
+  let total=0;
+  invoices.forEach(inv=>{
+    if(!inv.linkedPurchaseId)return;
+    total+=getSupplierInvoiceStatus(inv).remaining;
+  });
+  return total;
+}
+
+// ═════════════════════════════════════════
+// V2C.8A — Leverandør detail page render (read-only)
+// ═════════════════════════════════════════
+let _activeLeverandorId=null;
+
+function openLeverandorPage(levId){
+  if(!levId){showToast('Ingen leverandør valgt');return;}
+  const supplier=dbFind('leverandorer',levId);
+  if(!supplier){showToast('Leverandør ikke funnet');return;}
+  _activeLeverandorId=levId;
+  goTo('leverandor');
+}
+
+function backToBankavstemming(){
+  _activeLeverandorId=null;
+  goTo('betalinger');
+}
+
+function renderLeverandor(){
+  const container=document.getElementById('pg-leverandor');
+  if(!container)return;
+  const id=_activeLeverandorId;
+  if(!id){container.innerHTML='<div class="lev-empty-row">Ingen leverandør valgt.</div>';return;}
+  const supplier=dbFind('leverandorer',id);
+  if(!supplier){container.innerHTML='<div class="lev-empty-row">Leverandør ikke funnet.</div>';return;}
+  const invoices=getInvoicesForSupplier(id);
+  const documents=getDocumentsForSupplierPage(id);
+  const innboksDrafts=getInnboksDraftsForSupplier(id);
+  const bankPayments=getBankPaymentsForSupplier(id);
+  const unpaidTotal=computeSupplierUnpaidTotal(id);
+  container.innerHTML=`
+    <div class="lev-header-bar">
+      <button class="lev-back-btn" onclick="backToBankavstemming()">← Tilbake til Bankavstemming</button>
+    </div>
+    ${renderLeverandorHeader(supplier)}
+    ${renderLeverandorBalance(unpaidTotal)}
+    ${renderLeverandorInvoices(invoices)}
+    ${renderLeverandorDocuments(documents)}
+    ${renderLeverandorInnboks(innboksDrafts)}
+    ${renderLeverandorPayments(bankPayments)}`;
+}
+
+function renderLeverandorHeader(supplier){
+  const orgnr=escapeHtml(supplier.orgNummer||supplier.orgnr||'');
+  const contact=escapeHtml(supplier.kontaktperson||supplier.epost||supplier.telefon||'');
+  return `<div class="lev-header">
+    <div class="lev-name">${escapeHtml(supplier.navn||'(uten navn)')}</div>
+    ${orgnr?`<div class="lev-meta">Org.nr: ${orgnr}</div>`:''}
+    ${contact?`<div class="lev-meta">Kontakt: ${contact}</div>`:''}
+  </div>`;
+}
+
+function renderLeverandorBalance(unpaidTotal){
+  return `<div class="lev-balance-card">
+    <div class="lev-balance-label">Ubetalt totalt</div>
+    <div class="lev-balance-amount">${fmtNOK(unpaidTotal)}</div>
+  </div>`;
+}
+
+function renderLeverandorInvoices(invoices){
+  if(invoices.length===0){
+    return `<div class="lev-section">
+      <div class="lev-section-title">Fakturaer (0)</div>
+      <div class="lev-empty-row">Ingen fakturaer registrert for denne leverandøren.</div>
+    </div>`;
+  }
+  const rows=invoices.map(inv=>{
+    const s=getSupplierInvoiceStatus(inv);
+    const badge=s.status==='paid'?'BETALT':s.status==='partial'?'DELVIS':s.status==='unknown'?'UKJENT':'UBETALT';
+    return `<div class="lev-inv-row">
+      <div class="lev-inv-nr">${escapeHtml(inv.invoiceNumber||'(uten nr)')}</div>
+      <div class="lev-inv-date">${escapeHtml(fmtDate(inv.invoiceDate||''))}</div>
+      <div class="lev-inv-due">${escapeHtml(fmtDate(inv.dueDate||''))}</div>
+      <div class="lev-inv-total">${fmtNOK(Number(inv.totalInclVat)||0)}</div>
+      <div class="lev-inv-paid">${fmtNOK(s.paid)}</div>
+      <div class="lev-inv-rem">${fmtNOK(s.remaining)}</div>
+      <div class="lev-inv-status"><span class="lev-badge lev-badge-${s.status}">${badge}</span></div>
+    </div>`;
+  }).join('');
+  return `<div class="lev-section">
+    <div class="lev-section-title">Fakturaer (${invoices.length})</div>
+    <div class="lev-inv-header">
+      <div>Nr</div><div>Dato</div><div>Forfall</div><div>Total</div><div>Betalt</div><div>Rest</div><div>Status</div>
+    </div>
+    ${rows}
+  </div>`;
+}
+
+function renderLeverandorDocuments(documents){
+  if(documents.length===0){
+    return `<div class="lev-section">
+      <div class="lev-section-title">Dokumenter (0)</div>
+      <div class="lev-empty-row">Ingen dokumenter knyttet til denne leverandøren.</div>
+    </div>`;
+  }
+  const typeLabels={
+    'purchase_invoice':'FAKTURA','receipt':'KVITTERING','other_supporting_document':'DOKUMENT',
+    'payment_settlement':'OPPGJØR','historical_supplier_document':'ARKIV'
+  };
+  const rows=documents.map(d=>{
+    const badge=typeLabels[d.docType]||'DOKUMENT';
+    const fname=escapeHtml(d.fileName||'(uten navn)');
+    return `<div class="lev-doc-row">
+      <span class="lev-doc-badge lev-doc-badge-${d.docType}">${badge}</span>
+      <span class="lev-doc-name" title="${fname}">${fname}</span>
+      <button class="lev-doc-action" onclick="viewDocumentInline(event,'${d.id}')">Vis</button>
+      <button class="lev-doc-action" onclick="downloadDocumentInline(event,'${d.id}')">Last ned</button>
+    </div>`;
+  }).join('');
+  return `<div class="lev-section">
+    <div class="lev-section-title">Dokumenter (${documents.length})</div>
+    ${rows}
+  </div>`;
+}
+
+function renderLeverandorInnboks(drafts){
+  if(drafts.length===0){
+    return `<div class="lev-section">
+      <div class="lev-section-title">Innboks-utkast (0)</div>
+      <div class="lev-empty-row">Ingen utkast i Innboks knyttet til denne leverandøren.</div>
+    </div>`;
+  }
+  const rows=drafts.map(d=>{
+    const fname=escapeHtml(d.filnavn||'(uten navn)');
+    const size=d.storrelse?Math.round(Number(d.storrelse)/1024)+' kB':'';
+    return `<div class="lev-inb-row">
+      <span class="lev-inb-name">${fname}</span>
+      <span class="lev-inb-meta">${escapeHtml(d.status||'utkast')}${size?' · '+size:''}</span>
+    </div>`;
+  }).join('');
+  return `<div class="lev-section">
+    <div class="lev-section-title">Innboks-utkast (${drafts.length})</div>
+    ${rows}
+  </div>`;
+}
+
+function renderLeverandorPayments(payments){
+  if(payments.length===0){
+    return `<div class="lev-section">
+      <div class="lev-section-title">Bankbetalinger (0)</div>
+      <div class="lev-empty-row">Ingen bankbetalinger funnet for denne leverandøren.</div>
+    </div>`;
+  }
+  const rows=payments.map(t=>{
+    const desc=typeof getTxDisplayDescription==='function'?getTxDisplayDescription(t):(t.levTekstRaa||'');
+    const allocs=Array.isArray(t.linkedAllocations)?t.linkedAllocations.length:0;
+    const badge=allocs>0?'KOBLET':'IKKE MATCHET';
+    return `<div class="lev-pay-row">
+      <div class="lev-pay-date">${escapeHtml(fmtDate(t.dato||''))}</div>
+      <div class="lev-pay-amt">${fmtNOK(Number(t.belop)||0)}</div>
+      <div class="lev-pay-desc" title="${escapeHtml(desc)}">${escapeHtml(desc)}</div>
+      <div class="lev-pay-status">${badge} (${allocs} allokering${allocs===1?'':'er'})</div>
+    </div>`;
+  }).join('');
+  return `<div class="lev-section">
+    <div class="lev-section-title">Bankbetalinger (${payments.length})</div>
+    ${rows}
   </div>`;
 }
 
