@@ -213,6 +213,29 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
   .br-alloc-amount{width:90px}
   .br-alloc-actions .br-btn{flex:1;min-width:120px}
 }
+/* V2C.5 — Documents section (upload/view/download) */
+.br-docs-section{margin:12px 0;padding:10px 12px;background:rgba(45,108,180,.03);border:1px solid var(--border,rgba(0,0,0,.08));border-radius:6px}
+.br-docs-empty{padding:8px;color:var(--muted,#777);font-size:12.5px;font-style:italic;text-align:center}
+.br-docs-list{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
+.br-doc-row{display:flex;align-items:center;gap:8px;padding:8px 10px;background:#fff;border:1px solid var(--border,rgba(0,0,0,.1));border-radius:5px;font-size:12.5px}
+.br-doc-badge{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap}
+.br-doc-badge-purchase_invoice{background:rgba(42,157,74,.15);color:#1e7a3a}
+.br-doc-badge-receipt{background:rgba(230,144,32,.15);color:#a86f1f}
+.br-doc-badge-other_supporting_document{background:rgba(120,120,120,.15);color:#555}
+.br-doc-badge-payment_settlement{background:rgba(45,108,180,.15);color:#1f4f8a}
+.br-doc-badge-historical_supplier_document{background:rgba(150,50,150,.15);color:#743374}
+.br-doc-filename{flex:1;min-width:0;color:var(--text,#222);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
+.br-doc-action{padding:4px 10px;background:rgba(0,0,0,.05);border:1px solid var(--border,rgba(0,0,0,.15));border-radius:4px;font-size:11.5px;cursor:pointer;color:var(--text,#333)}
+.br-doc-action:hover{background:rgba(0,0,0,.08)}
+.br-doc-remove{padding:0 8px;background:transparent;border:none;color:#a83232;font-size:16px;cursor:pointer;line-height:1}
+.br-doc-remove:hover{color:#600}
+.br-docs-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.br-doc-upload-btn{font-size:12px;padding:6px 10px}
+.br-docs-uploading{padding:8px;text-align:center;color:var(--accent,#1f4f8a);font-size:12px;font-weight:600;background:rgba(45,108,180,.05);border-radius:4px;margin-top:6px}
+@media (max-width: 768px){
+  .br-doc-row{flex-wrap:wrap}
+  .br-docs-actions .br-btn{flex:1;min-width:130px}
+}
 
 /* ── LIST ── */
 .li{display:flex;align-items:center;padding:11px 0;border-bottom:1px solid var(--border);gap:10px}
@@ -3518,6 +3541,7 @@ function renderBrExpandPanel(tx,status){
       ${tx.arkivref?`<div><div class="br-exp-label">Bank ref</div><div class="br-exp-val">${escapeHtml(tx.arkivref)}</div></div>`:''}
     </div>
     ${suggestHtml}
+    ${renderDocumentsSection(tx.id)}
     <div class="br-alloc-section">
       <div class="br-exp-label" style="margin-bottom:6px">Allokeringer</div>
       ${renderAllocationsList(tx.id)}
@@ -3530,7 +3554,7 @@ function renderBrExpandPanel(tx,status){
         ${(()=>{
           const draftAllocs=getDraftAllocs(tx.id);
           const balanced=isFullyAllocated(tx,draftAllocs);
-          return `<button class="br-btn br-btn-primary" ${balanced?'':'disabled'} onclick="event.stopPropagation();saveAllocations('${tx.id}')">Lagre kobling${balanced?'':' (ikke balansert)'}</button>`;
+          return `<button class="br-btn br-btn-primary" ${balanced?'':'disabled'} onclick="event.stopPropagation();saveAllocations('${tx.id}')">Lagre denne transaksjonen${balanced?'':' (ikke balansert)'}</button>`;
         })()}
       </div>
     </div>
@@ -3816,7 +3840,13 @@ function addReviewAllocation(txId){
 async function saveAllocations(txId){
   const tx=dbFind('bankTransactions',txId);
   if(!tx)return;
-  const allocs=getDraftAllocs(txId);
+  const rawAllocs=getDraftAllocs(txId);
+  // V2C.5: filter out zero-amount allocations before save
+  const allocs=rawAllocs.filter(a=>(Number(a.amountApplied)||0)>=0.01);
+  if(allocs.length===0){
+    showToast('Ingen gyldige allokeringer å lagre (alle er 0,00 eller tomme)');
+    return;
+  }
   if(!isFullyAllocated(tx,allocs)){
     showToast('Allokering må summere til transaksjonsbeløpet før lagring');
     return;
@@ -3837,7 +3867,7 @@ async function saveAllocations(txId){
     linkedAllocations:cleanAllocs
   });
   clearDraftAllocs(txId);
-  showToast('Allokering lagret ✓');
+  showToast('Transaksjon lagret ✓ — du kan fortsette med neste');
   renderBetalinger();
 }
 
@@ -3877,7 +3907,7 @@ async function saveAllocations(txId){
 // ═════════════════════════════════════════
 
 async function createDocument(docData){
-  const validTypes=['purchase_invoice','payment_settlement','historical_supplier_document'];
+  const validTypes=['purchase_invoice','payment_settlement','historical_supplier_document','receipt','other_supporting_document'];
   if(!validTypes.includes(docData.docType)){
     throw new Error('Invalid docType: '+docData.docType);
   }
@@ -3952,11 +3982,21 @@ function getDocumentsForSupplier(supplierId){
 async function linkDocumentToBankTx(docId,txId){
   const doc=getDocumentById(docId);
   if(!doc)throw new Error('Document not found: '+docId);
+  // Update document side
   await dbUpdate('documents',docId,{
     linkedBankTransactionId:txId,
     status:'processed',
     processedAt:new Date().toISOString()
   });
+  // V2C.5: update bank tx side (reverse ref — V2C.4 reserved this field, V2C.5 is first writer)
+  const tx=dbFind('bankTransactions',txId);
+  if(!tx)return;
+  const current=Array.isArray(tx.linkedDocumentIds)?tx.linkedDocumentIds:[];
+  if(!current.includes(docId)){
+    await dbUpdate('bankTransactions',txId,{
+      linkedDocumentIds:[...current,docId]
+    });
+  }
 }
 
 async function linkDocumentToInvoice(docId,invoiceId){
@@ -3976,6 +4016,175 @@ async function archiveDocument(docId){
     status:'archived',
     processedAt:doc.processedAt||new Date().toISOString()
   });
+}
+
+// ═════════════════════════════════════════
+// V2C.5 — Document upload/view/download helpers
+// Firebase Storage foundation for V2C.5, V2C.5B, V2C.6, V2C.7.
+// Storage path: tenants/{TENANT_ID}/documents/{docId}/{safeName} via tenantStorageRef.
+// MIME allowlist: image/jpeg, png, heic, webp, application/pdf. Max 10 MB.
+// Upload flow: createDocument → uploadDocumentFile → dbUpdate(storageRef)
+//   → linkDocumentToBankTx (both-sided) → toast + re-render.
+// ═════════════════════════════════════════
+
+async function uploadDocumentFile(file,docId,docType){
+  const ALLOWED=['image/jpeg','image/jpg','image/png','image/heic','image/heif','image/webp','application/pdf'];
+  const MAX_SIZE=10*1024*1024;
+  if(!file)throw new Error('Ingen fil valgt.');
+  if(!ALLOWED.includes(file.type))throw new Error('Ugyldig filtype. Kun bilder (JPG/PNG/HEIC/WebP) og PDF støttes.');
+  if(file.size>MAX_SIZE)throw new Error('Filen er for stor. Maks 10 MB.');
+  if(!storage)throw new Error('Storage ikke tilgjengelig — kontakt admin.');
+  const safeName=(file.name||'unnamed').replace(/[^a-zA-Z0-9.\-_]/g,'_');
+  const subpath='documents/'+docId+'/'+safeName;
+  const ref=tenantStorageRef(subpath);
+  const snapshot=await ref.put(file,{
+    contentType:file.type,
+    customMetadata:{docId:docId,docType:docType,uploadedAt:new Date().toISOString()}
+  });
+  const downloadUrl=await snapshot.ref.getDownloadURL();
+  return {storagePath:'tenants/'+TENANT_ID+'/'+subpath,downloadUrl};
+}
+
+async function getDocumentDownloadUrl(docId){
+  const doc=getDocumentById(docId);
+  if(!doc||!doc.storageRef)return null;
+  if(!storage)return null;
+  try{
+    const ref=storage.ref(doc.storageRef);
+    return await ref.getDownloadURL();
+  }catch(e){
+    console.error('[storage] getDownloadURL failed:',e);
+    return null;
+  }
+}
+
+async function handleDocumentUpload(txId,docType,fileInput){
+  const file=fileInput&&fileInput.files&&fileInput.files[0];
+  if(!file)return;
+  const uploadingEl=document.getElementById('br-doc-uploading-'+txId);
+  if(uploadingEl)uploadingEl.style.display='';
+  let docId=null;
+  try{
+    // Step 1: create document record (without storageRef yet)
+    docId=await createDocument({
+      docType:docType,
+      fileName:file.name,
+      mimeType:file.type,
+      fileSize:file.size,
+      source:'manual_upload',
+      linkedBankTransactionId:txId,
+      status:'pending_review'
+    });
+    // Step 2: upload file to Storage
+    const {storagePath}=await uploadDocumentFile(file,docId,docType);
+    // Step 3: update document with storageRef
+    await dbUpdate('documents',docId,{storageRef:storagePath});
+    // Step 4: link both sides (document + bank tx)
+    await linkDocumentToBankTx(docId,txId);
+    showToast('Dokument lastet opp ✓');
+  }catch(err){
+    console.error('[upload] failed:',err);
+    // Cleanup orphan document record if upload failed after step 1
+    if(docId){
+      try{await archiveDocument(docId);}catch(e){/* silent */}
+    }
+    showToast('Opplasting feilet: '+(err.message||'ukjent feil'));
+  }finally{
+    if(uploadingEl)uploadingEl.style.display='none';
+    if(fileInput)fileInput.value='';
+  }
+  renderBetalinger();
+}
+
+async function unlinkDocumentFromBankTx(docId,txId){
+  if(!confirm('Fjerne dokumentet fra denne transaksjonen? Dokumentet blir arkivert, ikke slettet permanent.'))return;
+  try{
+    // Update doc side: unlink + archive
+    await dbUpdate('documents',docId,{
+      linkedBankTransactionId:null,
+      status:'archived',
+      processedAt:new Date().toISOString()
+    });
+    // Update bank tx side: remove from linkedDocumentIds
+    const tx=dbFind('bankTransactions',txId);
+    if(tx){
+      const current=Array.isArray(tx.linkedDocumentIds)?tx.linkedDocumentIds:[];
+      await dbUpdate('bankTransactions',txId,{
+        linkedDocumentIds:current.filter(id=>id!==docId)
+      });
+    }
+    showToast('Dokument fjernet ✓');
+  }catch(err){
+    console.error('[unlink] failed:',err);
+    showToast('Kunne ikke fjerne dokumentet: '+(err.message||'ukjent feil'));
+  }
+  renderBetalinger();
+}
+
+function triggerDocUpload(evt,txId,docType){
+  if(evt&&evt.stopPropagation)evt.stopPropagation();
+  const fileInput=document.getElementById('br-doc-file-'+txId);
+  if(!fileInput){showToast('Feil: file input mangler');return;}
+  fileInput.onchange=()=>handleDocumentUpload(txId,docType,fileInput);
+  fileInput.click();
+}
+
+async function viewDocumentInline(evt,docId){
+  if(evt&&evt.stopPropagation)evt.stopPropagation();
+  const url=await getDocumentDownloadUrl(docId);
+  if(!url){showToast('Kunne ikke åpne dokumentet');return;}
+  window.open(url,'_blank');
+}
+
+async function downloadDocumentInline(evt,docId){
+  if(evt&&evt.stopPropagation)evt.stopPropagation();
+  const url=await getDocumentDownloadUrl(docId);
+  if(!url){showToast('Kunne ikke laste ned dokumentet');return;}
+  const doc=getDocumentById(docId);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=(doc&&doc.fileName)||'dokument';
+  a.target='_blank';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function renderDocumentRow(doc,txId){
+  const typeLabels={
+    'purchase_invoice':'FAKTURA',
+    'receipt':'KVITTERING',
+    'other_supporting_document':'DOKUMENT',
+    'payment_settlement':'OPPGJØR',
+    'historical_supplier_document':'ARKIV'
+  };
+  const badge=typeLabels[doc.docType]||'DOKUMENT';
+  const fname=escapeHtml(doc.fileName||'(uten navn)');
+  return `<div class="br-doc-row">
+    <span class="br-doc-badge br-doc-badge-${doc.docType}">${badge}</span>
+    <span class="br-doc-filename">${fname}</span>
+    <button class="br-doc-action" onclick="viewDocumentInline(event,'${doc.id}')">Vis</button>
+    <button class="br-doc-action" onclick="downloadDocumentInline(event,'${doc.id}')">Last ned</button>
+    <button class="br-doc-remove" onclick="event.stopPropagation();unlinkDocumentFromBankTx('${doc.id}','${txId}')" title="Fjern">×</button>
+  </div>`;
+}
+
+function renderDocumentsSection(txId){
+  const docs=getDocumentsForBankTx(txId)||[];
+  const listHtml=docs.length===0
+    ?'<div class="br-docs-empty">Ingen dokumenter vedlagt ennå.</div>'
+    :`<div class="br-docs-list">${docs.map(d=>renderDocumentRow(d,txId)).join('')}</div>`;
+  return `<div class="br-docs-section">
+    <div class="br-exp-label" style="margin-bottom:6px">Vedlagte dokumenter</div>
+    ${listHtml}
+    <div class="br-docs-actions">
+      <button class="br-btn br-btn-secondary br-doc-upload-btn" onclick="triggerDocUpload(event,'${txId}','purchase_invoice')">+ Last opp faktura</button>
+      <button class="br-btn br-btn-secondary br-doc-upload-btn" onclick="triggerDocUpload(event,'${txId}','receipt')">+ Last opp kvittering</button>
+      <button class="br-btn br-btn-secondary br-doc-upload-btn" onclick="triggerDocUpload(event,'${txId}','other_supporting_document')">+ Last opp dokument</button>
+    </div>
+    <input type="file" id="br-doc-file-${txId}" accept="image/*,application/pdf" style="display:none">
+    <div id="br-doc-uploading-${txId}" class="br-docs-uploading" style="display:none">Laster opp — vent...</div>
+  </div>`;
 }
 
 // ─────────────────────────────────────────
