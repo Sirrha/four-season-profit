@@ -269,6 +269,7 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 .lev-doc-action{padding:3px 8px;background:rgba(0,0,0,.05);border:1px solid var(--border,rgba(0,0,0,.15));border-radius:3px;font-size:11px;cursor:pointer}
 .lev-doc-action:hover{background:rgba(0,0,0,.08)}
 .lev-inb-row{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:rgba(230,144,32,.04);border-radius:4px;margin-bottom:6px;font-size:12.5px}
+.lev-inb-row-other{background:rgba(120,120,120,.04);opacity:.9}
 .lev-inb-name{flex:1;font-weight:500}
 .lev-inb-meta{color:var(--muted,#a86f1f);font-size:11.5px;font-weight:600}
 .lev-pay-row{display:grid;grid-template-columns:1fr 1fr 2fr 1fr;gap:8px;padding:6px 4px;font-size:12px;border-bottom:1px solid rgba(0,0,0,.03)}
@@ -3528,7 +3529,11 @@ function renderBrExpandPanel(tx,status){
         </div>
       </div>`;
     }).join('');
+    // V2C.8A.1: matched rows also link to the supplier page (mirrors unmatched branch)
+    const _mLevId=typeof inferSupplierFromTx==='function'?inferSupplierFromTx(tx):null;
+    const _mLevBtn=_mLevId?`<button class="br-lev-link-btn" onclick="event.stopPropagation();openLeverandorPage('${_mLevId}')">Se leverandør →</button>`:'';
     return `<div class="br-expand" onclick="event.stopPropagation()">
+      ${_mLevBtn}
       <div style="font-size:11px;color:var(--muted,#777);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">Koblede fakturaer</div>
       ${cards||'<div style="color:var(--muted,#777);font-style:italic">Ingen koblinger funnet</div>'}
     </div>`;
@@ -4327,6 +4332,20 @@ function getInnboksDraftsForSupplier(levId){
   });
 }
 
+// V2C.8A.1: pending Innboks drafts NOT matched to this supplier via V2C.8A's
+// fuzzy match. Escape hatch for drafts with generic filenames like
+// "Faktura-4769.pdf" where the filename hint fails.
+function getUnmatchedInnboksDrafts(supplierId){
+  const matched=new Set((getInnboksDraftsForSupplier(supplierId)||[]).map(d=>d.id));
+  const all=dbAll('innboks')||[];
+  return all.filter(item=>{
+    const st=(item.status||'').toLowerCase();
+    if(st==='done'||st==='processed'||st==='archived'||st==='ferdig')return false;
+    if(matched.has(item.id))return false;
+    return true;
+  });
+}
+
 function getSupplierInvoiceStatus(invoice){
   if(!invoice||!invoice.linkedPurchaseId)return {status:'unknown',paid:0,remaining:Number(invoice&&invoice.totalInclVat)||0};
   const invTotal=Number(invoice.totalInclVat)||0;
@@ -4387,6 +4406,7 @@ function renderLeverandor(){
   const invoices=getInvoicesForSupplier(id);
   const documents=getDocumentsForSupplierPage(id);
   const innboksDrafts=getInnboksDraftsForSupplier(id);
+  const otherDrafts=getUnmatchedInnboksDrafts(id);
   const bankPayments=getBankPaymentsForSupplier(id);
   const unpaidTotal=computeSupplierUnpaidTotal(id);
   container.innerHTML=`
@@ -4398,6 +4418,7 @@ function renderLeverandor(){
     ${renderLeverandorInvoices(invoices)}
     ${renderLeverandorDocuments(documents)}
     ${renderLeverandorInnboks(innboksDrafts)}
+    ${renderLeverandorInnboksOther(otherDrafts)}
     ${renderLeverandorPayments(bankPayments)}`;
 }
 
@@ -4491,6 +4512,25 @@ function renderLeverandorInnboks(drafts){
   }).join('');
   return `<div class="lev-section">
     <div class="lev-section-title">Innboks-utkast (${drafts.length})</div>
+    ${rows}
+  </div>`;
+}
+
+// V2C.8A.1: secondary section listing pending Innboks drafts NOT auto-matched
+// to this supplier. Read-only browsing escape hatch. Primary section stays intact.
+function renderLeverandorInnboksOther(drafts){
+  if(drafts.length===0)return '';
+  const rows=drafts.map(d=>{
+    const fname=escapeHtml(d.filnavn||d.fileName||'(uten navn)');
+    const size=(d.storrelse||d.fileSize)?Math.round(Number(d.storrelse||d.fileSize)/1024)+' kB':'';
+    return `<div class="lev-inb-row lev-inb-row-other">
+      <span class="lev-inb-name">${fname}</span>
+      <span class="lev-inb-meta">${escapeHtml(d.status||'utkast')}${size?' · '+size:''}</span>
+    </div>`;
+  }).join('');
+  return `<div class="lev-section">
+    <div class="lev-section-title">Andre utkast i Innboks (${drafts.length})</div>
+    <div class="lev-empty-row" style="font-style:italic">Ikke automatisk koblet til leverandør. Bruk hvis riktig utkast mangler over.</div>
     ${rows}
   </div>`;
 }
