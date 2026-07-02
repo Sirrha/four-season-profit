@@ -275,6 +275,12 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 .lev-pay-row{display:grid;grid-template-columns:1fr 1fr 2fr 1fr;gap:8px;padding:6px 4px;font-size:12px;border-bottom:1px solid rgba(0,0,0,.03)}
 .br-lev-link-btn{padding:5px 10px;background:rgba(45,108,180,.08);border:1px solid rgba(45,108,180,.25);border-radius:4px;font-size:12px;color:#1f4f8a;cursor:pointer;margin-bottom:8px}
 .br-lev-link-btn:hover{background:rgba(45,108,180,.15)}
+/* V2C.8A.2 — Leverandørregister click semantics fix */
+.lev-reg-row{cursor:pointer;transition:background .12s ease}
+.lev-reg-row:hover{background:rgba(45,108,180,.04)}
+.lev-reg-actions{white-space:nowrap;margin-left:auto}
+.lev-reg-edit-btn{padding:4px 10px;background:rgba(0,0,0,.05);border:1px solid var(--border,rgba(0,0,0,.15));border-radius:4px;font-size:12px;cursor:pointer;color:var(--text,#333)}
+.lev-reg-edit-btn:hover{background:rgba(0,0,0,.10)}
 @media (max-width: 768px){
   .lev-inv-header{display:none}
   .lev-inv-row{grid-template-columns:1fr 1fr;padding:8px 4px}
@@ -4894,11 +4900,12 @@ function renderLeverandorer(){
       const aliasCount=(l.aliaser||[]).length;
       const pr=l.prisregel||'ask';
       const prBadge=pr==='inkl'?'<span style="background:#e8f5e0;color:#2e7d32;padding:2px 7px;border-radius:5px;font-size:10.5px;font-weight:600;margin-left:6px">inkl. MVA</span>':pr==='eks'?'<span style="background:#e3f2fd;color:#1565c0;padding:2px 7px;border-radius:5px;font-size:10.5px;font-weight:600;margin-left:6px">eks. MVA</span>':'<span style="background:#fff3e0;color:#e65100;padding:2px 7px;border-radius:5px;font-size:10.5px;font-weight:600;margin-left:6px">spør</span>';
-      html+=`<div class="li" onclick="openLeverandorModal('${l.id}')" style="cursor:pointer">
+      html+=`<div class="li lev-reg-row" onclick="openLeverandorPage('${l.id}')">
         <div class="lim">
           <div class="lit">${l.navn||'—'}${prBadge}</div>
           <div class="lis">${products.length} produkt${products.length===1?'':'er'} · ${purchases.length} innkjøp${aliasCount?` · ${aliasCount} alias${aliasCount===1?'':'er'}`:''}${l.fraMigrasjon?' · <span style="color:#e65100">må fullføres</span>':''}</div>
         </div>
+        <div class="lev-reg-actions"><button class="lev-reg-edit-btn" onclick="event.stopPropagation();openLeverandorModal('${l.id}')">✏ Rediger</button></div>
         <div style="color:var(--muted);font-size:18px">›</div>
       </div>`;
     }
