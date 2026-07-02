@@ -229,6 +229,11 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 .br-doc-action:hover{background:rgba(0,0,0,.08)}
 .br-doc-remove{padding:0 8px;background:transparent;border:none;color:#a83232;font-size:16px;cursor:pointer;line-height:1}
 .br-doc-remove:hover{color:#600}
+/* V2C.5.2a — Registrer faktura button + modal */
+.v2c5-2a-register-btn{padding:4px 10px;background:rgba(42,157,74,.10);border:1px solid rgba(42,157,74,.30);border-radius:4px;font-size:11.5px;cursor:pointer;color:#1e7a3a;font-weight:600}
+.v2c5-2a-register-btn:hover{background:rgba(42,157,74,.20)}
+.v2c5-2a-modal-card{max-width:520px}
+.v2c5-2a-hint{font-size:12.5px;color:var(--muted,#666);background:rgba(45,108,180,.05);padding:8px 10px;border-radius:6px;margin-bottom:10px;line-height:1.4}
 .br-docs-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .br-doc-upload-btn{font-size:12px;padding:6px 10px}
 .br-docs-uploading{padding:8px;text-align:center;color:var(--accent,#1f4f8a);font-size:12px;font-weight:600;background:rgba(45,108,180,.05);border-radius:4px;margin-top:6px}
@@ -981,6 +986,32 @@ select.fi:focus{background-color:#fff}
   <button class="btn btn-d btn-f" id="lev-del-btn" onclick="deleteLeverandorCurrent()" style="display:none;margin-top:10px">🗑️ Slett</button>
 </div></div>
 
+<!-- V2C.5.2a — Registrer faktura for avstemming (Workflow B) -->
+<div class="ov" id="v2c5-2a-modal">
+<div class="modal v2c5-2a-modal-card">
+  <div class="mh"></div>
+  <div class="mt">Registrer faktura for avstemming</div>
+  <div class="v2c5-2a-hint">Registrer faktura med minimum-felt for å koble bankbetaling til dokumentasjon. Full innkjøpsbehandling (produktlinjer, marginer) kan gjøres senere fra Innkjøp.</div>
+  <div class="fg"><label class="fl">Leverandør *</label><select class="fi" id="v2c5-2a-supplier"></select></div>
+  <div class="fr">
+    <div class="fg"><label class="fl">Faktura nr *</label><input class="fi" id="v2c5-2a-invnr" autocomplete="off"></div>
+    <div class="fg"><label class="fl">Beløp inkl. MVA *</label><input class="fi" id="v2c5-2a-total" type="number" step="0.01" min="0" inputmode="decimal" autocomplete="off"></div>
+  </div>
+  <div class="fr">
+    <div class="fg"><label class="fl">Fakturadato *</label><input class="fi" id="v2c5-2a-invdate" type="date"></div>
+    <div class="fg"><label class="fl">Forfallsdato</label><input class="fi" id="v2c5-2a-duedate" type="date"></div>
+  </div>
+  <div class="fr">
+    <div class="fg"><label class="fl">MVA</label><input class="fi" id="v2c5-2a-vat" type="number" step="0.01" min="0" inputmode="decimal" autocomplete="off"></div>
+    <div class="fg"><label class="fl">KID</label><input class="fi" id="v2c5-2a-kid" autocomplete="off"></div>
+  </div>
+  <div class="fg"><label class="fl">Notat</label><input class="fi" id="v2c5-2a-notes" placeholder="Valgfri" autocomplete="off"></div>
+  <div class="fr" style="margin-top:4px">
+    <button class="btn btn-g btn-f" onclick="closeInvoiceRegistrationModal()">Avbryt</button>
+    <button class="btn btn-p btn-f" onclick="submitInvoiceRegistration()">Registrer og bruk til avstemming</button>
+  </div>
+</div></div>
+
 <!-- Betaling -->
 <div class="ov" id="ov-betaling">
 <div class="modal">
@@ -1443,7 +1474,16 @@ function calcInvoiceReelStats(invoiceId){
 }
 function getInvoicePaymentStatus(invoiceId){
   const purchase=getPurchaseInvoiceById(invoiceId);
-  const total=purchase?calcPurchaseStats(purchase).buyInklTotal:0;
+  const lineTotal=purchase?calcPurchaseStats(purchase).buyInklTotal:0;
+  // V2C.5.2a: lineless reconciliation invoices (Workflow B) carry no product
+  // lines — their authoritative total is the expense mirror's totalInclVat.
+  // Fall back to it ONLY when the line-derived total is 0. Lined Workflow A
+  // invoices always have lineTotal>0, so their behaviour is unchanged.
+  let total=lineTotal;
+  if(!(lineTotal>0)){
+    const _mir=dbAll('expenses').find(e=>e.expenseKind==='purchase_invoice'&&e.linkedPurchaseId===invoiceId);
+    total=Number(_mir&&_mir.totalInclVat)||0;
+  }
   // Bankaxept V1: paid-at-delivery short-circuits — no bankTransactions linked, no forfall, no overdue possible.
   if(purchase?.betaltVedLevering===true){
     return{
@@ -4237,9 +4277,13 @@ function renderDocumentRow(doc,txId){
   };
   const badge=typeLabels[doc.docType]||'DOKUMENT';
   const fname=escapeHtml(doc.fileName||'(uten navn)');
+  // V2C.5.2a: offer manual invoice registration only for unregistered invoice docs.
+  const _canRegister=doc.docType==='purchase_invoice'&&!doc.linkedPurchaseId;
+  const _registerBtn=_canRegister?`<button class="v2c5-2a-register-btn" onclick="event.stopPropagation();openInvoiceRegistrationModal('${txId}','${doc.id}')">Registrer</button>`:'';
   return `<div class="br-doc-row">
     <span class="br-doc-badge br-doc-badge-${doc.docType}">${badge}</span>
     <span class="br-doc-filename">${fname}</span>
+    ${_registerBtn}
     <button class="br-doc-action" onclick="viewDocumentInline(event,'${doc.id}')">Vis</button>
     <button class="br-doc-action" onclick="downloadDocumentInline(event,'${doc.id}')">Last ned</button>
     <button class="br-doc-remove" onclick="event.stopPropagation();unlinkDocumentFromBankTx('${doc.id}','${txId}')" title="Fjern">×</button>
@@ -4262,6 +4306,109 @@ function renderDocumentsSection(txId){
     <input type="file" id="br-doc-file-${txId}" accept="image/*,application/pdf" style="display:none">
     <div id="br-doc-uploading-${txId}" class="br-docs-uploading" style="display:none">Laster opp — vent...</div>
   </div>`;
+}
+
+// ═════════════════════════════════════════
+// V2C.5.2a — Manual invoice registration (Workflow B, DESIGN-007)
+// Uploaded invoice PDF → minimum-field form → structured expense record
+// (processingLevel:'reconciliation') → appears in V2C.2 picker → V2C.3
+// allocation completes reconciliation. Lineless: total comes from user input,
+// NOT product lines. linkedPurchaseId = a generated uid ALWAYS (the expense
+// mirror is the D8 source of truth; WRITE_TO_PURCHASES only gates whether a
+// purchases-native doc is also written at that id).
+// ═════════════════════════════════════════
+let _v2c52aCtx=null;  // { txId, docId } for the active registration
+
+function openInvoiceRegistrationModal(txId,docId){
+  const doc=getDocumentById(docId);
+  if(!doc){showToast('Dokument ikke funnet');return;}
+  _v2c52aCtx={txId,docId};
+  const tx=dbFind('bankTransactions',txId);
+  const inferredId=tx&&typeof inferSupplierFromTx==='function'?inferSupplierFromTx(tx):null;
+  const sel=document.getElementById('v2c5-2a-supplier');
+  const suppliers=(dbAll('leverandorer')||[]).slice().sort((a,b)=>(a.navn||'').localeCompare(b.navn||'','nb'));
+  sel.innerHTML='<option value="">— velg leverandør —</option>'+suppliers.map(s=>`<option value="${s.id}" ${s.id===inferredId?'selected':''}>${escapeHtml(s.navn||'(uten navn)')}</option>`).join('');
+  document.getElementById('v2c5-2a-invnr').value='';
+  document.getElementById('v2c5-2a-invdate').value=today();
+  document.getElementById('v2c5-2a-duedate').value='';
+  document.getElementById('v2c5-2a-total').value='';   // DO NOT prefill with tx.belop (DESIGN-007)
+  document.getElementById('v2c5-2a-vat').value='';
+  document.getElementById('v2c5-2a-kid').value='';
+  document.getElementById('v2c5-2a-notes').value='';
+  openModal('v2c5-2a-modal');
+}
+
+function closeInvoiceRegistrationModal(){
+  closeModal('v2c5-2a-modal');
+  _v2c52aCtx=null;
+}
+
+async function submitInvoiceRegistration(){
+  if(!_v2c52aCtx){showToast('Ingen kontekst — lukk og prøv igjen');return;}
+  const {txId,docId}=_v2c52aCtx;
+  const leverandorId=document.getElementById('v2c5-2a-supplier').value;
+  const invoiceNumber=(document.getElementById('v2c5-2a-invnr').value||'').trim();
+  const invoiceDate=document.getElementById('v2c5-2a-invdate').value;
+  const dueDate=document.getElementById('v2c5-2a-duedate').value||null;
+  const totalInclVat=Number(document.getElementById('v2c5-2a-total').value);
+  const vatRaw=document.getElementById('v2c5-2a-vat').value;
+  const vat=vatRaw!==''?Number(vatRaw):null;
+  const kid=(document.getElementById('v2c5-2a-kid').value||'').trim()||null;
+  const notes=(document.getElementById('v2c5-2a-notes').value||'').trim();
+  if(!leverandorId){showToast('Velg leverandør');return;}
+  if(!invoiceNumber){showToast('Faktura nr er påkrevd');return;}
+  if(!invoiceDate){showToast('Fakturadato er påkrevd');return;}
+  if(!(totalInclVat>0)){showToast('Beløp må være positivt');return;}
+  const supplier=dbFind('leverandorer',leverandorId);
+  if(!supplier){showToast('Leverandør ikke funnet');return;}
+  const now=new Date().toISOString();
+  const opprettetAv=(currentUser&&currentUser.name)||'manual';
+  const newId=uid();
+  const vatAmount=vat!=null?vat:0;
+  const totalExVat=+(totalInclVat-vatAmount).toFixed(2);
+  const record={
+    expenseKind:'purchase_invoice',
+    supplierId:leverandorId,supplierName:supplier.navn||'',leverandorId:leverandorId,
+    invoiceNumber:invoiceNumber,invoiceDate:invoiceDate,dueDate:dueDate,
+    paidDate:null,paidTransactionId:null,paidDateSource:null,paidAmountMatched:null,
+    betaltVedLevering:false,betalingsmetode:null,
+    totalInclVat:totalInclVat,totalExVat:totalExVat,vatAmount:vatAmount,vat:vat,kid:kid,
+    vatStatus:'normal',currency:'NOK',
+    operationalStatus:'new',accountantStatus:'not_ready',
+    source:'v2c5.2a_manual_registration',createdVia:'bankavstemming_upload',
+    linkedBankTransactionId:txId,processingLevel:'reconciliation',
+    originalFiles:[],lines:[],linkedRecurringId:null,
+    categoryId:null,categoryLabel:null,subcategoryId:null,subcategoryLabel:null,
+    notes:notes||null,linkedPurchaseId:newId,
+    opprettet:now,opprettetAv:opprettetAv,createdAt:now,updatedAt:now,
+    reviewedAt:null,exportedAt:null
+  };
+  try{
+    // Path B: new WRITE_TO_PURCHASES-gated purchases-mirror write. Flag is false
+    // in production so this no-ops today; kept gated so the migration cutover
+    // plan stays honest (every purchases write goes through the flag).
+    if(WRITE_TO_PURCHASES){
+      await tenantCol('purchases').doc(newId).set({
+        id:newId,dato:invoiceDate,fakturanr:invoiceNumber,forfallsdato:dueDate,
+        leverandorId:leverandorId,lev:supplier.navn||'',lines:[],
+        betaltVedLevering:false,betalingsmetode:null,notes:notes||null,
+        processingLevel:'reconciliation',opprettet:now
+      });
+    }
+    // Expense mirror = D8 source of truth. Deterministic mirror-<id> doc,
+    // matching shadowCreateExpense convention. linkedPurchaseId=newId ALWAYS.
+    const expId='mirror-'+newId;
+    await tenantCol('expenses').doc(expId).set({...record,id:expId});
+    // Link the uploaded document to the new invoice (V2C.4 helper).
+    await linkDocumentToInvoice(docId,newId);
+    showToast('Faktura registrert ✓ — velg den i listen for å allokere');
+    closeInvoiceRegistrationModal();
+    renderBetalinger();
+  }catch(err){
+    console.error('[v2c5.2a] Registration failed:',err);
+    showToast('Kunne ikke registrere: '+((err&&err.message)||'ukjent feil'));
+    // v1: no auto-rollback. Rare orphan (purchase write ok, expense fails) → V2E cleanup.
+  }
 }
 
 // ═════════════════════════════════════════
