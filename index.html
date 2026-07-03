@@ -7873,7 +7873,7 @@ async function runAIScan(){
 
   var reqBody = JSON.stringify({
     model: 'claude-sonnet-4-6',
-    max_tokens: 16000,
+    max_tokens: 64000,  // SCANNER-MAXTOKENS-FIX: large invoices (BAZA 50808 ~150 lines hit 16K ceiling)
     messages: [{role:'user', content:contentItems}]
   });
 
@@ -7947,6 +7947,14 @@ async function runAIScan(){
       text = data.content.find(function(c){return c.type==='text';}).text || '';
     }
     
+    // SCANNER-MAXTOKENS-FIX: detect truncation BEFORE parsing.
+    // stop_reason 'max_tokens' means Anthropic cut the response at the token
+    // ceiling — the JSON is guaranteed incomplete. Fail clearly (thrown outside
+    // the parse try below, so it reaches the outer catch clean, not as "Parse-feil").
+    if(data.stop_reason === 'max_tokens'){
+      throw new Error('Fakturaen er for stor — AI-svaret ble avkuttet. Prøv å dele fakturaen i to skann, eller kontakt support.');
+    }
+
     var parsed;
     try {
       // Find first { and last } - ignore everything else
