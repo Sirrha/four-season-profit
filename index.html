@@ -39,6 +39,9 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 /* ── HEADER ── */
 .hdr{background:var(--primary);color:#fff;padding:14px 18px 12px;position:sticky;top:0;z-index:100;display:flex;align-items:center;justify-content:space-between}
 .hdr-logo{font-weight:700;font-size:17px}.hdr-logo span{color:var(--accent)}
+/* UX-HEADER-HOME-LINK — clickable header logo to home */
+.header-home-link{cursor:pointer;transition:opacity .12s ease}
+.header-home-link:hover{opacity:.75}
 .hdr-sub{font-size:12px;color:rgba(255,255,255,.7);margin-top:3px;font-weight:500}
 .hdr-right{display:flex;gap:8px;align-items:center}
 .hdr-btn{background:rgba(255,255,255,.13);border:none;color:#fff;padding:7px 12px;border-radius:7px;font-family:'Sora',sans-serif;font-size:12px;font-weight:600;cursor:pointer}
@@ -624,7 +627,7 @@ select.fi:focus{background-color:#fff}
 
 <header class="hdr">
   <div>
-    <div class="hdr-logo">Four <span>Season</span> AS</div>
+    <div class="hdr-logo header-home-link" onclick="goTo('oversikt')" title="Gå til hovedsiden">Four <span>Season</span> AS</div>
     <div class="hdr-sub" id="pgTitle">
       <span class="sync-dot" id="sync-dot"></span><span id="sync-text">Oversikt</span>
     </div>
