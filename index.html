@@ -231,6 +231,9 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 .br-doc-action{padding:4px 10px;background:rgba(0,0,0,.05);border:1px solid var(--border,rgba(0,0,0,.15));border-radius:4px;font-size:11.5px;cursor:pointer;color:var(--text,#333)}
 .br-doc-action:hover{background:rgba(0,0,0,.08)}
 .br-doc-remove{padding:0 8px;background:transparent;border:none;color:#a83232;font-size:16px;cursor:pointer;line-height:1}
+/* V2C.5.2c.1 — document re-type control */
+.br-doc-retype{font-size:11px;padding:2px 6px;border:1px solid var(--border,rgba(0,0,0,.15));border-radius:4px;background:#fff;cursor:pointer;color:var(--text,#333);max-width:120px}
+.br-doc-retype:disabled{opacity:.5;cursor:not-allowed}
 .br-doc-remove:hover{color:#600}
 /* V2C.5.2a — Registrer faktura button + modal */
 .v2c5-2a-register-btn{padding:4px 10px;background:rgba(42,157,74,.10);border:1px solid rgba(42,157,74,.30);border-radius:4px;font-size:11.5px;cursor:pointer;color:#1e7a3a;font-weight:600}
@@ -4270,6 +4273,28 @@ async function downloadDocumentInline(evt,docId){
   document.body.removeChild(a);
 }
 
+// V2C.5.2c.1: re-type a mis-filed document. Guarded — if an invoice
+// was already registered from this doc (linkedPurchaseId set), re-typing
+// would strand that expense/purchase record, so block it. Storage-safe:
+// the file path is docId-based, docType lives only in the record (+
+// customMetadata), so no file move/orphan occurs.
+async function changeDocType(docId,newType){
+  const doc=getDocumentById(docId);
+  if(!doc){showToast('Dokument ikke funnet');return;}
+  const valid=['purchase_invoice','receipt','payment_settlement','historical_supplier_document','other_supporting_document'];
+  if(!valid.includes(newType)){showToast('Ugyldig dokumenttype');return;}
+  if(doc.docType===newType)return; // no-op
+  if(doc.linkedPurchaseId){showToast('Kan ikke endre type: en faktura er allerede registrert fra dette dokumentet. Fjern koblingen først.');return;}
+  try{
+    await dbUpdate('documents',docId,{docType:newType});
+    showToast('Dokumenttype endret');
+    renderBetalinger();
+  }catch(err){
+    console.error('[v2c5.2c.1] changeDocType failed:',err);
+    showToast('Kunne ikke endre type: '+((err&&err.message)||'ukjent feil'));
+  }
+}
+
 function renderDocumentRow(doc,txId){
   const typeLabels={
     'purchase_invoice':'FAKTURA',
@@ -4283,9 +4308,13 @@ function renderDocumentRow(doc,txId){
   // V2C.5.2a: offer manual invoice registration only for unregistered invoice docs.
   const _canRegister=doc.docType==='purchase_invoice'&&!doc.linkedPurchaseId;
   const _registerBtn=_canRegister?`<button class="v2c5-2a-register-btn" onclick="event.stopPropagation();openInvoiceRegistrationModal('${txId}','${doc.id}')">Registrer</button>`:'';
+  // V2C.5.2c.1: re-type control. Disabled when linkedPurchaseId set (guard made visible).
+  const _typeOpts=[['purchase_invoice','Faktura'],['receipt','Kvittering'],['payment_settlement','Oppgjør'],['historical_supplier_document','Arkiv'],['other_supporting_document','Dokument']];
+  const _typeSelect=`<select class="br-doc-retype" ${doc.linkedPurchaseId?'disabled title="Faktura allerede registrert"':''} onchange="event.stopPropagation();changeDocType('${doc.id}',this.value)">${_typeOpts.map(([v,l])=>`<option value="${v}"${doc.docType===v?' selected':''}>${l}</option>`).join('')}</select>`;
   return `<div class="br-doc-row">
     <span class="br-doc-badge br-doc-badge-${doc.docType}">${badge}</span>
     <span class="br-doc-filename">${fname}</span>
+    ${_typeSelect}
     ${_registerBtn}
     <button class="br-doc-action" onclick="viewDocumentInline(event,'${doc.id}')">Vis</button>
     <button class="br-doc-action" onclick="downloadDocumentInline(event,'${doc.id}')">Last ned</button>
