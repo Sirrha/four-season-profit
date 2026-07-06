@@ -237,6 +237,8 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 .br-doc-remove:hover{color:#600}
 /* V2C.5.2a — Registrer faktura button + modal */
 .v2c5-2a-register-btn{padding:4px 10px;background:rgba(42,157,74,.10);border:1px solid rgba(42,157,74,.30);border-radius:4px;font-size:11.5px;cursor:pointer;color:#1e7a3a;font-weight:600}
+/* V2C.5.2c.2 — receipt -> direct-expense button (blue, distinct from invoice green) */
+.v2c5-2c2-receipt-btn{padding:4px 10px;background:rgba(45,108,180,.10);border:1px solid rgba(45,108,180,.30);border-radius:4px;font-size:11.5px;cursor:pointer;color:#1f4f8a;font-weight:600}
 .v2c5-2a-register-btn:hover{background:rgba(42,157,74,.20)}
 .v2c5-2a-modal-card{max-width:520px}
 .v2c5-2a-hint{font-size:12.5px;color:var(--muted,#666);background:rgba(45,108,180,.05);padding:8px 10px;border-radius:6px;margin-bottom:10px;line-height:1.4}
@@ -1018,6 +1020,28 @@ select.fi:focus{background-color:#fff}
   </div>
 </div></div>
 
+<!-- V2C.5.2c.2 — receipt -> direct-expense registration -->
+<div class="ov" id="v2c5-2c2-modal">
+<div class="modal v2c5-2a-modal-card">
+  <div class="mh"></div>
+  <div class="mt">Registrer kvittering som utgift</div>
+  <div class="v2c5-2a-hint">Et kortkjøp/kvittering er en direkte utgift — ikke en leverandørfaktura. Ingen leverandørgjeld, ingen fakturaallokering. Beløpet er hentet fra banktransaksjonen (kortet ble belastet nøyaktig kvitteringsbeløpet).</div>
+  <div class="fg"><label class="fl">Beskrivelse *</label><input class="fi" id="v2c5-2c2-merchant" autocomplete="off" placeholder="F.eks. Circle K"></div>
+  <div class="fr">
+    <div class="fg"><label class="fl">Dato *</label><input class="fi" id="v2c5-2c2-date" type="date"></div>
+    <div class="fg"><label class="fl">Beløp inkl. MVA *</label><input class="fi" id="v2c5-2c2-total" type="number" step="0.01" min="0" inputmode="decimal" autocomplete="off"></div>
+  </div>
+  <div class="fr">
+    <div class="fg"><label class="fl">Kategori *</label><select class="fi" id="v2c5-2c2-category"></select></div>
+    <div class="fg"><label class="fl">MVA</label><input class="fi" id="v2c5-2c2-vat" type="number" step="0.01" min="0" inputmode="decimal" autocomplete="off" placeholder="Valgfri"></div>
+  </div>
+  <div class="fg"><label class="fl">Notat</label><input class="fi" id="v2c5-2c2-notes" placeholder="Valgfri" autocomplete="off"></div>
+  <div class="fr" style="margin-top:4px">
+    <button class="btn btn-g btn-f" onclick="closeReceiptExpenseModal()">Avbryt</button>
+    <button class="btn btn-p btn-f" onclick="submitReceiptExpense()">Registrer utgift</button>
+  </div>
+</div></div>
+
 <!-- Betaling -->
 <div class="ov" id="ov-betaling">
 <div class="modal">
@@ -1620,6 +1644,7 @@ const DEFAULT_EXPENSE_TAXONOMY={
     {id:'verktoy',label:'Verktøy',subcategories:[]}
   ],
   misc:[
+    {id:'drivstoff',label:'Drivstoff',subcategories:[]},
     {id:'annet',label:'Annet',subcategories:[]}
   ]
 };
@@ -3419,6 +3444,10 @@ function getTxDisplayDescription(tx){
 function getBankTxStatus(tx){
   const hasLinks=Array.isArray(tx.linkedeFakturaer)&&tx.linkedeFakturaer.length>0;
   if(hasLinks)return 'matched';
+  // V2C.5.2c.2: a documented direct expense (receipt) completes reconciliation —
+  // deliberate divergence from bare credit/refund/review allocations, which stay
+  // unmatched/review (DESIGN-010 D4). A card purchase IS the tx; documenting it settles it.
+  if(tx.documentedExpenseId)return 'matched';
   if(tx.direction==='in'||tx.direction==='unknown')return 'review';
   return 'unmatched';
 }
@@ -4295,6 +4324,68 @@ async function changeDocType(docId,newType){
   }
 }
 
+// V2C.5.2c.2: receipt -> direct-expense registration. Expenses-native (Path A),
+// no supplier debt (linkedPurchaseId stays null), no invoice allocation. Marks the
+// bank tx documented via documentedExpenseId (see getBankTxStatus branch).
+let _v2c52c2Ctx=null; // {txId, docId}
+function openReceiptExpenseModal(txId,docId){
+  const tx=dbFind('bankTransactions',txId);
+  const doc=getDocumentById(docId);
+  if(!tx||!doc){showToast('Fant ikke transaksjon eller dokument');return;}
+  _v2c52c2Ctx={txId,docId};
+  // Category options from the constant (not the seeded collection) so Drivstoff is
+  // available immediately without a taxonomy migration for existing tenants.
+  const cats=DEFAULT_EXPENSE_TAXONOMY['misc']||[];
+  const sel=document.getElementById('v2c5-2c2-category');
+  sel.innerHTML=cats.map(c=>`<option value="${c.id}" data-label="${escapeHtml(c.label)}"${c.id==='drivstoff'?' selected':''}>${escapeHtml(c.label)}</option>`).join('');
+  document.getElementById('v2c5-2c2-merchant').value=(tx.beskrivelse||tx.motpart||'').trim();
+  document.getElementById('v2c5-2c2-date').value=tx.dato||today();
+  document.getElementById('v2c5-2c2-total').value=(Math.abs(Number(tx.belop)||0)).toFixed(2); // D5: receipt amount == tx amount
+  document.getElementById('v2c5-2c2-vat').value='';
+  document.getElementById('v2c5-2c2-notes').value='';
+  openModal('v2c5-2c2-modal');
+}
+function closeReceiptExpenseModal(){_v2c52c2Ctx=null;closeModal('v2c5-2c2-modal');}
+
+async function submitReceiptExpense(){
+  if(!_v2c52c2Ctx){showToast('Ingen kontekst');return;}
+  const {txId,docId}=_v2c52c2Ctx;
+  const merchant=document.getElementById('v2c5-2c2-merchant').value.trim();
+  const dato=document.getElementById('v2c5-2c2-date').value;
+  const total=parseFloat(document.getElementById('v2c5-2c2-total').value)||0;
+  const vatRaw=document.getElementById('v2c5-2c2-vat').value;
+  const vatAmount=vatRaw===''?0:(parseFloat(vatRaw)||0);
+  const catSel=document.getElementById('v2c5-2c2-category');
+  const catOpt=catSel.options[catSel.selectedIndex];
+  const categoryId=catSel.value||null;
+  const categoryLabel=categoryId?((catOpt&&catOpt.dataset.label)||null):null;
+  if(!merchant){showToast('Mangler beskrivelse','err');return;}
+  if(!dato){showToast('Mangler dato','err');return;}
+  if(!(total>0)){showToast('Beløp må være > 0','err');return;}
+  // Path A reuse: build base shape via the shared builder, then augment with receipt links.
+  const base=buildExpenseDocFromOperatingForm({
+    expenseKind:'misc', supplierName:merchant, invoiceDate:dato,
+    totalInclVat:total, totalExVat:Math.max(0,total-vatAmount), vatAmount,
+    categoryId, categoryLabel, currency:'NOK',
+    paidDate:dato, paidTransactionId:txId, paidDateSource:'bank_match', paidAmountMatched:total,
+    notes:document.getElementById('v2c5-2c2-notes').value.trim()||null, originalFiles:[]
+  });
+  const now=new Date().toISOString();
+  const record={...base, source:'v2c5.2c.2_receipt', processingLevel:'receipt',
+    linkedBankTransactionId:txId, linkedDocumentId:docId};
+  try{
+    const expId=await dbAdd('expenses',record);
+    await dbUpdate('documents',docId,{linkedExpenseId:expId});
+    await dbUpdate('bankTransactions',txId,{documentedExpenseId:expId,documentedAt:now});
+    showToast('Utgift registrert ✓ — transaksjon dokumentert');
+    closeReceiptExpenseModal();
+    renderBetalinger();
+  }catch(err){
+    console.error('[v2c5.2c.2] submitReceiptExpense failed:',err);
+    showToast('Kunne ikke registrere utgift: '+((err&&err.message)||'ukjent feil'),'err');
+  }
+}
+
 function renderDocumentRow(doc,txId){
   const typeLabels={
     'purchase_invoice':'FAKTURA',
@@ -4311,11 +4402,16 @@ function renderDocumentRow(doc,txId){
   // V2C.5.2c.1: re-type control. Disabled when linkedPurchaseId set (guard made visible).
   const _typeOpts=[['purchase_invoice','Faktura'],['receipt','Kvittering'],['payment_settlement','Oppgjør'],['historical_supplier_document','Arkiv'],['other_supporting_document','Dokument']];
   const _typeSelect=`<select class="br-doc-retype" ${doc.linkedPurchaseId?'disabled title="Faktura allerede registrert"':''} onchange="event.stopPropagation();changeDocType('${doc.id}',this.value)">${_typeOpts.map(([v,l])=>`<option value="${v}"${doc.docType===v?' selected':''}>${l}</option>`).join('')}</select>`;
+  // V2C.5.2c.2: receipt -> direct-expense registration. Shown for receipt docs not yet
+  // registered as an expense. Invoice "Registrer" stays hidden (needs purchase_invoice).
+  const _canReceipt=doc.docType==='receipt'&&!doc.linkedExpenseId;
+  const _receiptBtn=_canReceipt?`<button class="v2c5-2c2-receipt-btn" onclick="event.stopPropagation();openReceiptExpenseModal('${txId}','${doc.id}')">Registrer som utgift</button>`:'';
   return `<div class="br-doc-row">
     <span class="br-doc-badge br-doc-badge-${doc.docType}">${badge}</span>
     <span class="br-doc-filename">${fname}</span>
     ${_typeSelect}
     ${_registerBtn}
+    ${_receiptBtn}
     <button class="br-doc-action" onclick="viewDocumentInline(event,'${doc.id}')">Vis</button>
     <button class="br-doc-action" onclick="downloadDocumentInline(event,'${doc.id}')">Last ned</button>
     <button class="br-doc-remove" onclick="event.stopPropagation();unlinkDocumentFromBankTx('${doc.id}','${txId}')" title="Fjern">×</button>
