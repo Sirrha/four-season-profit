@@ -272,6 +272,13 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 .lev-badge-unpaid{background:rgba(200,50,50,.12);color:#a83232}
 .lev-badge-unknown{background:rgba(120,120,120,.15);color:#555}
 .lev-doc-row{display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(0,0,0,.02);border-radius:4px;margin-bottom:6px;font-size:12.5px}
+/* V2C.5.2c.2a — direct-expenses section + receipt-modal merchant picker */
+.lev-de-row{display:grid;grid-template-columns:auto 1fr auto auto auto;gap:10px;align-items:center;padding:7px 4px;font-size:12.5px;border-bottom:1px solid rgba(0,0,0,.03)}
+.lev-de-desc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lev-de-cat{color:var(--muted,#777);font-size:11.5px}
+.lev-de-total{font-weight:600;white-space:nowrap}
+.v2c5-2c2-lev-hint{font-size:11px;color:var(--muted,#777);margin-top:4px;line-height:1.4}
+@media (max-width:768px){.lev-de-row{grid-template-columns:1fr auto}.lev-de-cat,.lev-de-docs{display:none}}
 .lev-doc-badge{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap}
 .lev-doc-badge-purchase_invoice{background:rgba(42,157,74,.15);color:#1e7a3a}
 .lev-doc-badge-receipt{background:rgba(230,144,32,.15);color:#a86f1f}
@@ -1027,6 +1034,7 @@ select.fi:focus{background-color:#fff}
   <div class="mt">Registrer kvittering som utgift</div>
   <div class="v2c5-2a-hint">Et kortkjøp/kvittering er en direkte utgift — ikke en leverandørfaktura. Ingen leverandørgjeld, ingen fakturaallokering. Beløpet er hentet fra banktransaksjonen (kortet ble belastet nøyaktig kvitteringsbeløpet).</div>
   <div class="fg"><label class="fl">Beskrivelse *</label><input class="fi" id="v2c5-2c2-merchant" autocomplete="off" placeholder="F.eks. Circle K"></div>
+  <div class="fg"><label class="fl">Forhandler / leverandør</label><select class="fi" id="v2c5-2c2-lev" onchange="onReceiptLevChange()"></select><div class="v2c5-2c2-lev-hint">Koble til en gjenbrukbar forhandler for rapportering («hvor mye brukte vi hos Circle K?»). Velg «+ Opprett ny forhandler» for et nytt kortkjøpssted.</div></div>
   <div class="fr">
     <div class="fg"><label class="fl">Dato *</label><input class="fi" id="v2c5-2c2-date" type="date"></div>
     <div class="fg"><label class="fl">Beløp inkl. MVA *</label><input class="fi" id="v2c5-2c2-total" type="number" step="0.01" min="0" inputmode="decimal" autocomplete="off"></div>
@@ -4339,6 +4347,9 @@ function openReceiptExpenseModal(txId,docId){
   const sel=document.getElementById('v2c5-2c2-category');
   sel.innerHTML=cats.map(c=>`<option value="${c.id}" data-label="${escapeHtml(c.label)}"${c.id==='drivstoff'?' selected':''}>${escapeHtml(c.label)}</option>`).join('');
   document.getElementById('v2c5-2c2-merchant').value=(tx.beskrivelse||tx.motpart||'').trim();
+  // V2C.5.2c.2a: merchant/leverandor picker, preselected via name-inference from the tx.
+  _receiptLevPrev=(typeof inferSupplierFromTx==='function'?inferSupplierFromTx(tx):null)||'';
+  _populateReceiptLevPicker(_receiptLevPrev);
   document.getElementById('v2c5-2c2-date').value=tx.dato||today();
   document.getElementById('v2c5-2c2-total').value=(Math.abs(Number(tx.belop)||0)).toFixed(2); // D5: receipt amount == tx amount
   document.getElementById('v2c5-2c2-vat').value='';
@@ -4346,6 +4357,58 @@ function openReceiptExpenseModal(txId,docId){
   openModal('v2c5-2c2-modal');
 }
 function closeReceiptExpenseModal(){_v2c52c2Ctx=null;closeModal('v2c5-2c2-modal');}
+
+// V2C.5.2c.2a: merchant/leverandor picker for the receipt modal.
+let _receiptLevPrev=''; // last valid selection, so cancelling "+ Opprett ny" reverts cleanly
+function _populateReceiptLevPicker(selectedId){
+  const sel=document.getElementById('v2c5-2c2-lev');
+  if(!sel)return;
+  const levs=dbAll('leverandorer').slice().sort((a,b)=>(a.navn||'').localeCompare(b.navn||'','no'));
+  const opts=['<option value="">— Ingen (bruk kun beskrivelse) —</option>']
+    .concat(levs.map(l=>`<option value="${l.id}"${l.id===selectedId?' selected':''}>${escapeHtml(l.navn||'(uten navn)')}${levIsMerchant(l)?' · forhandler':''}</option>`))
+    .concat(['<option value="__new__">+ Opprett ny forhandler…</option>']);
+  sel.innerHTML=opts.join('');
+  sel.value=selectedId||'';
+}
+function onReceiptLevChange(){
+  const sel=document.getElementById('v2c5-2c2-lev');
+  if(!sel)return;
+  if(sel.value!=='__new__'){
+    _receiptLevPrev=sel.value;
+    // Apply the merchant's default category if it has one.
+    const lev=sel.value?dbFind('leverandorer',sel.value):null;
+    if(lev&&lev.defaultCategoryId){
+      const cat=document.getElementById('v2c5-2c2-category');
+      if(cat&&[...cat.options].some(o=>o.value===lev.defaultCategoryId))cat.value=lev.defaultCategoryId;
+    }
+    return;
+  }
+  // "+ Opprett ny forhandler…" — minimal inline create (saveLeverandor is DOM-coupled, so not reused).
+  const suggested=(document.getElementById('v2c5-2c2-merchant').value||'').trim();
+  const navn=(prompt('Navn på ny forhandler:',suggested)||'').trim();
+  if(!navn){sel.value=_receiptLevPrev;return;}
+  const catSel=document.getElementById('v2c5-2c2-category');
+  const defCat=catSel?catSel.value:'drivstoff';
+  createMerchantInline(navn,defCat).then(id=>{
+    _receiptLevPrev=id;
+    _populateReceiptLevPicker(id);
+  }).catch(err=>{
+    console.error('[v2c5.2c.2a] createMerchantInline failed:',err);
+    showToast('Kunne ikke opprette forhandler: '+((err&&err.message)||'ukjent feil'),'err');
+    sel.value=_receiptLevPrev;
+  });
+}
+// Minimal merchant create: isMerchant true, isSupplier false, no debt (DESIGN-012). Returns new id.
+async function createMerchantInline(navn,defaultCategoryId){
+  const now=new Date().toISOString();
+  const id=await dbAdd('leverandorer',{
+    navn, aliaser:[], orgNummer:'', kontoNummer:'', kontaktperson:'', telefon:'', epost:'', notat:'',
+    isMerchant:true, isSupplier:false, createsDebtByDefault:false, defaultCategoryId:defaultCategoryId||null,
+    createdAt:now, updatedAt:now, fraMigrasjon:false
+  });
+  showToast('Forhandler «'+navn+'» opprettet');
+  return id;
+}
 
 async function submitReceiptExpense(){
   if(!_v2c52c2Ctx){showToast('Ingen kontekst');return;}
@@ -4359,6 +4422,8 @@ async function submitReceiptExpense(){
   const catOpt=catSel.options[catSel.selectedIndex];
   const categoryId=catSel.value||null;
   const categoryLabel=categoryId?((catOpt&&catOpt.dataset.label)||null):null;
+  const levRaw=(document.getElementById('v2c5-2c2-lev')||{}).value||'';
+  const leverandorId=(levRaw&&levRaw!=='__new__')?levRaw:null; // V2C.5.2c.2a: reusable company identity
   if(!merchant){showToast('Mangler beskrivelse','err');return;}
   if(!dato){showToast('Mangler dato','err');return;}
   if(!(total>0)){showToast('Beløp må være > 0','err');return;}
@@ -4372,7 +4437,7 @@ async function submitReceiptExpense(){
   });
   const now=new Date().toISOString();
   const record={...base, source:'v2c5.2c.2_receipt', processingLevel:'receipt',
-    linkedBankTransactionId:txId, linkedDocumentId:docId};
+    leverandorId, linkedBankTransactionId:txId, linkedDocumentId:docId};
   try{
     const expId=await dbAdd('expenses',record);
     await dbUpdate('documents',docId,{linkedExpenseId:expId});
@@ -4546,6 +4611,21 @@ async function submitInvoiceRegistration(){
 // for fallback name matching on legacy data with empty leverandorId.
 // ═════════════════════════════════════════
 
+// V2C.5.2c.2a — canonical leverandor role readers (DESIGN-012 MISSING-FLAG RULE).
+// A record with NO flags reads as an old-style debt-bearing supplier. Never read
+// the raw fields directly — always go through these so the defaults stay in one place.
+function levIsSupplier(lev){ return lev && lev.isSupplier !== false; }        // missing/true → true
+function levIsMerchant(lev){ return !!(lev && lev.isMerchant === true); }      // missing/false → false
+function levCreatesDebt(lev){ return !(lev && lev.createsDebtByDefault === false); } // missing/true → true
+
+// V2C.5.2c.2a — direct expenses (receipts) linked to a company. Discriminator:
+// processingLevel==='receipt' (set only by submitReceiptExpense) + leverandorId match.
+// Empty-safe: a merchant with no receipts returns [].
+function getDirectExpensesForSupplier(levId){
+  if(!levId)return [];
+  return (dbAll('expenses')||[]).filter(e=>e.leverandorId===levId&&e.processingLevel==='receipt');
+}
+
 function getInvoicesForSupplier(levId){
   const supplier=dbFind('leverandorer',levId);
   if(!supplier)return [];
@@ -4685,6 +4765,7 @@ function renderLeverandor(){
   const supplier=dbFind('leverandorer',id);
   if(!supplier){container.innerHTML='<div class="lev-empty-row">Leverandør ikke funnet.</div>';return;}
   const invoices=getInvoicesForSupplier(id);
+  const directExpenses=getDirectExpensesForSupplier(id);
   const documents=getDocumentsForSupplierPage(id);
   const innboksDrafts=getInnboksDraftsForSupplier(id);
   const otherDrafts=getUnmatchedInnboksDrafts(id);
@@ -4697,6 +4778,7 @@ function renderLeverandor(){
     ${renderLeverandorHeader(supplier)}
     ${renderLeverandorBalance(unpaidTotal)}
     ${renderLeverandorInvoices(invoices)}
+    ${renderLeverandorDirectExpenses(directExpenses)}
     ${renderLeverandorDocuments(documents)}
     ${renderLeverandorInnboks(innboksDrafts)}
     ${renderLeverandorInnboksOther(otherDrafts)}
@@ -4745,6 +4827,32 @@ function renderLeverandorInvoices(invoices){
     <div class="lev-inv-header">
       <div>Nr</div><div>Dato</div><div>Forfall</div><div>Total</div><div>Betalt</div><div>Rest</div><div>Status</div>
     </div>
+    ${rows}
+  </div>`;
+}
+
+// V2C.5.2c.2a: direct expenses (receipts) linked to this company — reportable spend.
+function renderLeverandorDirectExpenses(expenses){
+  if(!expenses||expenses.length===0){
+    return `<div class="lev-section">
+      <div class="lev-section-title">Direkte utgifter (0)</div>
+      <div class="lev-empty-row">Ingen direkte utgifter registrert for denne forhandleren.</div>
+    </div>`;
+  }
+  const sorted=expenses.slice().sort((a,b)=>(b.invoiceDate||'').localeCompare(a.invoiceDate||''));
+  const total=sorted.reduce((a,e)=>a+(Number(e.totalInclVat)||0),0);
+  const rows=sorted.map(e=>{
+    const docBtns=e.linkedDocumentId?`<button class="lev-doc-action" onclick="viewDocumentInline(event,'${e.linkedDocumentId}')">Vis</button><button class="lev-doc-action" onclick="downloadDocumentInline(event,'${e.linkedDocumentId}')">Last ned</button>`:'';
+    return `<div class="lev-de-row">
+      <span class="lev-de-date">${escapeHtml(fmtDate(e.invoiceDate||''))}</span>
+      <span class="lev-de-desc" title="${escapeHtml(e.supplierName||'')}">${escapeHtml(e.supplierName||'(uten beskrivelse)')}</span>
+      <span class="lev-de-cat">${escapeHtml(e.categoryLabel||'—')}</span>
+      <span class="lev-de-total">${fmtNOK(Number(e.totalInclVat)||0)}</span>
+      <span class="lev-de-docs">${docBtns}</span>
+    </div>`;
+  }).join('');
+  return `<div class="lev-section">
+    <div class="lev-section-title">Direkte utgifter (${sorted.length}) · ${fmtNOK(total)}</div>
     ${rows}
   </div>`;
 }
