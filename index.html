@@ -3662,6 +3662,7 @@ function renderBrExpandPanel(tx,status){
       ${_mLevBtn}
       <div style="font-size:11px;color:var(--muted,#777);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">Koblede fakturaer</div>
       ${cards||'<div style="color:var(--muted,#777);font-style:italic">Ingen koblinger funnet</div>'}
+      ${renderDocumentsSection(tx.id)}
     </div>`;
   }
   // Unmatched / review: show link UI with suggestions
