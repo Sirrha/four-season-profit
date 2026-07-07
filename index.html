@@ -4437,9 +4437,12 @@ function onReceiptLevChange(){
 }
 // Minimal merchant create: isMerchant true, isSupplier false, no debt (DESIGN-012). Returns new id.
 async function createMerchantInline(navn,defaultCategoryId){
+  // V2C.5.2c.2a polish: capture optional orgNr at creation (Norway dedup key). Lives in the
+  // shared helper so both callers (receipt + paid-invoice modals) get it with no signature change.
+  const orgNummer=(prompt('Org.nr (valgfritt):','')||'').trim();
   const now=new Date().toISOString();
   const id=await dbAdd('leverandorer',{
-    navn, aliaser:[], orgNummer:'', kontoNummer:'', kontaktperson:'', telefon:'', epost:'', notat:'',
+    navn, aliaser:[], orgNummer, kontoNummer:'', kontaktperson:'', telefon:'', epost:'', notat:'',
     isMerchant:true, isSupplier:false, createsDebtByDefault:false, defaultCategoryId:defaultCategoryId||null,
     createdAt:now, updatedAt:now, fraMigrasjon:false
   });
@@ -4955,6 +4958,7 @@ function renderLeverandor(){
   container.innerHTML=`
     <div class="lev-header-bar">
       <button class="lev-back-btn" onclick="backToBankavstemming()">← Tilbake til Bankavstemming</button>
+      <button class="lev-reg-edit-btn" onclick="openLeverandorModal('${id}')">✏ Rediger</button>
     </div>
     ${renderLeverandorHeader(supplier)}
     ${renderLeverandorBalance(unpaidTotal)}
@@ -4962,7 +4966,7 @@ function renderLeverandor(){
     ${renderLeverandorDirectExpenses(directExpenses)}
     ${renderLeverandorDocuments(documents)}
     ${renderLeverandorInnboks(innboksDrafts)}
-    ${renderLeverandorInnboksOther(otherDrafts)}
+    ${(innboksDrafts.length>0||levIsSupplier(supplier))?renderLeverandorInnboksOther(otherDrafts):''}
     ${renderLeverandorPayments(bankPayments)}`;
 }
 
