@@ -239,6 +239,12 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 .v2c5-2a-register-btn{padding:4px 10px;background:rgba(42,157,74,.10);border:1px solid rgba(42,157,74,.30);border-radius:4px;font-size:11.5px;cursor:pointer;color:#1e7a3a;font-weight:600}
 /* V2C.5.2c.2 — receipt -> direct-expense button (blue, distinct from invoice green) */
 .v2c5-2c2-receipt-btn{padding:4px 10px;background:rgba(45,108,180,.10);border:1px solid rgba(45,108,180,.30);border-radius:4px;font-size:11.5px;cursor:pointer;color:#1f4f8a;font-weight:600}
+/* V2C.5.2c.3 — paid-invoice button + rounding/mismatch feedback */
+.v2c5-2c3-paidinv-btn{padding:4px 10px;background:rgba(120,80,175,.10);border:1px solid rgba(120,80,175,.30);border-radius:4px;font-size:11.5px;cursor:pointer;color:#5b3a8a;font-weight:600}
+.v2c5-2c3-round{font-size:12px;margin:2px 0 8px;min-height:14px}
+.v2c5-2c3-round-ok{color:var(--muted,#777)}
+.v2c5-2c3-round-warn{color:#a86f1f;font-weight:600}
+.v2c5-2c3-warn{background:rgba(230,144,32,.10);border:1px solid rgba(230,144,32,.35);color:#8a5a12;padding:9px 12px;border-radius:6px;font-size:12px;line-height:1.5;margin-bottom:10px}
 .v2c5-2a-register-btn:hover{background:rgba(42,157,74,.20)}
 .v2c5-2a-modal-card{max-width:520px}
 .v2c5-2a-hint{font-size:12.5px;color:var(--muted,#666);background:rgba(45,108,180,.05);padding:8px 10px;border-radius:6px;margin-bottom:10px;line-height:1.4}
@@ -1047,6 +1053,37 @@ select.fi:focus{background-color:#fff}
   <div class="fr" style="margin-top:4px">
     <button class="btn btn-g btn-f" onclick="closeReceiptExpenseModal()">Avbryt</button>
     <button class="btn btn-p btn-f" onclick="submitReceiptExpense()">Registrer utgift</button>
+  </div>
+</div></div>
+
+<!-- V2C.5.2c.3 — paid-invoice-by-card registration -->
+<div class="ov" id="v2c5-2c3-modal">
+<div class="modal v2c5-2a-modal-card">
+  <div class="mh"></div>
+  <div class="mt">Registrer som betalt faktura</div>
+  <div class="v2c5-2a-hint">En faktura betalt med kort ved kjøp. Bevarer fakturaidentitet (nr/KID/dato) som en direkte, betalt utgift — INGEN leverandørgjeld, INGEN allokering mot et migrert record.</div>
+  <div id="v2c5-2c3-warn" class="v2c5-2c3-warn" style="display:none"></div>
+  <div class="fg"><label class="fl">Leverandør / forhandler</label><select class="fi" id="v2c5-2c3-lev" onchange="onPaidLevChange()"></select></div>
+  <div class="fr">
+    <div class="fg"><label class="fl">Fakturanr *</label><input class="fi" id="v2c5-2c3-fakturanr" autocomplete="off" onblur="runInvoiceMismatchCheck()"></div>
+    <div class="fg"><label class="fl">KID</label><input class="fi" id="v2c5-2c3-kid" autocomplete="off" placeholder="Valgfri"></div>
+  </div>
+  <div class="fr">
+    <div class="fg"><label class="fl">Fakturadato *</label><input class="fi" id="v2c5-2c3-date" type="date"></div>
+    <div class="fg"><label class="fl">Kategori</label><select class="fi" id="v2c5-2c3-category"></select></div>
+  </div>
+  <div class="fr">
+    <div class="fg"><label class="fl">Dokumentbeløp *</label><input class="fi" id="v2c5-2c3-docamount" type="number" step="0.01" min="0" inputmode="decimal" autocomplete="off" oninput="updatePaidRoundingDisplay()" placeholder="Fra PDF"></div>
+    <div class="fg"><label class="fl">Bankbetalt beløp *</label><input class="fi" id="v2c5-2c3-bankpaid" type="number" step="0.01" min="0" inputmode="decimal" autocomplete="off" oninput="updatePaidRoundingDisplay();runInvoiceMismatchCheck()"></div>
+  </div>
+  <div id="v2c5-2c3-round" class="v2c5-2c3-round"></div>
+  <div class="fr">
+    <div class="fg"><label class="fl">MVA</label><input class="fi" id="v2c5-2c3-vat" type="number" step="0.01" min="0" inputmode="decimal" autocomplete="off" placeholder="Valgfri"></div>
+    <div class="fg"><label class="fl">Notat</label><input class="fi" id="v2c5-2c3-notes" placeholder="Valgfri" autocomplete="off"></div>
+  </div>
+  <div class="fr" style="margin-top:4px">
+    <button class="btn btn-g btn-f" onclick="closePaidInvoiceModal()">Avbryt</button>
+    <button class="btn btn-p btn-f" onclick="submitPaidInvoice()">Registrer betalt faktura</button>
   </div>
 </div></div>
 
@@ -4451,6 +4488,145 @@ async function submitReceiptExpense(){
   }
 }
 
+// ═════════════════════════════════════════
+// V2C.5.2c.3 — paid-invoice-by-card (DESIGN-011 object #3). A paid-by-card invoice
+// is the receipt path PLUS invoice identity (nr/KID). Direct PAID expense, expenseKind
+// 'misc', linkedPurchaseId null → NO debt. Reuses c.2 documentedExpenseId → Matchet.
+// ═════════════════════════════════════════
+const ROUND_TOL=1.00; // kr — |diff| ≤ tol = øreavrunding; > tol = material mismatch
+let _v2c53Ctx=null;    // {txId, docId}
+let _paidLevPrev='';
+
+function openPaidInvoiceModal(txId,docId){
+  const tx=dbFind('bankTransactions',txId);
+  const doc=getDocumentById(docId);
+  if(!tx||!doc){showToast('Fant ikke transaksjon eller dokument');return;}
+  _v2c53Ctx={txId,docId};
+  const cats=DEFAULT_EXPENSE_TAXONOMY['misc']||[];
+  const catSel=document.getElementById('v2c5-2c3-category');
+  catSel.innerHTML='<option value="">— Ingen kategori —</option>'+cats.map(c=>`<option value="${c.id}" data-label="${escapeHtml(c.label)}">${escapeHtml(c.label)}</option>`).join('');
+  // Preselect company from the document's leverandorId, else name-inference from the tx.
+  _paidLevPrev=doc.leverandorId||(typeof inferSupplierFromTx==='function'?inferSupplierFromTx(tx):null)||'';
+  _populatePaidLevPicker(_paidLevPrev);
+  document.getElementById('v2c5-2c3-fakturanr').value=doc.documentReference||'';
+  document.getElementById('v2c5-2c3-kid').value='';
+  document.getElementById('v2c5-2c3-date').value=doc.documentDate||tx.dato||today();
+  document.getElementById('v2c5-2c3-docamount').value='';
+  document.getElementById('v2c5-2c3-bankpaid').value=(Math.abs(Number(tx.belop)||0)).toFixed(2);
+  document.getElementById('v2c5-2c3-vat').value='';
+  document.getElementById('v2c5-2c3-notes').value='';
+  document.getElementById('v2c5-2c3-round').textContent='';
+  document.getElementById('v2c5-2c3-warn').style.display='none';
+  openModal('v2c5-2c3-modal');
+}
+function closePaidInvoiceModal(){_v2c53Ctx=null;closeModal('v2c5-2c3-modal');}
+
+function _populatePaidLevPicker(selectedId){
+  const sel=document.getElementById('v2c5-2c3-lev');
+  if(!sel)return;
+  const levs=dbAll('leverandorer').slice().sort((a,b)=>(a.navn||'').localeCompare(b.navn||'','no'));
+  sel.innerHTML=['<option value="">— Ingen (bruk kun fakturanr) —</option>']
+    .concat(levs.map(l=>`<option value="${l.id}"${l.id===selectedId?' selected':''}>${escapeHtml(l.navn||'(uten navn)')}${levIsMerchant(l)?' · forhandler':''}</option>`))
+    .concat(['<option value="__new__">+ Opprett ny forhandler…</option>']).join('');
+  sel.value=selectedId||'';
+}
+function onPaidLevChange(){
+  const sel=document.getElementById('v2c5-2c3-lev');
+  if(!sel)return;
+  if(sel.value!=='__new__'){
+    _paidLevPrev=sel.value;
+    const lev=sel.value?dbFind('leverandorer',sel.value):null;
+    if(lev&&lev.defaultCategoryId){
+      const cat=document.getElementById('v2c5-2c3-category');
+      if(cat&&[...cat.options].some(o=>o.value===lev.defaultCategoryId))cat.value=lev.defaultCategoryId;
+    }
+    return;
+  }
+  const navn=(prompt('Navn på ny forhandler/leverandør:','')||'').trim();
+  if(!navn){sel.value=_paidLevPrev;return;}
+  const catSel=document.getElementById('v2c5-2c3-category');
+  createMerchantInline(navn,catSel?catSel.value:null).then(id=>{
+    _paidLevPrev=id;_populatePaidLevPicker(id);
+  }).catch(err=>{
+    console.error('[v2c5.2c.3] createMerchantInline failed:',err);
+    showToast('Kunne ikke opprette forhandler: '+((err&&err.message)||'ukjent feil'),'err');
+    sel.value=_paidLevPrev;
+  });
+}
+// Øreavrunding = bankPaid − dokumentbeløp. ≤ tol soft note, > tol flagged difference.
+function updatePaidRoundingDisplay(){
+  const el=document.getElementById('v2c5-2c3-round');
+  if(!el)return;
+  const doc=parseFloat(document.getElementById('v2c5-2c3-docamount').value);
+  const bank=parseFloat(document.getElementById('v2c5-2c3-bankpaid').value);
+  if(!isFinite(doc)||!isFinite(bank)||!(doc>0)||!(bank>0)){el.textContent='';el.className='v2c5-2c3-round';return;}
+  const diff=bank-doc;
+  if(Math.abs(diff)<=ROUND_TOL){el.textContent='Øreavrunding: '+fmtNOK(diff);el.className='v2c5-2c3-round v2c5-2c3-round-ok';}
+  else{el.textContent='Avvik dokument vs bank: '+fmtNOK(diff)+' — kontroller';el.className='v2c5-2c3-round v2c5-2c3-round-warn';}
+}
+// READ-ONLY check against existing expenses with the same fakturanr. Never writes/modifies them.
+function runInvoiceMismatchCheck(){
+  const warn=document.getElementById('v2c5-2c3-warn');
+  if(!warn)return;
+  const nr=(document.getElementById('v2c5-2c3-fakturanr').value||'').trim();
+  const paid=parseFloat(document.getElementById('v2c5-2c3-bankpaid').value);
+  if(!nr||!isFinite(paid)){warn.style.display='none';return;}
+  const match=(dbAll('expenses')||[]).find(e=>String(e.invoiceNumber||'')===nr&&Math.abs((Number(e.totalInclVat)||0)-paid)>ROUND_TOL);
+  if(!match){warn.style.display='none';return;}
+  warn.innerHTML=`<strong>⚠️ Fakturanr ${escapeHtml(nr)} finnes allerede, men beløpet avviker.</strong><br>`
+    +`Eksisterende record: ${fmtNOK(Number(match.totalInclVat)||0)}<br>`
+    +`Dokument/bankbetaling: ${fmtNOK(paid)}<br>Kontroller før lagring. (Det eksisterende recordet endres ikke.)`;
+  warn.style.display='block';
+}
+
+async function submitPaidInvoice(){
+  if(!_v2c53Ctx){showToast('Ingen kontekst');return;}
+  const {txId,docId}=_v2c53Ctx;
+  const fakturanr=(document.getElementById('v2c5-2c3-fakturanr').value||'').trim();
+  const kid=(document.getElementById('v2c5-2c3-kid').value||'').trim()||null;
+  const dato=document.getElementById('v2c5-2c3-date').value;
+  const docAmount=parseFloat(document.getElementById('v2c5-2c3-docamount').value)||0;
+  const bankPaid=parseFloat(document.getElementById('v2c5-2c3-bankpaid').value)||0;
+  const vatRaw=document.getElementById('v2c5-2c3-vat').value;
+  const vatAmount=vatRaw===''?0:(parseFloat(vatRaw)||0);
+  const catSel=document.getElementById('v2c5-2c3-category');
+  const catOpt=catSel.options[catSel.selectedIndex];
+  const categoryId=catSel.value||null;
+  const categoryLabel=categoryId?((catOpt&&catOpt.dataset.label)||null):null;
+  const levRaw=(document.getElementById('v2c5-2c3-lev')||{}).value||'';
+  const leverandorId=(levRaw&&levRaw!=='__new__')?levRaw:null;
+  if(!fakturanr){showToast('Mangler fakturanr','err');return;}
+  if(!dato){showToast('Mangler fakturadato','err');return;}
+  if(!(docAmount>0)){showToast('Dokumentbeløp må være > 0','err');return;}
+  if(!(bankPaid>0)){showToast('Bankbetalt beløp må være > 0','err');return;}
+  const lev=leverandorId?dbFind('leverandorer',leverandorId):null;
+  const supplierName=(lev&&lev.navn)||(dbFind('bankTransactions',txId)||{}).beskrivelse||('Faktura '+fakturanr);
+  const roundingDiff=+(bankPaid-docAmount).toFixed(2);
+  // Path A reuse: builder for the base shape; totalInclVat = the card charge (what left the account).
+  const base=buildExpenseDocFromOperatingForm({
+    expenseKind:'misc', supplierName, invoiceNumber:fakturanr, invoiceDate:dato,
+    totalInclVat:bankPaid, totalExVat:Math.max(0,bankPaid-vatAmount), vatAmount,
+    categoryId, categoryLabel, currency:'NOK',
+    paidDate:dato, paidTransactionId:txId, paidDateSource:'bank_match', paidAmountMatched:bankPaid,
+    notes:document.getElementById('v2c5-2c3-notes').value.trim()||null, originalFiles:[]
+  });
+  const now=new Date().toISOString();
+  const record={...base, source:'v2c5.2c.3_paid_invoice', processingLevel:'paid_invoice',
+    leverandorId, kid, documentAmount:docAmount, roundingDiff, paidByCard:true,
+    linkedBankTransactionId:txId, linkedDocumentId:docId}; // linkedPurchaseId stays null (builder) → NO debt
+  try{
+    const expId=await dbAdd('expenses',record);
+    await dbUpdate('documents',docId,{linkedExpenseId:expId});
+    await dbUpdate('bankTransactions',txId,{documentedExpenseId:expId,documentedAt:now});
+    showToast('Betalt faktura registrert ✓ — transaksjon dokumentert');
+    closePaidInvoiceModal();
+    renderBetalinger();
+  }catch(err){
+    console.error('[v2c5.2c.3] submitPaidInvoice failed:',err);
+    showToast('Kunne ikke registrere betalt faktura: '+((err&&err.message)||'ukjent feil'),'err');
+  }
+}
+
 function renderDocumentRow(doc,txId){
   const typeLabels={
     'purchase_invoice':'FAKTURA',
@@ -4471,11 +4647,16 @@ function renderDocumentRow(doc,txId){
   // registered as an expense. Invoice "Registrer" stays hidden (needs purchase_invoice).
   const _canReceipt=doc.docType==='receipt'&&!doc.linkedExpenseId;
   const _receiptBtn=_canReceipt?`<button class="v2c5-2c2-receipt-btn" onclick="event.stopPropagation();openReceiptExpenseModal('${txId}','${doc.id}')">Registrer som utgift</button>`:'';
+  // V2C.5.2c.3: paid-by-card invoice — sibling to the unpaid "Registrer" (debt) path.
+  // Shown for FAKTURA docs not yet registered as either invoice or direct expense.
+  const _canPaidInv=doc.docType==='purchase_invoice'&&!doc.linkedPurchaseId&&!doc.linkedExpenseId;
+  const _paidInvBtn=_canPaidInv?`<button class="v2c5-2c3-paidinv-btn" onclick="event.stopPropagation();openPaidInvoiceModal('${txId}','${doc.id}')">Registrer som betalt faktura</button>`:'';
   return `<div class="br-doc-row">
     <span class="br-doc-badge br-doc-badge-${doc.docType}">${badge}</span>
     <span class="br-doc-filename">${fname}</span>
     ${_typeSelect}
     ${_registerBtn}
+    ${_paidInvBtn}
     ${_receiptBtn}
     <button class="br-doc-action" onclick="viewDocumentInline(event,'${doc.id}')">Vis</button>
     <button class="br-doc-action" onclick="downloadDocumentInline(event,'${doc.id}')">Last ned</button>
@@ -4619,11 +4800,11 @@ function levIsMerchant(lev){ return !!(lev && lev.isMerchant === true); }      /
 function levCreatesDebt(lev){ return !(lev && lev.createsDebtByDefault === false); } // missing/true → true
 
 // V2C.5.2c.2a — direct expenses (receipts) linked to a company. Discriminator:
-// processingLevel==='receipt' (set only by submitReceiptExpense) + leverandorId match.
-// Empty-safe: a merchant with no receipts returns [].
+// processingLevel 'receipt' (submitReceiptExpense) or 'paid_invoice' (submitPaidInvoice,
+// V2C.5.2c.3) + leverandorId match. Empty-safe: a company with none returns [].
 function getDirectExpensesForSupplier(levId){
   if(!levId)return [];
-  return (dbAll('expenses')||[]).filter(e=>e.leverandorId===levId&&e.processingLevel==='receipt');
+  return (dbAll('expenses')||[]).filter(e=>e.leverandorId===levId&&(e.processingLevel==='receipt'||e.processingLevel==='paid_invoice'));
 }
 
 function getInvoicesForSupplier(levId){
@@ -4843,9 +5024,10 @@ function renderLeverandorDirectExpenses(expenses){
   const total=sorted.reduce((a,e)=>a+(Number(e.totalInclVat)||0),0);
   const rows=sorted.map(e=>{
     const docBtns=e.linkedDocumentId?`<button class="lev-doc-action" onclick="viewDocumentInline(event,'${e.linkedDocumentId}')">Vis</button><button class="lev-doc-action" onclick="downloadDocumentInline(event,'${e.linkedDocumentId}')">Last ned</button>`:'';
+    const desc=(e.invoiceNumber?'Faktura '+e.invoiceNumber+' · ':'')+(e.supplierName||'(uten beskrivelse)');
     return `<div class="lev-de-row">
       <span class="lev-de-date">${escapeHtml(fmtDate(e.invoiceDate||''))}</span>
-      <span class="lev-de-desc" title="${escapeHtml(e.supplierName||'')}">${escapeHtml(e.supplierName||'(uten beskrivelse)')}</span>
+      <span class="lev-de-desc" title="${escapeHtml(desc)}">${escapeHtml(desc)}</span>
       <span class="lev-de-cat">${escapeHtml(e.categoryLabel||'—')}</span>
       <span class="lev-de-total">${fmtNOK(Number(e.totalInclVat)||0)}</span>
       <span class="lev-de-docs">${docBtns}</span>
