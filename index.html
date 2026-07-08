@@ -4707,7 +4707,7 @@ function openInvoiceRegistrationModal(txId,docId){
   const suppliers=(dbAll('leverandorer')||[]).slice().sort((a,b)=>(a.navn||'').localeCompare(b.navn||'','nb'));
   sel.innerHTML='<option value="">— velg leverandør —</option>'+suppliers.map(s=>`<option value="${s.id}" ${s.id===inferredId?'selected':''}>${escapeHtml(s.navn||'(uten navn)')}</option>`).join('');
   document.getElementById('v2c5-2a-invnr').value='';
-  document.getElementById('v2c5-2a-invdate').value=today();
+  document.getElementById('v2c5-2a-invdate').value=String((tx&&tx.dato)||(doc&&doc.documentDate)||today()).slice(0,10);
   document.getElementById('v2c5-2a-duedate').value='';
   document.getElementById('v2c5-2a-total').value='';   // DO NOT prefill with tx.belop (DESIGN-007)
   document.getElementById('v2c5-2a-vat').value='';
