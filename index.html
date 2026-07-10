@@ -4721,6 +4721,8 @@ function closeInvoiceRegistrationModal(){
   _v2c52aCtx=null;
 }
 
+function _normInvNr(v){ return String(v||'').trim().toLowerCase(); }
+
 async function submitInvoiceRegistration(){
   if(!_v2c52aCtx){showToast('Ingen kontekst — lukk og prøv igjen');return;}
   const {txId,docId}=_v2c52aCtx;
@@ -4737,6 +4739,30 @@ async function submitInvoiceRegistration(){
   if(!invoiceNumber){showToast('Faktura nr er påkrevd');return;}
   if(!invoiceDate){showToast('Fakturadato er påkrevd');return;}
   if(!(totalInclVat>0)){showToast('Beløp må være positivt');return;}
+  // C1: hard duplicate block — same leverandør + same fakturanr = same invoice.
+  // Identity = leverandorId + normalized invoiceNumber. Date is NOT part of identity.
+  const _dupKey=_normInvNr(invoiceNumber);
+  const _existingDup=(dbAll('expenses')||[]).find(e=>
+    e && e.expenseKind==='purchase_invoice'
+    && e.leverandorId===leverandorId
+    && _normInvNr(e.invoiceNumber)===_dupKey
+  );
+  if(_existingDup){
+    const _lev=_existingDup.supplierName||'denne leverandøren';
+    const _lpid=_existingDup.linkedPurchaseId;
+    const _see=confirm('Faktura '+invoiceNumber+' finnes allerede for '+_lev+'.\n\n'
+      +'Ingen ny faktura ble opprettet. Bruk den eksisterende fakturaen i listen i stedet.\n\n'
+      +'Trykk OK for å se den eksisterende fakturaen, Avbryt for å lukke.');
+    if(_see){
+      if(_lpid && typeof showInvoiceDetail==='function'){
+        try{ showInvoiceDetail(_lpid); }
+        catch(_e){ alert('Kunne ikke åpne fakturaen automatisk. Finn faktura '+invoiceNumber+' i listen.'); }
+      } else {
+        alert('Finn faktura '+invoiceNumber+' fra '+_lev+' i listen for å bruke den.');
+      }
+    }
+    return; // HARD BLOCK — abort before any write. No duplicate, no orphan.
+  }
   const supplier=dbFind('leverandorer',leverandorId);
   if(!supplier){showToast('Leverandør ikke funnet');return;}
   const now=new Date().toISOString();
