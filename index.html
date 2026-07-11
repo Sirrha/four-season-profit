@@ -4805,6 +4805,7 @@ async function submitInvoiceRegistration(){
     await tenantCol('expenses').doc(expId).set({...record,id:expId});
     // Link the uploaded document to the new invoice (V2C.4 helper).
     await linkDocumentToInvoice(docId,newId);
+    await saveBrLink(txId,newId);   // reverse link tx → invoice (same shape as allocate path). newId = linkedPurchaseId, NOT 'mirror-'+newId.
     showToast('Faktura registrert ✓ — velg den i listen for å allokere');
     closeInvoiceRegistrationModal();
     renderBetalinger();
