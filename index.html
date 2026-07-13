@@ -1397,6 +1397,22 @@ function directionFromDescription(desc){
   if(!isOwnAccount(m[2])) return null;   // not our account → not our business
   return m[1].toLowerCase()==='til' ? 'out' : 'in';
 }
+// Account-scoped duplicate test — the ONE source of truth for BOTH the review
+// screen (showBankStatementResults) and the writer (confirmBankStatementImport).
+// A row is a duplicate only when an existing tx shares its bank reference AND its
+// account. Same ref + DIFFERENT account = the other leg of an internal transfer:
+// a distinct transaction that must import. (Divergence between these two checks
+// is what blocked the HOVED re-import — never reimplement this inline.)
+function isDuplicateBankTx(ref,konto,existing){
+  const r=(ref||'').trim();
+  if(!r) return false;
+  const k=normKonto(konto);
+  return (existing||[]).some(p=>{
+    const pref=((p.arkivref||'').trim()||(p.bankReference||'').trim());
+    if(pref!==r) return false;
+    return normKonto(p.bankkonto)===k;
+  });
+}
 const WRITE_TO_PURCHASES=false;
 
 function startListeners(){
@@ -8661,7 +8677,7 @@ function showBankStatementResults(data){
   let dupCount=0,totalIn=0,totalOut=0;
   const cards=txs.map(tx=>{
     const ref=(tx.bankReference||'').trim();
-    const isDup=ref&&all.some(p=>(p.arkivref||'').trim()===ref||(p.bankReference||'').trim()===ref);
+    const isDup=isDuplicateBankTx(ref,data.kontonummer,all);
     if(isDup)dupCount++;
     const dir=tx.direction||((+tx.belop||0)<0?'out':'in');
     const amt=Math.abs(parseFloat(tx.belop)||0);
@@ -8776,18 +8792,7 @@ async function confirmBankStatementImport(){
   let saved=0,skipped=0,errors=0;
   for(const tx of data.transaksjoner){
     const ref=(tx.bankReference||'').trim();
-    if(ref){
-      // Dedup key is arkivref + bankkonto. The two legs of an internal transfer
-      // share an arkivref but live on DIFFERENT accounts — they are distinct
-      // transactions and must both import. Only a same-account repeat is a dup.
-      const thisKonto=normKonto(data.kontonummer);
-      const dup=all.find(p=>{
-        const pref=((p.arkivref||'').trim()||(p.bankReference||'').trim());
-        if(pref!==ref) return false;
-        return normKonto(p.bankkonto)===thisKonto;
-      });
-      if(dup){skipped++;continue;}
-    }
+    if(isDuplicateBankTx(ref,data.kontonummer,all)){skipped++;continue;}
     const dato=tx.dato||today();
     const period=dato.length>=7?dato.slice(0,7):'';
     const aiDir=tx.direction||((+tx.belop||0)<0?'out':'in');
