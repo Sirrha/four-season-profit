@@ -1372,6 +1372,19 @@ const firstSnapshotSeen={};  // per-collection first-snapshot flag (phase 2b-fix
 // 2f.1d flips this to false → mirror becomes the only write target; purchases freezes as a
 // historical record. Operator-controlled (not sentinel-automated): change the literal, deploy,
 // observe a clean Chrome Claude cycle, then ship 2f.1d.
+// Four Season AS — the company's own bank accounts. An "internal transfer" is a
+// movement where BOTH sides are in this list. Used by import dedup scoping and
+// (later) transfer pairing. Tenant config — to generalize per-tenant later.
+const OWN_BANK_ACCOUNTS={
+  '1503.93.42321':'HOVED',
+  '1503.94.44426':'KJØP',
+  '1506.06.54031':'MOMS',
+  '1506.29.07638':'SPARING',
+  '1506.80.97506':'HUSLEIE'
+};
+function normKonto(v){ return String(v||'').replace(/[^\d.]/g,'').trim(); }
+function isOwnAccount(konto){ return !!OWN_BANK_ACCOUNTS[normKonto(konto)]; }
+function ownAccountName(konto){ return OWN_BANK_ACCOUNTS[normKonto(konto)]||null; }
 const WRITE_TO_PURCHASES=false;
 
 function startListeners(){
@@ -8752,7 +8765,15 @@ async function confirmBankStatementImport(){
   for(const tx of data.transaksjoner){
     const ref=(tx.bankReference||'').trim();
     if(ref){
-      const dup=all.find(p=>(p.arkivref||'').trim()===ref||(p.bankReference||'').trim()===ref);
+      // Dedup key is arkivref + bankkonto. The two legs of an internal transfer
+      // share an arkivref but live on DIFFERENT accounts — they are distinct
+      // transactions and must both import. Only a same-account repeat is a dup.
+      const thisKonto=normKonto(data.kontonummer);
+      const dup=all.find(p=>{
+        const pref=((p.arkivref||'').trim()||(p.bankReference||'').trim());
+        if(pref!==ref) return false;
+        return normKonto(p.bankkonto)===thisKonto;
+      });
       if(dup){skipped++;continue;}
     }
     const dato=tx.dato||today();
