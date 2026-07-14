@@ -8761,7 +8761,24 @@ async function confirmBankStatementImport(){
   // V2C: create the bankStatement doc BEFORE the transaction loop.
   // Period bounds + balances derived from the scan data (periode is a
   // DD.MM.YYYY string, so period bounds come from the ISO tx dates).
-  const newStatementId='stmt-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+  // ONE statement = ONE account + ONE month. If a statement already exists for this
+  // account+month, ATTACH to it — never mint a second book for the same month.
+  // Identity is derived from the TRANSACTIONS (bankkonto + period + statementId are
+  // always set on imported rows), so this works even when the statement doc's
+  // `account` field is null (AI extraction miss).
+  const _acct=normKonto(data.kontonummer);
+  const _txDatesForMonth=(data.transaksjoner||[]).map(t=>t.dato).filter(Boolean).sort();
+  const _month=(_txDatesForMonth[0]||'').slice(0,7);   // "YYYY-MM"
+  const _existingTx=(_acct&&_month)
+    ? (dbAll('bankTransactions')||[]).find(t=>
+        normKonto(t.bankkonto)===_acct && t.period===_month && t.statementId)
+    : null;
+  const _attachTo=_existingTx?_existingTx.statementId:null;
+  const newStatementId=_attachTo||('stmt-'+Date.now()+'-'+Math.random().toString(36).slice(2,8));
+  if(_attachTo){
+    console.log('[bank-import] ATTACHING to existing statement:',_attachTo,
+      '(account',_acct,'month',_month,') — no new book created');
+  }
   const txDates=data.transaksjoner.map(t=>t.dato).filter(Boolean).sort();
   const ob=data.startsaldo!=null&&!isNaN(parseFloat(data.startsaldo))?parseFloat(data.startsaldo):null;
   const cb=data.sluttsaldo!=null&&!isNaN(parseFloat(data.sluttsaldo))?parseFloat(data.sluttsaldo):null;
@@ -8785,7 +8802,18 @@ async function confirmBankStatementImport(){
     reopenedBy:null,
     reconciliationSummary:null
   };
-  await tenantCol('bankStatements').doc(newStatementId).set(statementDoc);
+  if(_attachTo){
+    // Attaching: the book already exists. Do NOT overwrite its status/lifecycle
+    // fields. Only widen the period bounds and refresh balances if we now know more.
+    const _cur=dbFind('bankStatements',_attachTo);
+    const _patch={};
+    if(statementDoc.periodStart && (!_cur||!_cur.periodStart || statementDoc.periodStart<_cur.periodStart)) _patch.periodStart=statementDoc.periodStart;
+    if(statementDoc.periodEnd   && (!_cur||!_cur.periodEnd   || statementDoc.periodEnd  >_cur.periodEnd  )) _patch.periodEnd=statementDoc.periodEnd;
+    if(statementDoc.account && (!_cur||!_cur.account)) _patch.account=statementDoc.account;
+    if(Object.keys(_patch).length){ await dbUpdate('bankStatements',_attachTo,_patch); }
+  } else {
+    await tenantCol('bankStatements').doc(newStatementId).set(statementDoc);
+  }
   console.log('[V2C] Created bankStatement',newStatementId,'for batch',importBatchId);
 
   const all=dbAll('bankTransactions');
