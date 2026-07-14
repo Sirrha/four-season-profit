@@ -3528,6 +3528,9 @@ function getTxDisplayDescription(tx){
 // Pure function over existing data — no schema additions.
 // Returns one of: 'matched' | 'unmatched' | 'review'
 function getBankTxStatus(tx){
+  // Internal transfer settled by its paired leg. First check: a paired transfer is
+  // green on its own terms — it has no invoice and never will.
+  if(tx.settledBy==='transfer_pair'||tx.linkedTransferTxId)return 'matched';
   const hasLinks=Array.isArray(tx.linkedeFakturaer)&&tx.linkedeFakturaer.length>0;
   if(hasLinks)return 'matched';
   // V2C.5.2c.2: a documented direct expense (receipt) completes reconciliation —
@@ -3537,6 +3540,77 @@ function getBankTxStatus(tx){
   if(tx.direction==='in'||tx.direction==='unknown')return 'review';
   return 'unmatched';
 }
+
+// ── INTERNAL TRANSFER PAIRING ────────────────────────────────────────────────
+// A Kontoregulering between two of OUR OWN accounts is one event with two legs.
+// The bank writes the SAME arkivref on both. Join predicate (all required):
+//   same non-empty arkivref · opposite direction · equal |belop| (±0.01) ·
+//   different bankkonto · BOTH accounts in OWN_BANK_ACCOUNTS.
+// Identification (is this an internal transfer?) is SEPARATE from pairing (is the
+// partner present?). A leg whose counterpart account isn't imported (e.g. HUSLEIE)
+// is identified but NOT paired and NOT green — we never fake a settlement.
+function transferCounterAccount(tx){
+  const m=String(tx&&tx.rawDescription||'').match(/\b(Til|Fra)\s+(\d{4}\.\d{2}\.\d{5})\b/i);
+  if(!m) return null;
+  return isOwnAccount(m[2])?normKonto(m[2]):null;
+}
+function isInternalTransferTx(tx){
+  return !!(tx && isOwnAccount(tx.bankkonto) && transferCounterAccount(tx));
+}
+function findTransferPartner(tx,all){
+  const ref=String(tx.arkivref||tx.bankReference||'').trim();
+  if(!ref) return null;
+  const amt=Math.abs(Number(tx.belop)||0);
+  const mine=normKonto(tx.bankkonto);
+  return (all||[]).find(p=>{
+    if(!p||p.id===tx.id) return false;
+    const pref=String(p.arkivref||p.bankReference||'').trim();
+    if(pref!==ref) return false;                                  // same bank reference
+    if(String(p.direction)===String(tx.direction)) return false;  // opposite direction
+    if(Math.abs(Math.abs(Number(p.belop)||0)-amt)>0.01) return false; // same amount
+    const theirs=normKonto(p.bankkonto);
+    if(theirs===mine) return false;                               // different account
+    return isOwnAccount(theirs);                                  // both ours
+  })||null;
+}
+async function pairInternalTransfers(opts={}){
+  const all=dbAll('bankTransactions')||[];
+  const candidates=all.filter(isInternalTransferTx);
+  let paired=0,identifiedOnly=0,already=0;
+  console.log('[transfer-pair] candidates:',candidates.length);
+  for(const tx of candidates){
+    if(tx.settledBy==='transfer_pair'&&tx.linkedTransferTxId){already++;continue;}
+    const partner=findTransferPartner(tx,all);
+    const now=new Date().toISOString();
+    if(partner){
+      await dbUpdate('bankTransactions',tx.id,{
+        txType:'internal_transfer',settledBy:'transfer_pair',
+        linkedTransferTxId:partner.id,settledAt:now});
+      await dbUpdate('bankTransactions',partner.id,{
+        txType:'internal_transfer',settledBy:'transfer_pair',
+        linkedTransferTxId:tx.id,settledAt:now});
+      tx.settledBy='transfer_pair';tx.linkedTransferTxId=partner.id;
+      partner.settledBy='transfer_pair';partner.linkedTransferTxId=tx.id;
+      paired++;
+      console.log('[transfer-pair] PAIRED',ownAccountName(tx.bankkonto),'→',
+        ownAccountName(partner.bankkonto),tx.belop,'ref',tx.arkivref);
+    } else {
+      if(tx.txType!=='internal_transfer'){
+        await dbUpdate('bankTransactions',tx.id,{txType:'internal_transfer'});
+        tx.txType='internal_transfer';
+      }
+      identifiedOnly++;
+      console.log('[transfer-pair] NO PARTNER (identified only):',
+        ownAccountName(tx.bankkonto),tx.belop,'→ konto',transferCounterAccount(tx),
+        '| ref',tx.arkivref);
+    }
+  }
+  console.log('[transfer-pair] done — paired legs:',paired,
+    '| already paired:',already,'| identified w/o partner:',identifiedOnly);
+  return {paired,already,identifiedOnly,candidates:candidates.length};
+}
+window.pairInternalTransfers=pairInternalTransfers;
+// ─────────────────────────────────────────────────────────────────────────────
 
 // V1A.1: Counts across a transaction set for the status counter row.
 function getBankReconSummary(transactions){
@@ -5693,9 +5767,10 @@ function getStatementProgress(stmtId){
   const txs=dbAll('bankTransactions').filter(t=>t.statementId===stmtId);
   let matched=0,unmatched=0,review=0;
   txs.forEach(t=>{
-    const linked=Array.isArray(t.linkedeFakturaer)&&t.linkedeFakturaer.length>0;
-    if(linked){matched++;}
-    else if(t.direction==='in'){review++;}
+    // ONE source of truth for status — never re-implement (see getBankTxStatus).
+    const s=getBankTxStatus(t);
+    if(s==='matched'){matched++;}
+    else if(s==='review'){review++;}
     else{unmatched++;}
   });
   return {total:txs.length,matched,unmatched,review};
