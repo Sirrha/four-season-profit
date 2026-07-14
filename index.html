@@ -1263,7 +1263,7 @@ const ARSAK={utgatt:'Utgått dato',skadet:'Skadet/knust',tyveri:'Tyveri/svinn',a
 // ─────────────────────────────────────────
 // LOCAL CACHE  (kept in sync by Firestore listeners)
 // ─────────────────────────────────────────
-let LOCAL={products:[],purchases:[],sales:[],svinn:[],leverandorer:[],dagsalg:[],innboks:[],ansatte:[],vakter:[],payments:[],bankTransactions:[],bankStatements:[],expenses:[],recurring_templates:[],expense_taxonomy:[],documents:[]};
+let LOCAL={products:[],purchases:[],sales:[],svinn:[],leverandorer:[],dagsalg:[],innboks:[],ansatte:[],vakter:[],payments:[],bankTransactions:[],bankStatements:[],bankAccounts:[],expenses:[],recurring_templates:[],expense_taxonomy:[],documents:[]};
 let db=null; // Firestore instance
 let storage = null; // Cloud Storage instance
 
@@ -1383,8 +1383,49 @@ const OWN_BANK_ACCOUNTS={
   '1506.80.97506':'HUSLEIE'
 };
 function normKonto(v){ return String(v||'').replace(/[^\d.]/g,'').trim(); }
-function isOwnAccount(konto){ return !!OWN_BANK_ACCOUNTS[normKonto(konto)]; }
-function ownAccountName(konto){ return OWN_BANK_ACCOUNTS[normKonto(konto)]||null; }
+// Registry-backed. bankAccounts is tenant data (a tenant may have 1 account or 6).
+// OWN_BANK_ACCOUNTS remains a FALLBACK, not a source of truth: if the registry is
+// empty — un-seeded tenant, pre-seed boot, or an errored snapshot — a registry-only
+// lookup would return false for EVERY account and silently misclassify internal
+// transfers as ordinary income/expense. The fallback closes that window. It is inert
+// for any tenant whose registry is populated. Remove only once the seed is proven live.
+function _ownAccountsMap(){
+  const rows=(dbAll('bankAccounts')||[]).filter(a=>a && a.active!==false && a.number);
+  if(!rows.length) return OWN_BANK_ACCOUNTS;              // fallback — see above
+  const m={};
+  rows.forEach(a=>{ m[normKonto(a.number)]=a.name||a.number; });
+  return m;
+}
+function isOwnAccount(konto){ return !!_ownAccountsMap()[normKonto(konto)]; }
+function ownAccountName(konto){ return _ownAccountsMap()[normKonto(konto)]||null; }
+// One-off seed: lift the hardcoded five into the registry so tenant zero has real data.
+// Idempotent via the _meta/migrations sentinel, exactly like backfillStatementsV2.
+async function backfillBankAccounts(opts={}){
+  try{
+    if(!TENANT_ID){ console.error('[bank-accounts] no tenantId — abort'); return; }
+    const metaSnap=await tenantCol('_meta').doc('migrations').get();
+    const metaData=metaSnap.exists?metaSnap.data():{};
+    if(metaData.backfillBankAccounts===true && !opts.force){
+      console.log('[bank-accounts] already seeded, skipping'); return;
+    }
+    const existing=dbAll('bankAccounts')||[];
+    if(existing.length>0 && !opts.force){
+      console.log('[bank-accounts] registry already has',existing.length,'accounts — no seed');
+    } else {
+      const now=new Date().toISOString();
+      for(const [number,name] of Object.entries(OWN_BANK_ACCOUNTS)){
+        await dbAdd('bankAccounts',{number,name,bank:'DNB',active:true,createdAt:now,updatedAt:now});
+        console.log('[bank-accounts] seeded',name,number);
+      }
+    }
+    await tenantCol('_meta').doc('migrations').set({
+      ...metaData, backfillBankAccounts:true,
+      backfillBankAccountsAt:new Date().toISOString()
+    },{merge:true});
+    console.log('[bank-accounts] seed complete. Sentinel set.');
+  }catch(e){ console.error('[bank-accounts] seed failed:',e&&e.message,e); }
+}
+window.backfillBankAccounts=backfillBankAccounts;
 // Deterministic direction from explicit bank wording. The statement PDF carries no
 // minus signs — direction lives in the column — but the text states it plainly:
 // "Til <konto>" = money OUT, "Fra <konto>" = money IN. Only trusted when the named
@@ -1418,7 +1459,7 @@ const WRITE_TO_PURCHASES=false;
 function startListeners(){
   // Reset per-collection flags so re-starting listeners (tenant switch, etc.) works.
   Object.keys(firstSnapshotSeen).forEach(k=>delete firstSnapshotSeen[k]);
-  const cols=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter','payments','bankTransactions','bankStatements','expenses','recurring_templates','expense_taxonomy','documents'];
+  const cols=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter','payments','bankTransactions','bankStatements','bankAccounts','expenses','recurring_templates','expense_taxonomy','documents'];
   cols.forEach(col=>{
     listeners[col]=tenantCol(col).onSnapshot(snap=>{
       LOCAL[col]=snap.docs.map(d=>({id:d.id,...d.data()}));
@@ -1451,6 +1492,7 @@ function showApp(){
   backfillPurchasesToExpenses();         // phase 2b: idempotent, sentinel-gated
   dedupeMigratedExpenseMirrors();        // phase 2b-fix: one-shot cleanup of race duplicates
   backfillMirrorPaymentFields();         // phase 2e-prep: one-shot copy of payment fields onto mirrors
+  backfillBankAccounts();                // chunk A: seed the five hardcoded accounts into the registry
   if(!currentUser){
     document.getElementById('login-screen').classList.remove('hidden');
   } else {
