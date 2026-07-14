@@ -664,6 +664,7 @@ select.fi:focus{background-color:#fff}
 <div class="page" id="pg-svinn"></div>
 <div class="page" id="pg-rapporter"></div>
 <div class="page" id="pg-leverandorer"></div>
+<div class="page" id="pg-bankkonti"></div>
 <div class="page" id="pg-innboks"></div>
 <div class="page" id="pg-timeliste"></div>
 <div class="page" id="pg-betalinger"></div>
@@ -1007,6 +1008,25 @@ select.fi:focus{background-color:#fff}
   <button class="btn btn-d btn-f" id="lev-del-btn" onclick="deleteLeverandorCurrent()" style="display:none;margin-top:10px">🗑️ Slett</button>
 </div></div>
 
+<!-- Bankkonti — tenant bank-account registry (chunk B) -->
+<div class="ov" id="ov-bankkonto">
+<div class="modal">
+  <div class="mh"></div>
+  <div class="mt" id="bk-mt">Ny konto</div>
+  <input type="hidden" id="bk-id">
+  <div class="fg"><label class="fl">Kontonummer *</label><input class="fi" id="bk-number" placeholder="1234.56.78901" autocomplete="off">
+    <div id="bk-number-hint" style="font-size:10.5px;color:var(--muted);margin-top:4px;display:none">Kontonummer kan ikke endres.</div>
+  </div>
+  <div class="fg"><label class="fl">Navn *</label><input class="fi" id="bk-name" placeholder="f.eks. HOVED" autocomplete="off"></div>
+  <div class="fg"><label class="fl">Bank</label><input class="fi" id="bk-bank" placeholder="DNB" autocomplete="off"></div>
+  <div class="fg"><label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" id="bk-active" checked style="width:16px;height:16px;cursor:pointer"> Aktiv</label></div>
+  <div class="fr" style="margin-top:4px">
+    <button class="btn btn-g btn-f" onclick="closeModal('ov-bankkonto')">Avbryt</button>
+    <button class="btn btn-p btn-f" onclick="saveBankkonto()">💾 Lagre</button>
+  </div>
+  <button class="btn btn-d btn-f" id="bk-del-btn" onclick="deleteBankkonto(document.getElementById('bk-id').value)" style="display:none;margin-top:10px">🗑️ Slett</button>
+</div></div>
+
 <!-- V2C.5.2a — Registrer faktura for avstemming (Workflow B) -->
 <div class="ov" id="v2c5-2a-modal">
 <div class="modal v2c5-2a-modal-card">
@@ -1160,7 +1180,8 @@ select.fi:focus{background-color:#fff}
   <div class="mt">Mer</div>
   <button class="btn btn-g btn-f" style="margin-bottom:10px;justify-content:flex-start;padding:14px 16px;font-size:14px" onclick="closeModal('ov-mer');goTo('leverandorer')">🏢 Leverandører</button>
   <button class="btn btn-g btn-f" style="margin-bottom:10px;justify-content:flex-start;padding:14px 16px;font-size:14px" onclick="closeModal('ov-mer');goTo('svinn')">🗑️ Svinn</button>
-  <button class="btn btn-g btn-f" style="justify-content:flex-start;padding:14px 16px;font-size:14px" onclick="closeModal('ov-mer');goTo('betalinger')">🏦 Bankavstemming</button>
+  <button class="btn btn-g btn-f" style="margin-bottom:10px;justify-content:flex-start;padding:14px 16px;font-size:14px" onclick="closeModal('ov-mer');goTo('betalinger')">🏦 Bankavstemming</button>
+  <button class="btn btn-g btn-f" style="justify-content:flex-start;padding:14px 16px;font-size:14px" onclick="closeModal('ov-mer');goTo('bankkonti')">💳 Bankkonti<span style="display:block;font-size:11px;color:var(--muted);font-weight:400;margin-top:2px">Registrer kontoene dine — brukes til å kjenne igjen interne overføringer</span></button>
 </div></div>
 
 <!-- Ny utgift (manuell driftsutgift) — phase 2a step 3 -->
@@ -1389,9 +1410,14 @@ function normKonto(v){ return String(v||'').replace(/[^\d.]/g,'').trim(); }
 // lookup would return false for EVERY account and silently misclassify internal
 // transfers as ordinary income/expense. The fallback closes that window. It is inert
 // for any tenant whose registry is populated. Remove only once the seed is proven live.
+let BANKACCOUNTS_CONFIGURED=false;
 function _ownAccountsMap(){
   const rows=(dbAll('bankAccounts')||[]).filter(a=>a && a.active!==false && a.number);
-  if(!rows.length) return OWN_BANK_ACCOUNTS;              // fallback — see above
+  if(rows.length){ BANKACCOUNTS_CONFIGURED=true; }
+  if(!rows.length){
+    if(BANKACCOUNTS_CONFIGURED) return {};   // deliberately empty — never fall back
+    return OWN_BANK_ACCOUNTS;                // never configured — boot-time net only
+  }
   const m={};
   rows.forEach(a=>{ m[normKonto(a.number)]=a.name||a.number; });
   return m;
@@ -1807,13 +1833,13 @@ document.querySelectorAll('.ov').forEach(ov=>ov.addEventListener('click',e=>{if(
 // NAVIGATION
 // ─────────────────────────────────────────
 let currentPage='oversikt';
-const pageTitles={oversikt:'Oversikt',produkter:'Produktregister',leverandorer:'Leverandører',innboks:'Innboks',innkjop:'Innkjøp & Fakturaer',salg:'Salgslogg',svinn:'Svinn & Justering',rapporter:'Rapporter',timeliste:'Timeliste & Ansatte',betalinger:'Bankavstemming',okonomi:'Økonomi',leverandor:'Leverandør'};
+const pageTitles={oversikt:'Oversikt',produkter:'Produktregister',leverandorer:'Leverandører',innboks:'Innboks',innkjop:'Innkjøp & Fakturaer',salg:'Salgslogg',svinn:'Svinn & Justering',rapporter:'Rapporter',timeliste:'Timeliste & Ansatte',betalinger:'Bankavstemming',okonomi:'Økonomi',leverandor:'Leverandør',bankkonti:'Bankkonti'};
 function goTo(pg){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nb').forEach(b=>b.classList.remove('active'));
   document.getElementById('pg-'+pg).classList.add('active');
   document.querySelector(`.nb[data-pg="${pg}"]`)?.classList.add('active');
-  const MER_PAGES=['leverandorer','svinn','betalinger'];
+  const MER_PAGES=['leverandorer','svinn','betalinger','bankkonti'];
   if(MER_PAGES.includes(pg)) document.querySelector('.nb[data-pg="mer"]')?.classList.add('active');
   document.getElementById('sync-text').textContent=pageTitles[pg]||pg;
   currentPage=pg;
@@ -1846,7 +1872,7 @@ document.getElementById('fabBtn').addEventListener('click',()=>{
 });
 function handleExport(){if(currentPage==='produkter')exportCSV('products');else if(currentPage==='innkjop')exportCSV('purchases')}
 function renderPage(pg){
-  const fn={oversikt:renderOversikt,produkter:renderProdukter,leverandorer:renderLeverandorer,innboks:renderInnboks,innkjop:renderInnkjop,salg:renderSalg,svinn:renderSvinn,rapporter:renderRapporter,timeliste:renderTimeliste,betalinger:renderBetalinger,okonomi:renderUtgifter,leverandor:renderLeverandor};
+  const fn={oversikt:renderOversikt,produkter:renderProdukter,leverandorer:renderLeverandorer,innboks:renderInnboks,innkjop:renderInnkjop,salg:renderSalg,svinn:renderSvinn,rapporter:renderRapporter,timeliste:renderTimeliste,betalinger:renderBetalinger,okonomi:renderUtgifter,leverandor:renderLeverandor,bankkonti:renderBankkonti};
   if(fn[pg])fn[pg]();
 }
 
@@ -5736,6 +5762,138 @@ async function deleteLeverandorCurrent(){
   await dbDelete('leverandorer',id);
   closeModal('ov-leverandor');
   showToast('Slettet');
+}
+
+// ─────────────────────────────────────────
+// BANKKONTI — tenant bank-account registry CRUD (chunk B). Mirrors the leverandører
+// pattern. The account NUMBER is the immutable join key to every
+// bankTransaction.bankkonto — only name/bank/active are editable after creation.
+// ─────────────────────────────────────────
+function renderBankkonti(){
+  const page=document.getElementById('pg-bankkonti');
+  const all=(dbAll('bankAccounts')||[]).slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'','no'));
+  let html=`<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <div>
+        <div style="font-weight:700;font-size:15px">Bankkonti</div>
+        <div style="font-size:11.5px;color:var(--muted);margin-top:2px">${all.length} registrert${all.length===1?'':'e'}</div>
+      </div>
+      <button class="btn btn-p btn-s" onclick="openBankkontoModal()">+ Ny konto</button>
+    </div>
+  </div>`;
+  if(all.length===0){
+    html+=`<div class="card" style="text-align:center;color:var(--muted);padding:34px 14px">
+      <div style="font-size:32px">💳</div>
+      <div style="margin-top:8px;font-weight:600;color:var(--text)">Registrer bankkontoene dine</div>
+      <div style="font-size:12px;margin-top:4px">Sormena trenger å vite hvilke konti som er dine. Da kjenner systemet igjen interne overføringer mellom dem.</div>
+      <button class="btn btn-p btn-s" style="margin-top:12px" onclick="openBankkontoModal()">+ Ny konto</button>
+    </div>`;
+  } else {
+    html+=`<div class="card"><div style="font-size:10.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px">Alle konti</div>`;
+    for(const a of all){
+      const txCount=(dbAll('bankTransactions')||[]).filter(t=>normKonto(t.bankkonto)===normKonto(a.number)).length;
+      const isActive=a.active!==false;
+      const badge=isActive
+        ?'<span style="background:#e8f5e0;color:#2e7d32;padding:2px 7px;border-radius:5px;font-size:10.5px;font-weight:600;margin-left:6px">AKTIV</span>'
+        :'<span style="background:#f0f0f0;color:#888;padding:2px 7px;border-radius:5px;font-size:10.5px;font-weight:600;margin-left:6px">INAKTIV</span>';
+      html+=`<div class="li">
+        <div class="lim">
+          <div class="lit">${escapeHtml(a.name||'—')}${badge}</div>
+          <div class="lis"><span style="font-family:'DM Mono',monospace">${escapeHtml(a.number||'')}</span> · ${escapeHtml(a.bank||'')} · ${txCount} transaksjon${txCount===1?'':'er'}</div>
+        </div>
+        <div class="lev-reg-actions">
+          <button class="lev-reg-edit-btn" onclick="openBankkontoModal('${a.id}')">✏ Rediger</button>
+          <button class="lev-reg-edit-btn" onclick="deleteBankkonto('${a.id}')">🗑️ Slett</button>
+        </div>
+      </div>`;
+    }
+    html+=`</div>`;
+  }
+  page.innerHTML=html;
+}
+
+function openBankkontoModal(id=null){
+  document.getElementById('bk-id').value=id||'';
+  document.getElementById('bk-mt').textContent=id?'Rediger konto':'Ny konto';
+  document.getElementById('bk-del-btn').style.display=id?'inline-flex':'none';
+  const numEl=document.getElementById('bk-number');
+  numEl.value='';numEl.disabled=false;
+  document.getElementById('bk-name').value='';
+  document.getElementById('bk-bank').value='DNB';
+  document.getElementById('bk-active').checked=true;
+  document.getElementById('bk-number-hint').style.display=id?'block':'none';
+  if(id){
+    const a=dbFind('bankAccounts',id);
+    if(a){
+      numEl.value=a.number||'';
+      numEl.disabled=true;   // number is the join key to bankTransaction.bankkonto — immutable
+      document.getElementById('bk-name').value=a.name||'';
+      document.getElementById('bk-bank').value=a.bank||'DNB';
+      document.getElementById('bk-active').checked=a.active!==false;
+    }
+  }
+  openModal('ov-bankkonto');
+}
+
+async function saveBankkonto(){
+  const id=document.getElementById('bk-id').value;
+  const name=document.getElementById('bk-name').value.trim();
+  if(!name){showToast('Navn er påkrevd','err');return;}
+  const bank=document.getElementById('bk-bank').value.trim()||'DNB';
+  const active=document.getElementById('bk-active').checked;
+  if(id){
+    // Deactivation guard: never leave zero active accounts (the fallback trap).
+    const othersActive=(dbAll('bankAccounts')||[]).filter(x=>x && x.id!==id && x.active!==false);
+    if(!active && othersActive.length===0){
+      alert('Du kan ikke deaktivere den siste aktive kontoen. Registrer en ny konto først.');
+      return;
+    }
+    await dbUpdate('bankAccounts',id,{name,bank,active,updatedAt:new Date().toISOString()}); // NEVER writes number
+    closeModal('ov-bankkonto');
+    renderBankkonti();
+    showToast('Konto lagret ✓');
+    return;
+  }
+  // CREATE — validate + normalise the number. Accept with or without dots.
+  let num=normKonto(document.getElementById('bk-number').value);
+  const digits=num.replace(/\D/g,'');
+  if(digits.length===11) num=digits.slice(0,4)+'.'+digits.slice(4,6)+'.'+digits.slice(6);
+  if(!/^\d{4}\.\d{2}\.\d{5}$/.test(num)){
+    showToast('Kontonummer må være på formen 1234.56.78901','err');return;
+  }
+  const dup=(dbAll('bankAccounts')||[]).find(a=>a && normKonto(a.number)===normKonto(num));
+  if(dup){showToast('Denne kontoen er allerede registrert','err');return;}
+  const now=new Date().toISOString();
+  await dbAdd('bankAccounts',{number:num,name,bank,active,createdAt:now,updatedAt:now});
+  closeModal('ov-bankkonto');
+  renderBankkonti();
+  showToast('Konto lagret ✓');
+}
+
+async function deleteBankkonto(id){
+  const a=dbFind('bankAccounts',id); if(!a) return;
+  const num=normKonto(a.number);
+  const txCount=(dbAll('bankTransactions')||[]).filter(t=>normKonto(t.bankkonto)===num).length;
+  const active=(dbAll('bankAccounts')||[]).filter(x=>x && x.active!==false);
+  // GUARD 1 — in use: never orphan history.
+  if(txCount>0){
+    alert('Denne kontoen har '+txCount+' transaksjoner og kan ikke slettes.\n\n'
+      +'Kontonummeret er nøkkelen til hele historikken. Deaktiver kontoen i stedet '
+      +'— da beholdes historikken, men nye måneder forventer den ikke.');
+    return;
+  }
+  // GUARD 2 — never leave the registry empty: it would silently fall back to the
+  // hardcoded Four Season accounts (see _ownAccountsMap).
+  if(active.length<=1 && a.active!==false){
+    alert('Du kan ikke slette den siste aktive kontoen. Registrer en ny konto først.');
+    return;
+  }
+  if(!confirm('Slett kontoen "'+(a.name||a.number)+'"?\n\nDenne kontoen har ingen '
+    +'transaksjoner. Handlingen kan ikke angres.')) return;
+  await dbDelete('bankAccounts',id);
+  closeModal('ov-bankkonto');
+  showToast('Konto slettet');
+  renderBankkonti();
 }
 
 async function migrateLeverandorer(){
