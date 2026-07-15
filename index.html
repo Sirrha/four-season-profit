@@ -5985,42 +5985,142 @@ function statementStatusBadge(stmt){
   return {label:stmt.status||'?',cls:'bs-badge-pending'};
 }
 
-// V2B: render the list-of-statements landing view
-function renderStatementsList(){
-  const stmts=dbAll('bankStatements').slice().sort((a,b)=>{
-    // Recent first, historical last
-    if(a.historical&&!b.historical)return 1;
-    if(!a.historical&&b.historical)return -1;
-    return (b.periodEnd||'').localeCompare(a.periodEnd||'');
-  });
+// Chunk C: Norwegian month label ("2026-05" → "Mai 2026"). No existing helper found.
+function monthLabelNo(period){
+  const m=['Januar','Februar','Mars','April','Mai','Juni','Juli','August',
+    'September','Oktober','November','Desember'];
+  const n=parseInt(String(period).slice(5,7),10);
+  return (m[n-1]||period)+' '+String(period).slice(0,4);
+}
 
-  const uploadBtn=`<button class="bs-upload-btn" onclick="openNewStatementUpload()">📄 Last opp ny kontoutskrift</button>`;
+// Chunk C: build the grouped structure (year → month → active-account rows) from existing
+// data only. Renders nothing. Month keys off tx.period (reliable), account presence off a
+// statement OR any transaction; account-less data lands in orphans.
+function buildStatementGroups(){
+  const txs=dbAll('bankTransactions')||[];
+  const stmts=dbAll('bankStatements')||[];
+  const accts=(dbAll('bankAccounts')||[]).filter(a=>a&&a.active!==false&&a.number);
+  const acctByNum={}; accts.forEach(a=>{ acctByNum[normKonto(a.number)]=a; });
 
-  if(stmts.length===0){
-    return uploadBtn+`<div class="bs-empty">Ingen kontoutskrifter ennå.<br>Last opp en for å starte avstemming.</div>`;
+  function stmtAccount(s){
+    if(s.account) return normKonto(s.account);
+    const t=txs.find(x=>x.statementId===s.id && x.bankkonto);
+    return t?normKonto(t.bankkonto):null;
+  }
+  function stmtMonth(s){
+    const t=txs.find(x=>x.statementId===s.id && x.period);
+    if(t) return t.period;
+    return String(s.periodStart||'').slice(0,7)||null;
   }
 
-  const rowsHtml=stmts.map(s=>{
-    const prog=getStatementProgress(s.id);
-    const badge=statementStatusBadge(s);
-    const periodLabel=s.periodStart&&s.periodEnd
-      ?`${fmtDate(s.periodStart)} – ${fmtDate(s.periodEnd)}`
-      :'(periode ukjent)';
-    const progLabel=prog.total===0
-      ?'Ingen transaksjoner'
-      :`${prog.matched}/${prog.total} koblet${prog.unmatched>0?` · ${prog.unmatched} mangler`:''}`;
-    return `<div class="bs-row" onclick="enterBankStatement('${s.id}')">
-      <div class="bs-row-main">
-        <div class="bs-row-period">${escapeHtml(periodLabel)}</div>
-        <div class="bs-row-meta">${escapeHtml(s.account||'')} · ${escapeHtml(s.bankProvider||'')}</div>
-      </div>
-      <div class="bs-row-prog">${progLabel}</div>
-      <div class="bs-row-badge"><span class="bs-badge ${badge.cls}">${badge.label}</span></div>
-      <span class="bs-row-chev">›</span>
-    </div>`;
-  }).join('');
+  const months={};            // "YYYY-MM" -> { accounts: {num->cell} }
+  const orphanStatements=[];  // account not in registry
+  stmts.forEach(s=>{
+    const num=stmtAccount(s), month=stmtMonth(s);
+    if(!num || !month || !acctByNum[num]){ orphanStatements.push({s,num,month}); return; }
+    (months[month]=months[month]||{accounts:{}}).accounts[num]={statementId:s.id};
+  });
 
-  return uploadBtn+`<div class="bs-list">${rowsHtml}</div>`;
+  const periods=[...new Set(txs.map(t=>t.period).filter(Boolean))];
+  periods.forEach(month=>{
+    accts.forEach(a=>{
+      const num=normKonto(a.number);
+      const rows=txs.filter(t=>t.period===month && normKonto(t.bankkonto)===num);
+      if(!rows.length) return;
+      const matched=rows.filter(t=>getBankTxStatus(t)==='matched').length;
+      const bucket=(months[month]=months[month]||{accounts:{}});
+      const cell=bucket.accounts[num]||(bucket.accounts[num]={});
+      cell.txCount=rows.length; cell.matched=matched;
+      if(!cell.statementId && rows[0]) cell.statementId=rows[0].statementId;
+    });
+  });
+
+  const yearMap={};
+  Object.keys(months).sort().reverse().forEach(month=>{
+    const year=month.slice(0,4);
+    const rows=accts.map(a=>{
+      const num=normKonto(a.number); const cell=months[month].accounts[num];
+      return cell
+        ? {name:a.name,number:a.number,state:'imported',
+           txCount:cell.txCount||0,matched:cell.matched||0,statementId:cell.statementId}
+        : {name:a.name,number:a.number,state:'missing'};
+    });
+    const importedCount=rows.filter(r=>r.state==='imported').length;
+    (yearMap[year]=yearMap[year]||{months:[]}).months.push({
+      month, label:monthLabelNo(month), rows,
+      importedCount, totalAccounts:accts.length,
+      koblet:rows.reduce((s,r)=>s+(r.matched||0),0),
+      totalTx:rows.reduce((s,r)=>s+(r.txCount||0),0)
+    });
+  });
+  return {
+    years:Object.keys(yearMap).sort().reverse().map(y=>({year:y,months:yearMap[y].months})),
+    orphans:orphanStatements
+  };
+}
+
+// V2B/Chunk C: render the grouped list-of-statements landing view
+function renderStatementsList(){
+  const uploadBtn=`<button class="bs-upload-btn" onclick="openNewStatementUpload()">📄 Last opp ny kontoutskrift</button>`;
+  const groups=buildStatementGroups();
+  if(groups.years.length===0 && groups.orphans.length===0){
+    return uploadBtn+`<div class="bs-empty">Ingen kontoutskrifter ennå.<br>Last opp en for å starte avstemming.</div>`;
+  }
+  let html='';
+  groups.years.forEach(y=>{
+    html+=`<div style="font-size:13px;font-weight:800;color:var(--text);margin:16px 2px 6px">${escapeHtml(y.year)}</div>`;
+    y.months.forEach(m=>{
+      html+=`<div class="card" style="margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px">
+          <div style="font-weight:700;font-size:14px">${escapeHtml(m.label)}</div>
+          <div style="font-size:11.5px;color:var(--muted)">${m.importedCount} av ${m.totalAccounts} konti · ${m.koblet}/${m.totalTx} koblet</div>
+        </div>`;
+      m.rows.forEach(r=>{
+        if(r.state==='imported'){
+          html+=`<div class="bs-row" onclick="enterBankStatement('${r.statementId}')">
+            <div class="bs-row-main">
+              <div class="bs-row-period">${escapeHtml(r.name||'—')}</div>
+              <div class="bs-row-meta"><span style="font-family:'DM Mono',monospace">${escapeHtml(r.number||'')}</span></div>
+            </div>
+            <div class="bs-row-prog">${r.matched}/${r.txCount} koblet</div>
+            <span class="bs-row-chev">›</span>
+          </div>`;
+        } else {
+          html+=`<div class="bs-row" style="opacity:.8" onclick="openNewStatementUpload()">
+            <div class="bs-row-main">
+              <div class="bs-row-period" style="color:var(--muted)">${escapeHtml(r.name||'—')}</div>
+              <div class="bs-row-meta"><span style="font-family:'DM Mono',monospace">${escapeHtml(r.number||'')}</span></div>
+            </div>
+            <div class="bs-row-prog" style="color:var(--muted)">Ikke lastet opp</div>
+            <button class="btn btn-p btn-s" onclick="event.stopPropagation();openNewStatementUpload()">📄 Last opp</button>
+          </div>`;
+        }
+      });
+      html+=`</div>`;
+    });
+  });
+  if(groups.orphans.length){
+    html+=`<div style="font-size:13px;font-weight:800;color:var(--text);margin:16px 2px 6px">Historisk / uten konto</div><div class="card">`;
+    groups.orphans.forEach(o=>{
+      const s=o.s;
+      const prog=getStatementProgress(s.id);
+      const badge=statementStatusBadge(s);
+      const periodLabel=s.periodStart&&s.periodEnd
+        ?`${fmtDate(s.periodStart)} – ${fmtDate(s.periodEnd)}`:'(periode ukjent)';
+      const progLabel=prog.total===0?'Ingen transaksjoner':`${prog.matched}/${prog.total} koblet`;
+      html+=`<div class="bs-row" onclick="enterBankStatement('${s.id}')">
+        <div class="bs-row-main">
+          <div class="bs-row-period">${escapeHtml(periodLabel)}</div>
+          <div class="bs-row-meta">${escapeHtml(s.account||'Uten konto')} · ${escapeHtml(s.bankProvider||'')}</div>
+        </div>
+        <div class="bs-row-prog">${progLabel}</div>
+        <div class="bs-row-badge"><span class="bs-badge ${badge.cls}">${badge.label}</span></div>
+        <span class="bs-row-chev">›</span>
+      </div>`;
+    });
+    html+=`</div>`;
+  }
+  return uploadBtn+html;
 }
 
 // V2B: render the statement header (visible at top of scoped view)
