@@ -529,6 +529,12 @@ select.fi:focus{background-color:#fff}
 .bank-tx-card .btx-amount.in{color:var(--ok)}
 .bank-tx-dup{opacity:.55;border-style:dashed}
 .bank-tx-dup .btx-amount{text-decoration:line-through}
+.bank-tx-ambig{border-color:#f5a623;background:rgba(245,166,35,.06)}
+.bank-tx-card .btx-warn{margin-top:8px;font-size:11px;color:#f5a623;font-weight:700}
+.bank-tx-card .btx-match{margin-top:8px;font-size:10.5px;color:var(--muted);font-family:'DM Mono',monospace;word-break:break-word}
+.bank-tx-card .btx-choice{margin-top:8px;display:flex;gap:8px;flex-wrap:wrap}
+.bank-tx-card .btx-choice .btn-s{font-size:11.5px;padding:5px 10px}
+.bank-tx-card .btx-choice-on{background:var(--primary);color:#fff;border-color:var(--primary)}
 .forfallsdato-overdue{color:var(--danger);font-weight:600}
 .forfallsdato-today{color:#f5a623;font-weight:600}
 .forfallsdato-soon{color:var(--muted)}
@@ -1464,21 +1470,81 @@ function directionFromDescription(desc){
   if(!isOwnAccount(m[2])) return null;   // not our account → not our business
   return m[1].toLowerCase()==='til' ? 'out' : 'in';
 }
-// Account-scoped duplicate test — the ONE source of truth for BOTH the review
-// screen (showBankStatementResults) and the writer (confirmBankStatementImport).
-// A row is a duplicate only when an existing tx shares its bank reference AND its
-// account. Same ref + DIFFERENT account = the other leg of an internal transfer:
-// a distinct transaction that must import. (Divergence between these two checks
-// is what blocked the HOVED re-import — never reimplement this inline.)
-function isDuplicateBankTx(ref,konto,existing){
-  const r=(ref||'').trim();
-  if(!r) return false;
-  const k=normKonto(konto);
-  return (existing||[]).some(p=>{
-    const pref=((p.arkivref||'').trim()||(p.bankReference||'').trim());
-    if(pref!==r) return false;
-    return normKonto(p.bankkonto)===k;
-  });
+// ── BANK TX DEDUP IDENTITY ───────────────────────────────────────────────────
+// The ONE source of truth for BOTH the review screen (showBankStatementResults)
+// and the import preflight (confirmBankStatementImport). Divergence between two
+// copies of this test is what blocked the HOVED re-import — never reimplement it
+// inline.
+//
+// arkivref is a BATCH reference the bank reuses across distinct rows, so keying
+// identity on it silently dropped genuine transactions. Identity is now the
+// bank's per-row source number (nr.<N>), scoped by account + type. Rows with no
+// source number use a deterministic fallback and can only ever come back
+// AMBIGUOUS (human review) — never a proven duplicate, never a silent skip.
+//
+// STORAGE date and IDENTITY date are different concerns. The writer may invent a
+// storage date (dato||today()) for the record, but an identity must be stable
+// across time: bankTxIdentityDato NEVER calls today(). A row with no source date
+// drops the date from its key entirely, so the same dateless row re-scanned on a
+// later day still finds its stored twin and is held for review.
+function canonicalDirection(row){
+  const descDir=directionFromDescription(row.beskrivelse||row.rawDescription);
+  const aiDir=row.direction||((Number(row.belop)||0)<0?'out':'in');
+  return descDir||aiDir;                          // bank text overrides AI
+}
+function signedBelop(row){ const m=Math.abs(Number(row.belop)||0); return canonicalDirection(row)==='out'?-m:m; }
+// SOURCE IDENTITY date — ONLY a date actually present on the row. NEVER today(). Empty => no date.
+function bankTxIdentityDato(row){ return String(row.bookingDato||row.dato||''); }
+function bankTxTypeOf(desc){
+  const s=String(desc||'').trim();
+  if(/^Overføring innland/i.test(s))return'overforing_innland';
+  if(/^Kontoregulering/i.test(s))return'kontoregulering';
+  if(/^Giro/i.test(s))return'giro';
+  if(/^Varekjøp/i.test(s))return'varekjop';
+  if(/^Transaksj\.bedriftsk/i.test(s))return'bedriftskort';
+  if(/^Visa/i.test(s))return'visa';
+  if(/^Omkostninger/i.test(s))return'omkostninger';
+  if(/^(Skatt|Lønn)/i.test(s))return'skatt_lonn';
+  return'annet';
+}
+function bankTxSourceNr(desc){ const m=String(desc||'').match(/\bnr\.?\s*(\d{4,})/i); return m?m[1]:null; }
+function normDesc(s){ return String(s||'').replace(/\s+/g,' ').trim().toLowerCase(); }
+// Batch-aware: checks stored rows AND earlier rows of the SAME scan (batch/index).
+// Returns {status:'unique'|'duplicate'|'ambiguous', matchSource, reason, matchedIndex, matchedId, matchedRow}.
+function classifyIncomingBankTx(tx, konto, existing, batch, index){
+  const k=normKonto(konto), desc=tx.beskrivelse||tx.rawDescription;
+  const type=bankTxTypeOf(desc), nr=bankTxSourceNr(desc);
+  const R=(status,src,reason,mIdx,mId,mRow)=>({status,matchSource:src,reason:reason||null,matchedIndex:mIdx??null,matchedId:mId??null,matchedRow:mRow||null});
+  if(nr){
+    const s=(existing||[]).find(p=>normKonto(p.bankkonto)===k&&bankTxTypeOf(p.rawDescription)===type&&bankTxSourceNr(p.rawDescription)===nr);
+    if(s)return R('duplicate','stored','source_nr_match',null,s.id,s);
+    if(Array.isArray(batch))for(let j=0;j<index;j++){const b=batch[j];
+      if(bankTxTypeOf(b.beskrivelse||b.rawDescription)===type&&bankTxSourceNr(b.beskrivelse||b.rawDescription)===nr)
+        return R('duplicate','incoming_batch','source_nr_match',j,null,b);}
+    return R('unique','none');
+  }
+  // NUMBERLESS: only ever 'ambiguous' or 'unique' — never a proven 'duplicate'.
+  const amt=signedBelop(tx), nd=normDesc(desc), idDato=bankTxIdentityDato(tx);
+  const hasDate=idDato!=='';
+  const matches=(p)=> normKonto(p.bankkonto)===k
+    && bankTxTypeOf(p.rawDescription)===type
+    && signedBelop(p)===amt
+    && normDesc(p.rawDescription)===nd
+    && (hasDate ? bankTxIdentityDato(p)===idDato : true);   // DATELESS: omit date from the key
+  const s=(existing||[]).find(matches);
+  if(s)return R('ambiguous','stored','fallback_match',null,s.id,s);
+  if(Array.isArray(batch))for(let j=0;j<index;j++){const b=batch[j];
+    const bMatch = bankTxTypeOf(b.beskrivelse||b.rawDescription)===type
+      && signedBelop(b)===amt && normDesc(b.beskrivelse||b.rawDescription)===nd
+      && (hasDate ? bankTxIdentityDato(b)===idDato : true);
+    if(bMatch) return R('ambiguous','incoming_batch','fallback_match',j,null,b);}
+  return R('unique','none');
+}
+// Staleness key — includes the matched identity, so a match that moves to a
+// DIFFERENT stored row (or a different earlier row) reads as changed.
+function classificationKey(r){
+  if(!r)return 'MISSING';
+  return [r.status,r.matchSource,r.reason||'',r.matchedId||'',(r.matchedIndex??'')].join('|');
 }
 const WRITE_TO_PURCHASES=false;
 
@@ -9048,28 +9114,56 @@ function showBankStatementResults(data){
     el.innerHTML=`<div style="background:#fdecea;border:1.5px solid #f5a0a0;border-radius:10px;padding:14px;font-size:13px;color:var(--danger)">Ingen transaksjoner funnet. Sjekk at PDF er en kontoutskrift (ikke en faktura eller annen type dokument).</div>`;
     return;
   }
-  const all=dbAll('bankTransactions');
-  let dupCount=0,totalIn=0,totalOut=0;
-  const cards=txs.map(tx=>{
-    const ref=(tx.bankReference||'').trim();
-    const isDup=isDuplicateBankTx(ref,data.kontonummer,all);
+  // ONE snapshot for the whole review loop — never a per-row dbAll.
+  const reviewExisting=dbAll('bankTransactions');
+  let dupCount=0,ambigCount=0,reReviewCount=0,totalIn=0,totalOut=0,importable=0;
+  const cards=txs.map((tx,i)=>{
+    const _r=classifyIncomingBankTx(tx, data.kontonummer, reviewExisting, data.transaksjoner, i);
+    tx._reviewClassification=_r;                  // in-memory only; never persisted
+    // NOTE: _needsReReview is owned by the import preflight state machine. The
+    // render never clears it — it only reports it.
+    const isDup=_r.status==='duplicate';
+    const isAmbig=_r.status==='ambiguous';
+    const decision=isAmbig?(tx._decision||'skip'):null;   // ambiguous defaults to skip
+    const willImport=!isDup&&(!isAmbig||decision==='import');
     if(isDup)dupCount++;
-    const dir=tx.direction||((+tx.belop||0)<0?'out':'in');
+    if(isAmbig)ambigCount++;
+    if(tx._needsReReview===true)reReviewCount++;
+    if(willImport)importable++;
+    const dir=canonicalDirection(tx);
     const amt=Math.abs(parseFloat(tx.belop)||0);
+    // Reconciliation totals count every row the scan captured except proven
+    // duplicates — unchanged from the pre-classifier behaviour, and deliberately
+    // independent of the user's per-row ambiguous decisions.
     if(!isDup){if(dir==='out')totalOut+=amt;else totalIn+=amt;}
     const sign=dir==='out'?'-':'+';
-    return `<div class="bank-tx-card${isDup?' bank-tx-dup':''}">
+    const ref=(tx.bankReference||'').trim();
+    const nr=bankTxSourceNr(tx.beskrivelse||tx.rawDescription);
+    let flag='',controls='';
+    if(isDup&&_r.matchSource==='stored')flag=' · ⚠ DUPLIKAT (hopper over)';
+    else if(isDup&&_r.matchSource==='incoming_batch')flag=' · ⚠ Mistenkt dobbel i skanningen (hopper over)';
+    else if(isAmbig)flag=' · ⚠ Mulig duplikat — bekreft';
+    if(isAmbig){
+      controls=`<div class="btx-choice">
+        <button class="btn btn-s${decision==='skip'?' btx-choice-on':''}" onclick="setBankRowDecision(${i},'skip')">Hopp over</button>
+        <button class="btn btn-s${decision==='import'?' btx-choice-on':''}" onclick="setBankRowDecision(${i},'import')">Importer separat</button>
+      </div>`;
+    }
+    const m=_r.matchedRow;
+    const matchBlock=m?`<div class="btx-match">Ligner: ${fmtDate(bankTxIdentityDato(m)||'')||'–'} · ${fmtNOK(signedBelop(m))} · ${escapeHtml(String(m.beskrivelse||m.rawDescription||'–')).slice(0,80)}${bankTxSourceNr(m.beskrivelse||m.rawDescription)?' · nr. '+escapeHtml(bankTxSourceNr(m.beskrivelse||m.rawDescription)):' · uten nr.'}</div>`:'';
+    const warnBlock=tx._needsReReview===true?`<div class="btx-warn">⚠ Data endret — se over igjen. Valg tilbakestilt til «Hopp over».</div>`:'';
+    return `<div class="bank-tx-card${isDup?' bank-tx-dup':''}${isAmbig?' bank-tx-ambig':''}">
       <div class="btx-row">
         <div style="flex:1;min-width:0">
           <div class="btx-date">${fmtDate(tx.dato||'')||'–'}${tx.bookingDato&&tx.bookingDato!==tx.dato?' · bokf. '+fmtDate(tx.bookingDato):''}</div>
           <div class="btx-desc">${escapeHtml(tx.beskrivelse||tx.motpart||'–')}</div>
-          <div class="btx-meta">${ref?'Ref: '+escapeHtml(ref):'Ingen ref'}${tx.motpart?' · '+escapeHtml(tx.motpart):''}${isDup?' · ⚠ DUPLIKAT (hopper over)':''}</div>
+          <div class="btx-meta">${nr?'nr. '+escapeHtml(nr):(ref?'Ref: '+escapeHtml(ref):'Ingen ref')}${tx.motpart?' · '+escapeHtml(tx.motpart):''}${flag}</div>
         </div>
         <div class="btx-amount ${dir}">${sign}${fmtNOK(amt)}</div>
       </div>
+      ${warnBlock}${matchBlock}${controls}
     </div>`;
   }).join('');
-  const importable=txs.length-dupCount;
   // Reconciliation guard (V1 Session 1.5)
   let reconcileBlock='';
   let canImport=true;
@@ -9115,15 +9209,30 @@ function showBankStatementResults(data){
         <span style="color:#9eddb1">↗ Inn: ${fmtNOK(totalIn)}</span>
         <span style="color:#ffbcbc">↘ Ut: ${fmtNOK(totalOut)}</span>
         ${dupCount>0?`<span style="color:#ffd29a">⚠ ${dupCount} duplikat${dupCount===1?'':'er'}</span>`:''}
+        ${ambigCount>0?`<span style="color:#ffd29a">⚠ ${ambigCount} mulig${ambigCount===1?'':'e'} duplikat${ambigCount===1?'':'er'}</span>`:''}
       </div>
     </div>
+    ${reReviewCount>0?`<div style="background:rgba(245,166,35,.12);border:1.5px solid #f5a623;border-radius:10px;padding:12px;margin-bottom:12px;font-size:12.5px">
+      <div style="font-weight:700;color:#f5a623;margin-bottom:4px">⚠ ${reReviewCount} rad${reReviewCount===1?'':'er'} må ses over igjen</div>
+      <div>Data endret eller mangler gjennomgang siden forrige visning. Ingen rader ble importert. Bekreft valgene på nytt.</div>
+    </div>`:''}
     ${reconcileBlock}
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:10px;flex-wrap:wrap">
-      <div style="font-size:12px;color:var(--muted)">${importable} klar${importable===1?'':'e'} for import. Duplikater hoppes over automatisk.</div>
+      <div style="font-size:12px;color:var(--muted)">${importable} klar${importable===1?'':'e'} for import. Duplikater hoppes over automatisk.${ambigCount>0?' Mulige duplikater hoppes over hvis du ikke velger «Importer separat».':''}</div>
       <button class="btn btn-p" onclick="${canImport?'confirmBankStatementImport()':'confirmBankStatementOverride()'}" ${importable===0?'disabled':''} style="${!canImport?'background:#999;color:#fff':''}">${canImport?`💾 Importer ${importable} transaksjon${importable===1?'':'er'}`:`⚠ Import blokkert — krever bekreftelse`}</button>
     </div>
     <div class="bank-tx-list">${cards}</div>
   `;
+}
+
+// Per-row decision for an ambiguous row. In-memory only — lives on the scanned
+// row inside bankScanData, which IS the array the import loop iterates.
+function setBankRowDecision(i,val){
+  if(!bankScanData||!Array.isArray(bankScanData.transaksjoner))return;
+  const tx=bankScanData.transaksjoner[i];
+  if(!tx)return;
+  tx._decision=(val==='import')?'import':'skip';
+  showBankStatementResults(bankScanData);
 }
 
 async function confirmBankStatementImport(){
@@ -9131,6 +9240,32 @@ async function confirmBankStatementImport(){
   if(!data||!Array.isArray(data.transaksjoner)||data.transaksjoner.length===0){
     showToast('Ingen transaksjoner å importere','err');return;
   }
+
+  // ── PHASE 1: PREFLIGHT — NO WRITES OF ANY KIND ─────────────────────────────
+  // Classify every row against ONE fresh snapshot and revalidate against what the
+  // user actually reviewed. If ANY row is missing a review classification or its
+  // classification changed, the WHOLE batch is held: zero inserts, back to review.
+  // This runs before the bankStatement doc is touched, so a held batch leaves no
+  // orphan book behind.
+  const freshExisting=dbAll('bankTransactions');
+  const importPlan=[]; let heldForReReview=0;
+  for(let i=0;i<data.transaksjoner.length;i++){
+    const tx=data.transaksjoner[i];
+    const _fresh=classifyIncomingBankTx(tx, data.kontonummer, freshExisting, data.transaksjoner, i);
+    const _prev=tx._reviewClassification;
+    if(!_prev || classificationKey(_fresh)!==classificationKey(_prev)){
+      tx._needsReReview=true; tx._decision='skip';   // stale 'import' cannot survive a change
+      heldForReReview++;
+    } else { tx._needsReReview=false; }
+    importPlan.push({ tx, index:i, cls:_fresh });
+  }
+  if(heldForReReview>0){
+    showBankStatementResults(data);                  // held rows keep _needsReReview=true
+    showToast(`${heldForReReview} rad${heldForReReview===1?'':'er'} må ses over igjen — ingen rader importert`,'err');
+    return;                                          // MUST return before any write
+  }
+
+  // ── PHASE 2: EXECUTE — whole batch passed preflight ────────────────────────
   const importBatchId=uid();
 
   // V2C: create the bankStatement doc BEFORE the transaction loop.
@@ -9191,16 +9326,19 @@ async function confirmBankStatementImport(){
   }
   console.log('[V2C] Created bankStatement',newStatementId,'for batch',importBatchId);
 
-  const all=dbAll('bankTransactions');
   let saved=0,skipped=0,errors=0;
-  for(const tx of data.transaksjoner){
+  // Runs the plan built in preflight — no reclassify, no snapshot reload.
+  for(const item of importPlan){
+    const {tx, cls}=item;
     const ref=(tx.bankReference||'').trim();
-    if(isDuplicateBankTx(ref,data.kontonummer,all)){skipped++;continue;}
+    if(cls.status==='duplicate'){skipped++;continue;}
+    if(cls.status==='ambiguous' && (tx._decision||'skip')==='skip'){skipped++;continue;}
+    // STORAGE date normalization — unchanged. This is the record, NOT the identity;
+    // the classifier never reads it (see bankTxIdentityDato).
     const dato=tx.dato||today();
     const period=dato.length>=7?dato.slice(0,7):'';
-    const aiDir=tx.direction||((+tx.belop||0)<0?'out':'in');
     const descDir=directionFromDescription(tx.beskrivelse);
-    const dir=descDir||aiDir;                       // bank text overrides AI
+    const dir=canonicalDirection(tx);               // the ONE canonical direction
     const dirConflict=!!(descDir&&tx.direction&&descDir!==tx.direction);
     if(dirConflict){
       console.warn('[bank-import] DIRECTION CONFLICT — bank text overrides AI:',
