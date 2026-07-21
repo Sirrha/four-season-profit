@@ -6294,15 +6294,29 @@ function renderBetalinger(){
       ${pill('review','Klar for gjennomgang')}
     </div>`;
 
+  // Receipt counts per bank tx — ONE pass over documents, O(1) per row. A per-row
+  // getDocumentsForBankTx() would be O(rows × (T+D)) because dbFind is a linear scan,
+  // and this render re-runs on every search keystroke (200ms debounce).
+  // Deliberately NOT filtering status==='archived', so this count always agrees with what
+  // renderDocumentsSection lists in the expand panel (pre-existing behaviour, unchanged).
+  const _rcpByTx=new Map();
+  for(const d of (dbAll('documents')||[])){
+    if(d.docType!=='receipt'||!d.linkedBankTransactionId)continue;
+    _rcpByTx.set(d.linkedBankTransactionId,(_rcpByTx.get(d.linkedBankTransactionId)||0)+1);
+  }
+
   // Transaction list (V1A.2 mechanics intact)
   const rowHtml=tx=>{
     const status=getBankTxStatus(tx);
     const isIn=tx.direction==='in';
     const amt=`${isIn?'+':'-'}${fmtNOK(tx.belop||0)}`;
     const supplier=escapeHtml(getTxDisplayDescription(tx));
-    const linkInfo=Array.isArray(tx.linkedeFakturaer)&&tx.linkedeFakturaer.length>0
-      ?`${tx.linkedeFakturaer.length} faktura${tx.linkedeFakturaer.length===1?'':'er'}`
-      :'—';
+    const _nInv=Array.isArray(tx.linkedeFakturaer)?tx.linkedeFakturaer.length:0;
+    const _nRcp=_rcpByTx.get(tx.id)||0;
+    const _parts=[];
+    if(_nInv>0)_parts.push(`${_nInv} faktura${_nInv===1?'':'er'}`);
+    if(_nRcp>0)_parts.push(`${_nRcp} kvittering${_nRcp===1?'':'er'}`);
+    const linkInfo=_parts.length?_parts.join(' · '):'—';
     const statusLabel={matched:'Matchet',unmatched:'Ikke matchet',review:'Klar for gjennomgang'}[status];
     const isExpanded=window._brExpanded===tx.id;
     const markup=`<div class="br-row ${isExpanded?'br-active':''}" onclick="toggleBrRow('${tx.id}')">
