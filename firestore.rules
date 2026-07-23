@@ -1,0 +1,13 @@
+// CURRENT PRODUCTION RULES — OPEN. Captured into version control 2026-07-23 (M0).
+// These are permissive by design at this stage: the app has NO authentication and
+// depends on open access. Restrictive rules come later (M7) and ONLY after auth ships
+// and the full test matrix passes. DO NOT tighten and deploy this file casually —
+// a wrong rule locks every user out, including the owner.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /tenants/{tenantId}/{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

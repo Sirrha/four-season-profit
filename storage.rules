@@ -1,0 +1,14 @@
+// CURRENT PRODUCTION ACCESS POSTURE — OPEN. Captured into version control 2026-07-23 (M0).
+// RECONSTRUCTED locally for M0; not captured verbatim from the deployed ruleset.
+// Herish confirmed the deployed Storage posture is permissive (allow read, write: if true),
+// but the exact deployed text was not recorded. Verify against the Firebase Console
+// before ever using this file as a deploy source. Restrictive rules come later (M7).
+// DO NOT deploy from this file yet.
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if true;
+    }
+  }
+}
