@@ -98,9 +98,38 @@ If any account already has **non-empty** claims → **abort unless `--allow-over
 | _(none)_ | Full preflight + dry-run diff for all five. No writes. |
 | `--confirm` | Perform the writes after the write-gate (§7) passes. |
 | `--only=<email>` | Restrict the write set to one account. Preflight + post-write verification still cover all five. |
-| `--allow-overwrite` | Permit writing over accounts that already hold non-empty claims. |
+| `--allow-overwrite` | Permit overwriting a **selected write target** whose existing non-empty claims differ from proposed. Applies to write targets only — it never waives an untouched-account mismatch (see *Account classification* below). |
 
 Rollback mode (§10) uses a **disjoint** flag set and rejects combination with the above.
+
+### Account classification during a run
+
+After all five accounts are assessed (§5) but **before** any snapshot (§7) or any write, each identity is classified. The rules differ for accounts the run intends to write versus those an `--only` run deliberately leaves alone.
+
+**TARGET accounts** — all five in a normal run; only the `--only` selection in an `--only` run:
+
+| Current claims | Outcome |
+|---|---|
+| `== proposed` | no-op |
+| empty | eligible to write |
+| `!= proposed`, non-empty | require `--allow-overwrite` |
+
+**UNTOUCHED accounts** — the non-selected accounts in an `--only` run:
+
+| Current claims | Outcome |
+|---|---|
+| `== proposed` | acceptable |
+| empty | acceptable — staged provisioning is valid; empty is **not** a mismatch |
+| `!= proposed`, non-empty | **ABORT UNCONDITIONALLY** |
+
+Rules:
+
+- `--allow-overwrite` applies **only** to selected write targets; it **never** waives an untouched-account mismatch.
+- On an untouched-account mismatch, the tool prints the account email, its current claims, and its proposed claims, then aborts with **exit code 4**.
+- The abort occurs **before** any rollback snapshot is created and before any write — so no snapshot exists and no claim has changed.
+- **Rationale:** the tool already reads and assesses all five identities. Proceeding while knowingly leaving an untouched account in an unexpected non-empty state — and still reporting success — would misreport the authorization state. That must be a loud stop.
+
+**Implementation note (for the code step):** this classification must run after the full five-person assessment and before snapshot creation or any write. The exact function location may follow the code structure; the behaviour and ordering are mandatory, the location is not.
 
 ---
 
