@@ -1,0 +1,18 @@
+{
+  "name": "sormena-provision-claims",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sormena Auth M1 - set Firebase Auth custom claims on the five approved accounts. Implements docs/architecture/auth-m1-provisioning.md. Isolated from scripts/migration (own package.json / own node_modules).",
+  "main": "provision.js",
+  "type": "commonjs",
+  "scripts": {
+    "dry-run": "node provision.js",
+    "note": "Default run is DRY-RUN (no writes). Requires GOOGLE_APPLICATION_CREDENTIALS. Do not npm install or run without explicit approval - see the design doc."
+  },
+  "dependencies": {
+    "firebase-admin": "12.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
