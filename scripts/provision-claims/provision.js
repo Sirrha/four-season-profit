@@ -7,8 +7,8 @@
  * SOURCE OF TRUTH: docs/architecture/auth-m1-provisioning.md (committed 4a3ce17, pushed).
  * This tool implements that document. Section references (SS3, SS5, ...) point at it.
  *
- * What it does: sets Firebase Auth custom claims { role, tenantId, ansattId } on the five
- * approved accounts, or restores a snapshot. It NEVER creates or deletes Auth accounts,
+ * What it does: sets Firebase Auth custom claims { role, tenantId, ansattId } on the
+ * approved accounts (see IDENTITY_MAP), or restores a snapshot. It NEVER creates or deletes Auth accounts,
  * never distributes credentials, never touches Firestore data (it only READS `ansatte`),
  * and never prints secrets.
  *
@@ -45,6 +45,7 @@ const IDENTITY_MAP = [
   { email: 'aboudalkreman@gmail.com', navn: 'Aboud Alkreman',  role: 'employee' },
   { email: 'mariasirota9@gmail.com',  navn: 'Maria Syrota',    role: 'employee' },
   { email: 'yuossefahmd202@gmail.com', navn: 'Yussef Ahmad',   role: 'employee' },
+  { email: 'anador7777@gmail.com',    navn: 'Anastasiia Doroshenko', role: 'employee' },
 ];
 
 const ROLLBACK_DIR = path.join(os.homedir(), 'sormena-provision', 'rollback');
@@ -147,7 +148,7 @@ async function loadAnsatte(db) {
   });
 }
 
-// Full five-person preflight. Runs for ALL FIVE regardless of --only. Collects EVERY failure,
+// Full preflight over every approved identity. Runs for the WHOLE approved set regardless of --only. Collects EVERY failure,
 // returns them all so the caller can print them and abort with zero writes.
 async function runPreflight(db, auth) {
   const ansatte = await loadAnsatte(db);
@@ -188,13 +189,13 @@ async function runPreflight(db, auth) {
     records.push(rec);
   }
 
-  // P3 - all five resolved ansattId unique.
+  // P3 - all resolved ansattId unique across the approved set.
   const ids = records.map(function (r) { return r.ansattId; }).filter(Boolean);
   const idSet = new Set(ids);
   if (idSet.size !== ids.length)
-    failures.push('[P3] resolved ansattId values are not unique across the five identities.');
+    failures.push('[P3] resolved ansattId values are not unique across the approved identities.');
 
-  // P4 - all five emails unique.
+  // P4 - all emails in the approved map unique.
   const emails = IDENTITY_MAP.map(function (p) { return p.email; });
   if (new Set(emails).size !== emails.length)
     failures.push('[P4] emails are not unique in the identity map.');
@@ -265,7 +266,7 @@ async function provisionMode(args) {
   const svc = initAdmin(cred);
 
   line();
-  console.log('PREFLIGHT (all five, always - SS5)');
+  console.log('PREFLIGHT (all approved identities, always - SS5)');
   line();
   const pf = await runPreflight(svc.db, svc.auth);
 
@@ -274,7 +275,7 @@ async function provisionMode(args) {
     pf.failures.forEach(function (f) { console.log('  ' + f); });
     die(4, pf.failures.length + ' preflight failure(s).');
   }
-  console.log('All six preflight checks passed for all five identities.');
+  console.log('All six preflight checks passed for all approved identities.');
 
   // Attach proposed claims and classify each identity.
   pf.records.forEach(function (r) {
@@ -288,7 +289,7 @@ async function provisionMode(args) {
     r.untouchedMismatch = !r.inTarget && !r.alreadyCorrect && !isEmptyClaims(r.previousClaims);
   });
 
-  // SS6 untouched-account integrity gate. Runs after the full five-person assessment and
+  // SS6 untouched-account integrity gate. Runs after the full approved-identity assessment and
   // BEFORE any snapshot creation or write. It aborts UNCONDITIONALLY - --allow-overwrite
   // applies only to write targets and NEVER waives an untouched-account mismatch.
   const untouchedMismatches = pf.records.filter(function (r) { return r.untouchedMismatch; });
@@ -319,7 +320,7 @@ async function provisionMode(args) {
     console.log('\n--allow-overwrite is set: these will be overwritten.');
   }
 
-  // Show the full plan (all five).
+  // Show the full plan (all approved identities).
   line();
   console.log('PLAN (' + (args.confirm ? 'WRITE' : 'DRY RUN - no writes') + ')');
   line();
@@ -354,16 +355,16 @@ async function provisionMode(args) {
     console.log('  wrote ' + r.navn + ' <' + r.email + '>');
   }
 
-  // SS9 post-write verification - ALWAYS all five.
+  // SS9 post-write verification - ALWAYS every approved identity.
   const verdict = await verifyAll(svc.auth, pf.records, function (r) { return !!r.written; });
   console.log('\nRollback snapshot for this run: ' + snapPath);
   process.exit(verdict ? 0 : 5);
 }
 
-// SS9 - re-read all five; WRITTEN must equal proposed, UNTOUCHED must equal captured previous.
+// SS9 - re-read every approved identity; WRITTEN must equal proposed, UNTOUCHED must equal captured previous.
 async function verifyAll(auth, records, wasWritten) {
   line();
-  console.log('POST-WRITE VERIFICATION (all five, always - SS9)');
+  console.log('POST-WRITE VERIFICATION (all approved identities, always - SS9)');
   line();
   let allPass = true;
   for (const r of records) {
@@ -405,14 +406,14 @@ async function rollbackMode(args) {
   if (snap.projectId !== EXPECTED_PROJECT_ID) errs.push('projectId mismatch');
   if (snap.tenantId !== TENANT_ID) errs.push('tenantId mismatch');
   if (typeof snap.createdAt !== 'string' || isNaN(Date.parse(snap.createdAt))) errs.push('createdAt is not a valid ISO timestamp');
-  if (!Array.isArray(snap.entries) || snap.entries.length !== 5) errs.push('entries must be exactly 5');
+  if (!Array.isArray(snap.entries) || snap.entries.length !== IDENTITY_MAP.length) errs.push('entries must be exactly ' + IDENTITY_MAP.length);
 
   if (Array.isArray(snap.entries)) {
     const emails = snap.entries.map(function (e) { return e.email; });
     const uids = snap.entries.map(function (e) { return e.uid; });
     if (new Set(emails).size !== emails.length) errs.push('snapshot emails are not unique');
     if (new Set(uids).size !== uids.length) errs.push('snapshot uids are not unique');
-    // Emails must match the approved map EXACTLY (same set of five).
+    // Emails must match the approved map EXACTLY (the full approved set).
     const approved = new Set(IDENTITY_MAP.map(function (p) { return p.email; }));
     if (emails.length !== approved.size || !emails.every(function (e) { return approved.has(e); }))
       errs.push('snapshot emails do not match the approved identity map exactly');
@@ -475,9 +476,9 @@ async function rollbackMode(args) {
     console.log('  restored ' + e.navn + ' <' + e.email + '>');
   }
 
-  // Re-read all five, PASS/FAIL + verdict.
+  // Re-read every approved identity, PASS/FAIL + verdict.
   line();
-  console.log('POST-ROLLBACK VERIFICATION (all five)');
+  console.log('POST-ROLLBACK VERIFICATION (all approved identities)');
   line();
   let allPass = true;
   for (const e of snap.entries) {
