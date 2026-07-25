@@ -310,7 +310,7 @@ One-shot data-transformasjoner gated av Firestore `_meta/migrations`-dokumentet.
 
 ## Operasjonelle scripts (utenfor index.html)
 
-- **`scripts/provision-claims/`** — Auth M1 custom-claims-provisjonering (Node, `firebase-admin`, egen `package.json` og isolerte avhengigheter fra `scripts/migration/`). Setter `{role, tenantId, ansattId}` på de fem godkjente Auth-kontoene og leser kun `tenants/four-season-as/ansatte` med eksakt navn-match. Standardmodus er dry-run; skriving krever `--confirm`. Verktøyet har hard rollback-snapshot-gate, etterkontroll av alle fem kontoer og kjørbar `--rollback`-modus. Det oppretter ikke Auth-kontoer. Implementerer `docs/architecture/auth-m1-provisioning.md` og kjøres manuelt under tilsyn — det er ikke en del av selve appen.
+- **`scripts/provision-claims/`** — Auth M1 custom-claims-provisjonering (Node, `firebase-admin`, egen `package.json` og isolerte avhengigheter fra `scripts/migration/`). Setter `{role, tenantId, ansattId}` på de seks godkjente Auth-kontoene og leser kun `tenants/four-season-as/ansatte` med eksakt navn-match. Standardmodus er dry-run; skriving krever `--confirm`. Verktøyet har hard rollback-snapshot-gate, etterkontroll av alle seks kontoer og kjørbar `--rollback`-modus. Det oppretter ikke Auth-kontoer. Implementerer `docs/architecture/auth-m1-provisioning.md` og kjøres manuelt under tilsyn — det er ikke en del av selve appen.
 
 ## Hvordan bruke dette dokumentet
 
