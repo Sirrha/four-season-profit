@@ -2,7 +2,7 @@
   "name": "sormena-provision-claims",
   "version": "1.0.0",
   "private": true,
-  "description": "Sormena Auth M1 - set Firebase Auth custom claims on the five approved accounts. Implements docs/architecture/auth-m1-provisioning.md. Isolated from scripts/migration (own package.json / own node_modules).",
+  "description": "Sormena Auth M1 - set Firebase Auth custom claims on the approved accounts. Implements docs/architecture/auth-m1-provisioning.md. Isolated from scripts/migration (own package.json / own node_modules).",
   "main": "provision.js",
   "type": "commonjs",
   "scripts": {
