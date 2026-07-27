@@ -45,12 +45,21 @@ Everything below this line is **target architecture** — the state M2 will buil
 - Firebase Auth may attach and resolve.
 - The Firestore and Storage client objects may be constructed, **provided construction performs no access**.
 
-**No** Firestore read, listener attach, write, Storage access, migration, or tenant-data operation may occur until **all** of the following have succeeded, in order:
+The initialization invariant has three tiers:
 
-a. a Firebase user exists;
-b. token claims have been force-refreshed (`getIdTokenResult(true)`) and validated;
-c. `tenants/four-season-as/ansatte/{ansattId}` exists, is active, and has a valid `navn`;
-d. `currentUser` has been constructed from the above.
+1. Before a Firebase user exists and token claims have been force-refreshed and validated:
+   no Firestore read, listener, write, Storage access, migration, or tenant-data operation
+   may occur.
+
+2. After the Firebase user and claims are validated, exactly one pre-identity Firestore
+   operation is permitted: a single `.get()` of
+   `tenants/four-season-as/ansatte/{ansattId}` — never a listener. This is the read that
+   discovers and validates the employee record.
+
+3. Until that ansatte document is validated — it exists, `aktiv !== false`, and `navn` is
+   non-empty — and `currentUser` has been constructed, no other Firestore read, listener,
+   write, Storage access, migration, or tenant-data operation may occur. The 17 collection
+   listeners attach only after `currentUser` exists.
 
 **Non-hang invariant.** Every terminal state leaves the loading spinner and shows a retry-or-logout screen. No state may leave the spinner visible indefinitely. No partially initialized application may be shown.
 
