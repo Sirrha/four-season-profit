@@ -32,6 +32,13 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 .ld-text{color:rgba(255,255,255,.6);font-size:13px}
 @keyframes spin{to{transform:rotate(360deg)}}
 
+/* ── STARTUP ERROR (auth-m2 slice 1) ── */
+#startup-error{position:fixed;inset:0;background:var(--primary);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:30px 20px;text-align:center}
+#startup-error.hidden{display:none}
+.se-title{color:#fff;font-size:18px;font-weight:700;max-width:420px}
+.se-detail{color:rgba(255,255,255,.6);font-size:13px;line-height:1.5;max-width:420px;word-break:break-word}
+.se-retry{background:var(--accent);color:#fff;border:0;border-radius:var(--r);padding:12px 28px;font-family:'Sora',sans-serif;font-size:15px;font-weight:600;cursor:pointer;margin-top:6px}
+
 /* ── SYNC INDICATOR ── */
 .sync-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);display:inline-block;margin-right:5px}
 .sync-dot.syncing{animation:pulse .8s ease infinite}
@@ -643,6 +650,16 @@ select.fi:focus{background-color:#fff}
   <div class="ld-logo">Four <span>Season</span> AS</div>
   <div class="ld-spin"></div>
   <div class="ld-text" id="ld-text">Kobler til Firebase…</div>
+</div>
+
+<!-- ══════════════════════════════════════
+     STARTUP ERROR (auth-m2 slice 1)
+     Dormant in Gate 1A — retry is wired in Gate 1B.
+══════════════════════════════════════ -->
+<div id="startup-error" class="hidden">
+  <div class="se-title" id="startup-error-title">Kunne ikke laste data</div>
+  <div class="se-detail" id="startup-error-detail"></div>
+  <button class="se-retry" id="startup-error-retry" type="button">Prøv igjen</button>
 </div>
 
 <!-- ══════════════════════════════════════
@@ -1394,7 +1411,16 @@ function initFirebase(cfg){
   }
 }
 
-const firstSnapshotSeen={};  // per-collection first-snapshot flag (phase 2b-fix)
+// ── Startup coordinator state (auth-m2 slice 1) ──
+// Replaces the former per-collection boolean map, which could not express 'failed' and so left
+// an errored listener indistinguishable from one still loading. STARTUP_COLS is the single
+// source for the 17 collections. See docs/architecture/auth-m2-startup-gating.md.
+let startupGeneration=0;      // monotonic attempt token; defeats stale callbacks
+let startupSettled=false;     // terminal latch — exactly one outcome per attempt
+let startupTimer=null;        // the single 30 s timeout handle
+const startupState={};        // col -> 'pending' | 'ready' | 'failed'
+const STARTUP_TIMEOUT_MS=30000;
+const STARTUP_COLS=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter','payments','bankTransactions','bankStatements','bankAccounts','expenses','recurring_templates','expense_taxonomy','documents'];
 
 // Phase 2f.1c: gate primary purchases writes. true = dual-write today (purchases + mirror).
 // 2f.1d flips this to false → mirror becomes the only write target; purchases freezes as a
@@ -1549,28 +1575,53 @@ function classificationKey(r){
 }
 const WRITE_TO_PURCHASES=false;
 
+// One coordinated, retry-safe startup attempt (auth-m2 slice 1). Every attempt — initial and
+// each retry — increments the generation, reseeds state, resets LOCAL, arms exactly one 30 s
+// timeout, and creates exactly one listener set. settleStartup() guarantees one outcome.
 function startListeners(){
-  // Reset per-collection flags so re-starting listeners (tenant switch, etc.) works.
-  Object.keys(firstSnapshotSeen).forEach(k=>delete firstSnapshotSeen[k]);
-  const cols=['products','purchases','sales','svinn','leverandorer','dagsalg','innboks','ansatte','vakter','payments','bankTransactions','bankStatements','bankAccounts','expenses','recurring_templates','expense_taxonomy','documents'];
-  cols.forEach(col=>{
-    listeners[col]=tenantCol(col).onSnapshot(snap=>{
-      LOCAL[col]=snap.docs.map(d=>({id:d.id,...d.data()}));
-      // Fire showApp() exactly once — when the FIRST snapshot of EVERY collection has landed.
-      // Subsequent snapshots only re-render the active page; previously this re-fired showApp()
-      // on every write, which created the Phase 2b backfill duplication storm (74afaba).
-      if(!firstSnapshotSeen[col]){
-        firstSnapshotSeen[col]=true;
-        if(cols.every(c=>firstSnapshotSeen[c])){
-          showApp();
+  stopListeners();
+  const gen=++startupGeneration;
+  startupSettled=false;
+  clearTimeout(startupTimer);
+  startupTimer=null;
+  STARTUP_COLS.forEach(col=>{startupState[col]='pending'});
+  resetLocalCollections();
+  document.getElementById('startup-error').classList.add('hidden');
+  document.getElementById('loading-screen').classList.remove('hidden');
+  document.getElementById('ld-text').textContent='Laster data…';
+  startupTimer=setTimeout(()=>{
+    if(gen!==startupGeneration)return;
+    settleStartup('timeout');
+  },STARTUP_TIMEOUT_MS);
+  try{
+    STARTUP_COLS.forEach(col=>{
+      listeners[col]=tenantCol(col).onSnapshot(snap=>{
+        if(gen!==startupGeneration)return;
+        LOCAL[col]=snap.docs.map(d=>({id:d.id,...d.data()}));
+        // First 'ready' per collection; all 17 ready → APP_READY exactly once. Subsequent
+        // snapshots only re-render the active page (Phase 2b duplication-storm guard, 74afaba).
+        if(startupState[col]!=='ready'){
+          startupState[col]='ready';
+          if(STARTUP_COLS.every(c=>startupState[c]==='ready')){
+            settleStartup('ready');
+          }
         }
-      }
-      renderIfActive(col);
-      setSynced();
-    },err=>{
-      showToast('Firebase-feil: '+err.message,'err');
+        renderIfActive(col);
+        setSynced();
+      },err=>{
+        if(gen!==startupGeneration)return;
+        if(startupSettled){
+          // Post-APP_READY live-listener error: surface it, keep the running app up.
+          showToast('Firebase-feil ('+col+'): '+err.message,'err');
+          return;
+        }
+        startupState[col]='failed';
+        settleStartup('error',{col,code:err.code,message:err.message});
+      });
     });
-  });
+  }catch(e){
+    settleStartup('error',{col:'(registration)',message:e.message});
+  }
 }
 
 let _appShown=false;  // belt-and-braces guard against re-entry into showApp() (phase 2b-fix)
@@ -1593,6 +1644,77 @@ function showApp(){
     goTo('oversikt');
   }
 }
+
+// ─────────────────────────────────────────
+// STARTUP COORDINATOR HELPERS (auth-m2 slice 1)
+// ─────────────────────────────────────────
+
+// Invoke and drop every stored unsubscribe. One failing unsubscribe must not abort the sweep.
+function stopListeners(){
+  Object.keys(listeners).forEach(col=>{
+    const un=listeners[col];
+    if(typeof un==='function'){
+      try{un()}catch(e){console.error('[startup] unsubscribe failed for '+col,e)}
+    }
+  });
+  listeners={};
+}
+
+// Re-empty every collection in place. Keys are never deleted — dbFind() dereferences
+// LOCAL[col] without a guard, so a missing key would throw at render time.
+function resetLocalCollections(){
+  STARTUP_COLS.forEach(col=>{LOCAL[col]=[]});
+}
+
+// kind: 'error' | 'timeout'. detail is optional and may be missing any field.
+function showStartupError(kind,detail){
+  const d=detail||{};
+  const t=document.getElementById('startup-error-title');
+  const dt=document.getElementById('startup-error-detail');
+  if(t)t.textContent=kind==='timeout'?'Tidsavbrudd under innlasting':'Kunne ikke laste data';
+  if(dt){
+    const parts=[];
+    if(kind==='timeout'){
+      parts.push('Ingen respons innen '+Math.round(STARTUP_TIMEOUT_MS/1000)+' sekunder.');
+    }
+    if(d.col)parts.push('Kolleksjon: '+d.col);
+    if(d.code)parts.push('Kode: '+d.code);
+    if(d.message)parts.push(d.message);
+    if(!parts.length)parts.push('Ukjent feil under oppstart.');
+    dt.textContent=parts.join(' · ');
+  }
+  const ov=document.getElementById('startup-error');
+  if(ov)ov.classList.remove('hidden');
+}
+
+// Single terminal settlement. Exactly one outcome per attempt.
+function settleStartup(outcome,detail){
+  if(startupSettled)return;
+  startupSettled=true;
+  clearTimeout(startupTimer);
+  startupTimer=null;
+  if(outcome==='ready'){
+    // Generation is NOT incremented — the winning listener set keeps its generation so its
+    // callbacks continue passing the guard and driving live rendering after APP_READY.
+    document.getElementById('loading-screen').classList.add('hidden');
+    showApp();
+  }else{
+    // Increment first: callbacks already queued before the unsubscribe lands carry the old
+    // generation and are rejected before they can mutate LOCAL or render after failure.
+    startupGeneration++;
+    stopListeners();
+    document.getElementById('loading-screen').classList.add('hidden');
+    showStartupError(outcome,detail);
+  }
+}
+
+function retryStartup(){
+  const ov=document.getElementById('startup-error');
+  if(ov)ov.classList.add('hidden');
+  startListeners();
+}
+
+document.getElementById('startup-error-retry').addEventListener('click',retryStartup);
 
 function renderIfActive(col){
   if(!document.getElementById('main-app').style.display||document.getElementById('main-app').style.display==='none')return;
