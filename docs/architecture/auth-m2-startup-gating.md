@@ -61,7 +61,7 @@ The initialization invariant has three tiers:
    write, Storage access, migration, or tenant-data operation may occur. The 17 collection
    listeners attach only after `currentUser` exists.
 
-**Non-hang invariant.** Every terminal state leaves the loading spinner and shows a retry-or-logout screen. No state may leave the spinner visible indefinitely. No partially initialized application may be shown.
+**Non-hang invariant.** Every terminal state exits the loading spinner and presents an actionable blocking screen; no state may leave the spinner visible indefinitely, and no partially initialized application may be shown. During Slice 1, startup failure and timeout screens provide retry. Firebase logout is added in Slice 3, once Firebase Auth owns the session; after the Auth cutover, applicable terminal states provide retry or logout.
 
 ---
 
@@ -159,6 +159,30 @@ The bare `firstSnapshotSeen` completion mechanism is replaced by a 30-second sta
 - On APP_READY, the successful attempt's listeners remain subscribed and continue driving live rendering. On DATA_LISTENER_ERROR or STARTUP_TIMEOUT, the entire attempt is unsubscribed.
 
 A single terminal latch guarantees exactly one outcome, and the existing `_appShown` re-entry guard is retained so `showApp()` runs at most once.
+
+### Slice 1 Coordinator Failure Semantics
+
+The `startupGeneration` token governs which callbacks may act:
+
+- **Attempt start:** `startListeners()` increments `startupGeneration` and captures the new value as the attempt's generation. Every listener registered in that attempt closes over it.
+
+- **Successful settlement — APP_READY:** `settleStartup('ready')` sets the terminal latch, clears the timeout, hides the loading state, and calls `showApp()` once. It does not increment `startupGeneration`; the successful listeners must retain their generation so their callbacks continue passing the generation guard and driving live rendering after APP_READY.
+
+- **Error or timeout settlement:** `settleStartup('error'|'timeout')` sets the terminal latch, immediately increments `startupGeneration`, clears the timeout, unsubscribes every listener of the failed attempt, and shows the blocking retry state. Incrementing the generation invalidates callbacks already queued before unsubscribe completed. Those callbacks carry the old generation and are rejected before they can mutate `LOCAL` or render after failure.
+
+- **Callback guard:** every snapshot-success callback, listener-error callback, and timeout callback begins with:
+
+  `if (gen !== startupGeneration) return;`
+
+  This permits callbacks from the current successful attempt while rejecting callbacks from failed, timed-out, or superseded attempts.
+
+- **Synchronous registration failure:** the complete 17-listener registration loop runs inside a `try/catch` within `startListeners()`. Any synchronous throw routes through the same `settleStartup('error', detail)` path as an asynchronous listener failure. A partial registration therefore clears its timeout, invalidates its generation, unsubscribes every listener already registered, cannot expose partial `LOCAL`, and shows the unified retry state.
+
+- **LOCAL reset:** attempt initialization resets every collection with `LOCAL[col] = []`. No collection key may be deleted because `dbFind()` assumes every `LOCAL` collection exists as an array.
+
+- **Successful listener retention:** after APP_READY, the successful attempt's listeners remain subscribed and continue updating `LOCAL` and driving live rendering.
+
+- **Slice 1 UI scope:** startup error and timeout states provide retry only. Firebase logout on startup failure is deferred to Slice 3, when Firebase Auth owns the session. Slice 1 must not wire the legacy PIN logout path into the startup error UI.
 
 ---
 
