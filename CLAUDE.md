@@ -21,7 +21,7 @@ This rule exists because Soren (the planning AI in chat) cannot read code direct
 
 ## Repository shape
 
-The entire application is **one file**: `index.html` (~5692 lines, ~300 KB). There is no build system, no package manager, no test suite, no linter config. HTML, CSS and JavaScript all live inline in that single file.
+The entire application is **one file**: `index.html` (~10,960 lines, ~600 KB). There is no build system, no package manager, no test suite, no linter config. HTML, CSS and JavaScript all live inline in that single file.
 
 - **Run locally**: open `index.html` directly in a browser, or serve the folder statically (e.g. `python -m http.server`) — no build step.
 - **Deploy**: committing to `main` is the deploy (the file is self-contained and served as a static asset).
@@ -59,13 +59,15 @@ Dates are stored as `YYYY-MM-DD` (ISO) and displayed as `DD.MM.YYYY`. Numbers ar
 
 ### Data layer — Firestore as the source of truth
 
-10 Firestore collections, mirrored into a single in-memory object `LOCAL`:
+17 startup data collections, mirrored into a single in-memory object `LOCAL`:
 
 ```
-products, purchases, sales, svinn, leverandorer, dagsalg, innboks, ansatte, vakter, payments
+products, purchases, sales, svinn, leverandorer, dagsalg, innboks, ansatte, vakter, payments,
+bankTransactions, bankStatements, bankAccounts, expenses, recurring_templates,
+expense_taxonomy, documents
 ```
 
-`startListeners()` attaches an `onSnapshot` listener per collection. Every snapshot overwrites `LOCAL[col]` and calls `renderIfActive(col)` → `renderPage(currentPage)`. **There is no local optimistic update** — all writes go through `dbAdd` / `dbUpdate` / `dbDelete`, and the UI repaints when Firestore echoes the change back. If you add a new collection, it must be added to the `cols` array in `startListeners()` and to the `LOCAL` initializer, or its listener will never fire.
+`startListeners()` attaches an `onSnapshot` listener per collection. Every snapshot overwrites `LOCAL[col]` and calls `renderIfActive(col)` → `renderPage(currentPage)`. **There is no local optimistic update** — all writes go through `dbAdd` / `dbUpdate` / `dbDelete`, and the UI repaints when Firestore echoes the change back. If you add a new startup collection, it must be added to the `STARTUP_COLS` array and to the `LOCAL` initializer, or its listener will never fire.
 
 Reads use `dbFind(col, id)` / `dbAll(col)` against `LOCAL` — never query Firestore directly in render code.
 
