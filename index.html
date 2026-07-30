@@ -1630,13 +1630,6 @@ function showApp(){
   _appShown=true;
   document.getElementById('loading-screen').classList.add('hidden');
   document.getElementById('main-app').style.display='block';
-  // Run one-shot migrations before showing UI. Fire-and-forget — migration is idempotent (sentinel + per-doc skip), so concurrent tabs are safe.
-  migratePaymentsToBankTransactions();
-  ensureExpenseTaxonomySeed(TENANT_ID);  // phase 2a: idempotent, sentinel-gated
-  backfillPurchasesToExpenses();         // phase 2b: idempotent, sentinel-gated
-  dedupeMigratedExpenseMirrors();        // phase 2b-fix: one-shot cleanup of race duplicates
-  backfillMirrorPaymentFields();         // phase 2e-prep: one-shot copy of payment fields onto mirrors
-  backfillBankAccounts();                // chunk A: seed the five hardcoded accounts into the registry
   if(!currentUser){
     document.getElementById('login-screen').classList.remove('hidden');
   } else {
