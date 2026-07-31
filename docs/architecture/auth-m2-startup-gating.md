@@ -390,13 +390,13 @@ Rules remain open through all of M2; the app authenticates and reads claims but 
 - **GO** to implement, slice by slice, when: the startup driver is the single `onAuthStateChanged`; the initialization invariant holds (no data access before user + validated claims + resolved active employee + constructed `currentUser`); the coordinator guarantees exactly one terminal outcome with a 30-second bound and no indefinite spinner; migrations are removed from startup; and the PIN is fully powerless for identity/data at Slice 3.
 - **STOP** (do not proceed to the next slice) if: any valid user is denied or any invalid user is admitted; the spinner can hang; a partially initialized app can show; `startListeners` can run before the invariant is satisfied; a migration can run on the startup path; the PIN can still reach data after Slice 3; or any change would introduce employee-visible authorization differences (that belongs to M3) or rules tightening (that belongs to M7).
 
-# Section 3 — Slice 3: Auth cutover
+## Section 3 — Slice 3: Auth cutover
 
-## 3.1 Objective
+### 3.1 Objective
 
 Make `onAuthStateChanged` the sole driver of application startup. After Slice 3, no tenant data is read without a validated Firebase Auth session, and the PIN system ceases to exist as a data-access path.
 
-## 3.2 Security invariant
+### 3.2 Security invariant
 
 No tenant-data listener may attach and no Firestore read may occur before all of the following exist:
 
@@ -415,13 +415,13 @@ tenants/four-season-as/ansatte/{normalizedAnsattId}.get()
 
 No other read, no listener, no write, and no Storage network access may occur in that window.
 
-## 3.3 Boundary
+### 3.3 Boundary
 
 Slice 3 changes when and under what conditions listeners start. It does not change what the listeners do, how snapshots are handled, how the startup coordinator settles, or how errors are surfaced once the app is running.
 
 Firestore and Storage rules remain OPEN throughout. Rules tightening is out of scope for M2, and revert therefore remains a complete recovery path at every gate.
 
-## 3.4 Client construction versus tenant access
+### 3.4 Client construction versus tenant access
 
 Client construction and tenant access are separate concerns and are separated in the code.
 
@@ -430,7 +430,7 @@ Client construction and tenant access are separate concerns and are separated in
 - Storage client construction is allowed; Storage network operations are not. Holding a Storage reference is inert; uploading, downloading or listing is tenant access and is forbidden before identity.
 - `initFirebase` continues to construct clients. The only change to `initFirebase` is the removal of its listener-start call at line 1407. Nothing else in the function changes.
 
-## 3.5 Guarded tenant-data entry
+### 3.5 Guarded tenant-data entry
 
 A single guarded entry function is the only means by which tenant data listeners are started. Raw `startListeners()` has exactly one executable caller in the file: the guard.
 
@@ -459,13 +459,13 @@ A missing or mismatched binding is not an authorization failure. It means identi
 
 Invalid claims and invalid employee data are rejected by the identity pipeline before `currentUser` is constructed (§3.8, §3.10, §3.11). By the time the guard runs, an existing `currentUser` is by construction already valid. `AUTHZ_CLAIM_ERROR` is not a guarded-entry outcome.
 
-## 3.6 Retry model
+### 3.6 Retry model
 
 Model 1. Listener retry reuses the already-resolved identity and does not re-run claims validation or the employee document read.
 
 Identity resolution and data-loading recovery are separate concerns, and the two retry paths are distinct: identity retry re-runs the full identity pipeline; listener retry reuses the resolved identity and re-enters through the guard (§3.12). Both retry paths and the initial success path delegate through the guard. No caller bypasses it.
 
-## 3.7 Proof obligations P1–P6
+### 3.7 Proof obligations P1–P6
 
 **P1** — whole-file `.onSnapshot(` count remains exactly 1 inside `startListeners`.
 
@@ -485,7 +485,7 @@ Easily overlooked — verify these three explicitly rather than by inspection of
 - **P4's line-8000 site.** `checkPin` is the expected place to look. The `checkLoginSession` write is the second one and is easy to leave behind.
 - **P6 generally.** Every `await` is a suspension point at which the session may have changed. A continuation that resumes without rechecking generation can mutate state on behalf of a user who is no longer signed in.
 
-## 3.8 Claims validation
+### 3.8 Claims validation
 
 Claims are read via `getIdTokenResult(true)` to force a fresh token rather than trusting a cached one.
 
@@ -497,7 +497,7 @@ Validation is against exact literals, in claim vocabulary:
 
 Validation operates on claim vocabulary, not application vocabulary. The mapping to application roles happens after validation (§3.9), never before it.
 
-## 3.9 Role mapping and the Regnskap decision
+### 3.9 Role mapping and the Regnskap decision
 
 After claims validate, the claim role maps to the application role:
 
@@ -508,7 +508,7 @@ Regnskap is retired. The shared Regnskap PIN is retired along with the rest of t
 
 A future personal, view-only accountant role is separate scope. It would be a per-person account with its own claim value, not a shared credential, and it is not designed, reserved, or partially implemented in this slice.
 
-## 3.10 Employee document validation and normalization
+### 3.10 Employee document validation and normalization
 
 `ansattId` is the authoritative employee binding. There is no name or email cross-check.
 
@@ -527,7 +527,7 @@ The `ansatte` document read MUST use `normalizedAnsattId`. `currentUser.ansattId
 
 Untrimmed values MUST NOT be used for identity binding, document paths, UI identity, or audit metadata. A claim value such as `" abc123 "` passes a trimmed non-empty check and then resolves to a document path that does not exist; normalizing only at the validation step would allow this.
 
-## 3.11 Failure classification
+### 3.11 Failure classification
 
 The governing distinction is between a definitive negative answer and an inability to obtain an answer.
 
@@ -548,7 +548,7 @@ Logging. Unknown errors are logged for diagnosis. Logs MUST NOT contain ID token
 
 Teardown runs only if the failing continuation owns the current Auth generation.
 
-## 3.12 Auth-generation lifecycle
+### 3.12 Auth-generation lifecycle
 
 Two generation systems, deliberately separate. Identity state is controlled by the Auth generation. Tenant-data loading state is controlled by `startupGeneration`. Conflating them is what the separation exists to prevent.
 
@@ -571,7 +571,7 @@ Required behavior by case:
 | Identity retry | Re-runs the full identity pipeline: fresh token, claims validation, employee document read, normalization |
 | Listener retry | Reuses the resolved identity; re-enters through the guard; does not re-run the identity pipeline |
 
-### 3.12a Settle-once latch
+#### 3.12a Settle-once latch
 
 Each Auth-generation identity attempt MUST have exactly one terminal settlement. The attempt MUST maintain a generation-bound settled latch and a timeout handle.
 
@@ -583,7 +583,7 @@ Any later completion, rejection, or timeout for the same attempt MUST return wit
 
 Without this, a read resolving at 29.9 seconds constructs `currentUser`, and the timeout firing at 30 seconds then presents `IDENTITY_LOAD_ERROR` after a successful resolution.
 
-### 3.12b User switch, A to B
+#### 3.12b User switch, A to B
 
 Fires when `onAuthStateChanged` delivers UID B while `currentUser` is bound to UID A. Steps execute in this order:
 
@@ -601,11 +601,11 @@ The cleanup in steps 2–8 MUST NOT re-increment the Auth generation. B captured
 
 Step 4 precedes step 5 for the same reason as §3.13b: the five audit-stamp sites read `currentUser.name`, and hiding tenant UI before clearing identity removes any window for a null dereference.
 
-## 3.13 Signed-out flows
+### 3.13 Signed-out flows
 
 Sign-out has two entry points with different responsibilities. They are not interchangeable.
 
-### 3.13a Explicit logout request
+#### 3.13a Explicit logout request
 
 The logout request is a request. It does not itself establish the signed-out state.
 
@@ -628,7 +628,7 @@ The logout request is a request. It does not itself establish the signed-out sta
 
 Only a later `onAuthStateChanged(null)` callback may establish canonical `SIGNED_OUT`. A rejection from a stale generation returns silently.
 
-### 3.13b Observer null branch — canonical signed-out teardown
+#### 3.13b Observer null branch — canonical signed-out teardown
 
 Fires on `onAuthStateChanged(null)`, whether from explicit logout, session expiry, a disabled account, or sign-out in another tab. MUST be idempotent and MUST execute synchronously with no awaits, so no user action can interleave mid-teardown.
 
@@ -652,7 +652,7 @@ Ordering rationale:
 
 Broad modal cleanup is out of scope. Hiding `#main-app` is the required security action; no modal-surface sweep without a source-evidenced map of the modal surface.
 
-### 3.13c Current-generation identity-failure teardown
+#### 3.13c Current-generation identity-failure teardown
 
 If claims validation, employee validation, or identity loading fails for the current Auth generation after a prior successful running session, the application MUST:
 
@@ -676,7 +676,7 @@ Two consequences worth stating, both consistent with the rest of the document:
 - Because step 4 clears the binding, a subsequent `onAuthStateChanged` callback for the same UID finds no binding and therefore starts a new Auth generation and a full identity pipeline (§3.12) rather than no-opping. Identity retry after this teardown works.
 - These steps are idempotent, so the same path may serve a fresh sign-in that fails validation before any session was running. In that case the steps are no-ops and only step 8 has visible effect.
 
-## 3.14 Signed-out UI
+### 3.14 Signed-out UI
 
 - `#login-screen` is the signed-out container.
 - Its outer container, logo, subtitle, card and `#login-error` are reusable.
@@ -687,7 +687,7 @@ Two consequences worth stating, both consistent with the rest of the document:
 
 The Firebase form is added hidden alongside the still-live PIN region in 3A. The PIN region is not removed or hidden until 3B. Because 3A is a pushed commit, replacing the PIN region in 3A would break PIN login in production on deploy and 3A would not be dormant. Sequence: add hidden (3A), then swap visibility and cut PIN (3B).
 
-## 3.15 Production preflight — PF1–PF6
+### 3.15 Production preflight — PF1–PF6
 
 Run immediately before Gate 3B. Any single failure is a NO-GO. There is no PIN fallback after cutover; a broken account means that person cannot enter the app at all.
 
@@ -702,9 +702,9 @@ Run immediately before Gate 3B. Any single failure is a NO-GO. There is no PIN f
 
 PF3 is the join between M1's claims and live tenant data, and nothing has re-verified it since provisioning.
 
-## 3.16 Gate structure
+### 3.16 Gate structure
 
-### Gate 3A — dormant scaffolding, pushed
+#### Gate 3A — dormant scaffolding, pushed
 
 Lands: guarded tenant-data entry, identity pipeline, generation state, settle-once latch, both teardown flows, the `#main-app` hide path, and the Firebase email/password form added hidden inside `#login-screen`.
 
@@ -712,7 +712,7 @@ Nothing is wired. No `onAuthStateChanged` registration. The PIN boot path and PI
 
 Proofs: `node --check`; sanity 10/1/2; grep counts of new symbols; protected-internals diff clean; live app behaves identically, including PIN login.
 
-### Gate 3B — cutover wiring
+#### Gate 3B — cutover wiring
 
 PIN dies here. Store closed, Herish present.
 
@@ -728,7 +728,7 @@ Apply, `node --check`, local commit. NO PUSH.
 
 Pushing main is deploying. A broken Auth cutover would lock six people out of a live business system with no PIN fallback. Gate 3B therefore creates a local tested commit but does not push it. The push is the separate deployment decision deferred to Gate 3D.
 
-### Gate 3C — local browser matrix
+#### Gate 3C — local browser matrix
 
 Against `python -m http.server` on the un-pushed working tree. Chrome Claude gates:
 
@@ -743,11 +743,11 @@ Against `python -m http.server` on the un-pushed working tree. Chrome Claude gat
 - listener failure produces `DATA_LISTENER_ERROR` with retry;
 - 30-second identity timeout.
 
-### Gate 3D — tested-commit push
+#### Gate 3D — tested-commit push
 
 Herish present. Push (deploy), then verify live on sormena.no: Herish's account first, then one employee account, then confirm all six sign in. Rules remain OPEN, so `git revert` and push is the recovery path throughout.
 
-## 3.17 Protected regions
+### 3.17 Protected regions
 
 | Region | Rule | Proof |
 |---|---|---|
@@ -758,7 +758,7 @@ Herish present. Push (deploy), then verify live on sormena.no: Herish's account 
 | Firestore and Storage rules | Stay OPEN through all of M2 | PF6 |
 | `WRITE_TO_PURCHASES` / mirror migration | Untouched | Sanity 10/1/2 on every commit |
 
-## 3.18 Proof obligations P7–P13
+### 3.18 Proof obligations P7–P13
 
 **P7** — after 3B, `startListeners` has exactly one executable caller in the file, and it is the guard.
 
