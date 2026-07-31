@@ -144,7 +144,7 @@ Failure classification follows §3.11. A **definitive negative** — the documen
 
 **Authoritative identity** is exactly: the Firebase UID binding, `normalizedAnsattId`, `normalizedNavn`, and the mapped application role. No other field participates in authentication, authorization, or employee resolution.
 
-Existing audit stamps continue to read `currentUser.name`, which must be the human-readable `ansatte.navn`. The raw `ansattId` must never be used as the display name or audit-stamp name.
+Existing audit stamps continue to read `currentUser.name`, which must be `normalizedNavn` — the trimmed, human-readable `ansatte.navn`. The raw `ansattId` must never be used as the display name or audit-stamp name.
 
 ---
 
