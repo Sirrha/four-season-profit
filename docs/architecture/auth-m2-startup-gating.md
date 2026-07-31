@@ -17,11 +17,13 @@ M1 set Firebase Auth custom claims (`{ role, tenantId, ansattId }`) on the six a
 
 ---
 
-## Proven Current State
+## Proven Current State — M2 baseline, as of pre-Slice 0
 
-Facts established by the read-only recon, with `index.html` line numbers at commit `6ce8c6f`. These describe the app **as it is today**, before any M2 change.
+*This section records the source state proven at the M2 baseline, at commit `6ce8c6f`, before any slice shipped. It is a dated record and is not updated as slices land. Where a statement has been superseded by shipped work, the superseding slice is named inline. For live state, see the Implementation Slices section and Section 3.*
 
-- **The Firebase Auth SDK is absent.** Only three SDK scripts load (lines 10–12): `firebase-app.js`, `firebase-firestore.js`, `firebase-storage.js` (v8.10.1). There is no `firebase-auth.js`, and no `firebase.auth` / `onAuthStateChanged` / `getAuth` / `signIn` usage anywhere. (The CLAUDE.md claim that `firebase-auth.js` is loaded is incorrect.)
+Facts established by the read-only recon, with `index.html` line numbers at commit `6ce8c6f`. These describe the app at the M2 baseline, before any M2 slice shipped.
+
+- **The Firebase Auth SDK is absent.** Only three SDK scripts load (lines 10–12): `firebase-app.js`, `firebase-firestore.js`, `firebase-storage.js` (v8.10.1). There is no `firebase-auth.js`, and no `firebase.auth` / `onAuthStateChanged` / `getAuth` / `signIn` usage anywhere. (The CLAUDE.md claim that `firebase-auth.js` is loaded is incorrect.) **Superseded by Slice 0 (`95e2b20`):** the `firebase-auth.js` script tag now loads, and `typeof firebase.auth === "function"` is confirmed live in production. No Auth API is called until Gate 3B.
 - **Startup sequence.** `boot()` is an IIFE at the bottom of the inline script (line 7903) that runs synchronously at parse time (there is no `DOMContentLoaded` listener). It calls `checkLoginSession()` (7913 → def 7880), reveals the login screen if not logged in (7914), then calls `initFirebase(FIREBASE_CONFIG)` (7916). `initFirebase()` (def 1379) reveals the loading screen, constructs `db=firebase.firestore(app)` and `storage=firebase.storage(app)` (1386–1387), then calls `startListeners()` (1389).
 - **`startListeners()` has exactly one real caller** — `initFirebase()` at ~line 1389. The two other textual matches (4325, 8235) are comments, not calls.
 - **17-collection completion gate.** `startListeners()` (def 1551) defines a 17-entry `cols` array (1554: `products, purchases, sales, svinn, leverandorer, dagsalg, innboks, ansatte, vakter, payments, bankTransactions, bankStatements, bankAccounts, expenses, recurring_templates, expense_taxonomy, documents`) and attaches one `onSnapshot` per collection (1556). Readiness is tracked by a bare boolean map `firstSnapshotSeen` (1396).
@@ -33,7 +35,7 @@ Facts established by the read-only recon, with `index.html` line numbers at comm
 - **Legacy identity model.** `USERS` map (7790–7795) holds four PIN identities (`Herish`/`Admin`/`Regnskap`/`Sormena`) with roles `admin`/`regnskap`/`staff`. `currentUser` is a JS global (7800) plus `sessionStorage['fs_user']`. `checkPin()` (7829) writes both on a PIN match (7836–7837); `checkLoginSession()` (7880) restores `currentUser` from `sessionStorage`; `logoutUser()` (7855) clears the global and sessionStorage (7857–7858) but nothing else.
 - **`currentUser` role and audit-stamp read sites.** Role is read at 1588 (login gate), 1922 (`applyRoleRestrictions`), and 7868–7869. `currentUser.name` is stamped onto writes at 4370, 5018, 6501, 9322, 9379.
 
-Everything below this line is **target architecture** — the state M2 will build. It is not present in the source today.
+Everything below this line is **target architecture** — the state M2 builds. Slices 0, 1 and 2 have shipped; Slice 3 has not. See *Implementation Slices* for what is live.
 
 ---
 
@@ -53,11 +55,11 @@ The initialization invariant has three tiers:
 
 2. After the Firebase user and claims are validated, exactly one pre-identity Firestore
    operation is permitted: a single `.get()` of
-   `tenants/four-season-as/ansatte/{ansattId}` — never a listener. This is the read that
+   `tenants/four-season-as/ansatte/{normalizedAnsattId}` — never a listener. This is the read that
    discovers and validates the employee record.
 
 3. Until that ansatte document is validated — it exists, `aktiv !== false`, and `navn` is
-   non-empty — and `currentUser` has been constructed, no other Firestore read, listener,
+   non-empty after trimming — and `currentUser` has been constructed, no other Firestore read, listener,
    write, Storage access, migration, or tenant-data operation may occur. The 17 collection
    listeners attach only after `currentUser` exists.
 
@@ -75,7 +77,7 @@ BOOTING
       → SIGNED_OUT            (no Firebase user; show login)
       → SIGNING_IN            (credentials submitted, or session restored)
   → VALIDATING_CLAIMS         (getIdTokenResult(true) + validate)
-  → RESOLVING_EMPLOYEE        (single .get() of ansatte/{ansattId})
+  → RESOLVING_EMPLOYEE        (single .get() of ansatte/{normalizedAnsattId})
   → LOADING_TENANT_DATA       (17-listener coordinator, 30s timeout)
   → APP_READY                 (show #main-app; no migrations)
 ```
@@ -86,6 +88,9 @@ Terminal states (each leaves the spinner and shows the appropriate screen):
 - **AUTHZ_CLAIM_ERROR** — claims or ansatte record invalid; show the account-not-ready message; offer logout; start no listeners and load no tenant data.
 - **DATA_LISTENER_ERROR** — a listener reported an explicit error; show a retry screen naming the collection and error code where safe.
 - **STARTUP_TIMEOUT** — 30 seconds elapsed without completion; show a retry screen.
+- **IDENTITY_LOAD_ERROR** — the identity question could not be answered: transport failure, offline, timeout, or `unavailable` during the token refresh or the `ansatte` read, or the 30-second identity timeout elapsed. Show a retry screen; retry reruns the full identity pipeline. Start no listeners. This is not an authorization verdict.
+- **SIGNED_OUT** — no Firebase user. Reveal `#login-screen` with the sign-in form. Established canonically by `onAuthStateChanged(null)` (§3.13b), never asserted by a logout handler.
+- **Logout failure surface** — `firebase.auth().signOut()` rejected while the logout attempt owned the current Auth generation. The Firebase session remains live. Tenant UI stays hidden, listeners stay stopped, and the user receives a retry action that calls `signOut()` again. This condition MUST NOT be shown as `SIGNED_OUT`.
 
 ---
 
@@ -97,7 +102,7 @@ Terminal states (each leaves the spinner and shows the appropriate screen):
 - `role` is exactly `'admin'` or `'employee'`
 - `ansattId` is a non-empty string
 
-Any failure routes to **AUTHZ_CLAIM_ERROR**. No listeners and no migrations may start.
+A definitive negative — the token was obtained and its claims are absent, malformed, or wrong — routes to **AUTHZ_CLAIM_ERROR**; no listeners and no migrations may start. A failure to obtain an answer — transport failure, offline, timeout, or `unavailable` — routes to **IDENTITY_LOAD_ERROR** with retry, per §3.11. An expired, disabled, or invalid Auth session routes to **SIGNED_OUT**.
 
 **Claim-role → application-role mapping.**
 
@@ -113,7 +118,7 @@ During M2, an authenticated employee receives the existing `staff` experience. T
 In the **RESOLVING_EMPLOYEE** state, after claims are valid and before any of the 17 main listeners start, read exactly one document:
 
 ```
-tenants/four-season-as/ansatte/{ansattId}
+tenants/four-season-as/ansatte/{normalizedAnsattId}
 ```
 
 Use a single `.get()`, **not** a listener. (This is consistent with M1: each account's claim `ansattId` equals that person's `ansatte` document id, and `ansatte` documents carry `navn` and `aktiv`.)
@@ -122,18 +127,22 @@ Validate:
 
 - the document exists;
 - `aktiv !== false` (the app's existing active convention);
-- `navn` is a non-empty string;
+- `navn` is a non-empty string after trimming;
 - the record is suitable for constructing application identity.
 
-Any failure routes to **AUTHZ_CLAIM_ERROR**.
+Failure classification follows §3.11. A **definitive negative** — the document is absent, `aktiv === false`, or `navn` is empty after trimming — routes to **AUTHZ_CLAIM_ERROR**, with no retry, because retrying cannot change the answer. An **inability to obtain an answer** — a transport failure, offline, timeout, or `unavailable` on the `.get()` — routes to **IDENTITY_LOAD_ERROR** with a retry action. A transport failure MUST NOT be reported as an invalid account.
+
+**Normalization.** `normalizedAnsattId` MUST equal `claims.ansattId.trim()` and `normalizedNavn` MUST equal `employee.navn.trim()`. The document read MUST use `normalizedAnsattId`. Untrimmed values MUST NOT be used for identity binding, document paths, UI identity, or audit metadata.
 
 **`currentUser` construction.** From a valid claim and a valid `ansatte` document, construct the derived application identity:
 
-- `name` = `ansatte.navn` (human-readable)
-- `ansattId` = the validated claim `ansattId` (equals the document id)
+- `name` = `normalizedNavn` — the trimmed `ansatte.navn`, human-readable
+- `ansattId` = `normalizedAnsattId` — the trimmed claim value, which equals the document id
 - `role` = `admin` if the claim role is `admin`, otherwise `staff` (for claim `employee`)
-- `email` = the Firebase user's email
-- the visible header identity includes the human name and a clear **Admin** or **Ansatt** role label
+- `email` = the Firebase user's email — a derived convenience field only. It is not authoritative, is not used for authorization or employee lookup, is not required for startup, and a missing email does not reject identity.
+- the visible header identity shows `normalizedNavn` and the mapped role label **Admin** or **Ansatt**. After Gate 3B the Auth identity pipeline owns `#current-user-btn` and updates the header after successful identity resolution and before listeners start. Gate 3A may add the helper dormant; Gate 3B wires it.
+
+**Authoritative identity** is exactly: the Firebase UID binding, `normalizedAnsattId`, `normalizedNavn`, and the mapped application role. No other field participates in authentication, authorization, or employee resolution.
 
 Existing audit stamps continue to read `currentUser.name`, which must be the human-readable `ansatte.navn`. The raw `ansattId` must never be used as the display name or audit-stamp name.
 
@@ -228,28 +237,25 @@ Do not create a maintenance panel, button, migration UI, or automatic replacemen
 
 ## Session and Logout
 
-After the Slice 3 cutover:
+After the Gate 3B cutover:
 
 - Firebase Auth persistence is the sole session-restoration mechanism. On reload, `onAuthStateChanged` fires with the restored user → silent `SIGNING_IN` → `VALIDATING_CLAIMS` → … → `APP_READY`, with no re-login.
 - `sessionStorage['fs_user']` may not authorize, restore, or identify a user.
 - `currentUser` is a derived object only.
 
-**Logout order:**
+**Logout.** §3.13 is authoritative for both signed-out flows and MUST be followed in preference to any summary here.
 
-1. `firebase.auth().signOut()`
-2. unsubscribe all listeners
-3. invalidate the current startup generation
-4. clear `currentUser`
-5. remove any legacy `fs_user` value
-6. show **SIGNED_OUT**
+Explicit logout is a *request*, not the signed-out state. It blocks further user action, invalidates the current Auth attempt, hides tenant UI and stops listeners **before** calling `firebase.auth().signOut()`, and then lets `onAuthStateChanged(null)` establish the canonical `SIGNED_OUT` state. The logout handler MUST NOT set `SIGNED_OUT` itself. A `signOut()` rejection owned by the current Auth generation surfaces a recoverable logout-failure surface with retry; it does not clear identity, restore tenant UI, or claim the user is signed out.
+
+The canonical teardown — listener stop, generation invalidation, UI hiding, identity clearing, `fs_user` removal, 17-collection reset, coordinator reset, `_appShown = false`, `#login-screen` reveal — is specified in order at §3.13b.
 
 ---
 
 ## PIN Cutover
 
-**Slices 0–2:** the existing PIN flow remains unchanged, because the Firebase Auth cutover has not yet occurred. `USERS`, `checkPin()`, and `checkLoginSession()` drive login exactly as today.
+**Slices 0–2 and Gate 3A:** the existing PIN flow remains unchanged, because the Firebase Auth cutover has not yet occurred. `USERS`, `checkPin()`, and `checkLoginSession()` drive login exactly as today. Gate 3A ships dormant scaffolding to production alongside a fully working PIN login; §3.16 requires this and P13 proves it.
 
-**Slice 3 (complete security cutover):** Firebase Auth plus validated claims and the resolved `ansatte` identity become the only permitted runtime identity. From this slice on, PIN:
+**Gate 3B (complete security cutover):** Firebase Auth plus validated claims and the resolved `ansatte` identity become the only permitted runtime identity. From this gate on, PIN:
 
 - cannot authenticate;
 - cannot authorize;
@@ -257,7 +263,7 @@ After the Slice 3 cutover:
 - cannot start listeners;
 - cannot access application data.
 
-Recovery after Slice 3 is **git revert plus redeploy**, not a PIN bypass. (Rules remain open, so a reverted build's PIN path works again for recovery.)
+Recovery from a failed Gate 3B is a local revert or reset, not a PIN bypass. Gate 3B is committed but not pushed, so production remains on Gate 3A with PIN login working. Rules remain open throughout M2, so every reverted or reset recovery build retains a working PIN path. See the Rollback Plan for the four recovery cases.
 
 **Slice 4 (cosmetic and dead-code cleanup only):** remove the obsolete PIN UI, handlers, text, session behavior, and now-unreachable code. No security-critical PIN restriction may be deferred from Slice 3 to Slice 4 — Slice 3 must already make PIN fully powerless; Slice 4 only tidies up.
 
@@ -265,7 +271,7 @@ Recovery after Slice 3 is **git revert plus redeploy**, not a PIN bypass. (Rules
 
 ## User-Facing Error Distinction
 
-Two distinct authentication-related error experiences:
+Four distinct authentication-related error experiences:
 
 **AUTH_ERROR** — incorrect email/password or a Firebase sign-in failure. Remain on the login screen; allow another sign-in attempt.
 
@@ -274,6 +280,20 @@ Two distinct authentication-related error experiences:
 > "Kontoen din er ikke klar for Sormena. Kontakt Herish."
 
 Provide a logout action. Start no listeners and load no tenant data.
+
+**IDENTITY_LOAD_ERROR** — the account could not be verified because the connection failed, not because it is invalid. Show:
+
+> "Kunne ikke koble til serveren. Sjekk internettforbindelsen og prøv igjen."
+
+Retry button: **"Prøv igjen"** — reruns the full identity pipeline. Start no listeners. Do not tell the user to contact Herish; nothing is wrong with the account.
+
+**Logout failure** — `signOut()` rejected and the Firebase session is still live. Show:
+
+> "Utloggingen mislyktes. Du er fortsatt innlogget. Prøv igjen."
+
+Retry button: **"Prøv å logge ut igjen"** — calls `signOut()` again. Tenant UI stays hidden and listeners stay stopped.
+
+The instruction to contact Herish remains exclusive to definitive `AUTHZ_CLAIM_ERROR`.
 
 ---
 
@@ -310,12 +330,12 @@ Each slice changes only `index.html`. Slices are independently revertible.
 
 ### Slice 3 — Complete Firebase Auth cutover
 
-- **Files:** `index.html` (add the `onAuthStateChanged` driver; email/password login UI; claims validation; `ansatte/{ansattId}` resolution; `currentUser` construction; auth-gated `startListeners`; Firebase session restoration; new logout order; make PIN powerless for identity/data).
+- **Files:** `index.html`, across four gates — see §3.16 for the authoritative gate structure. **3A** adds dormant scaffolding: the guarded tenant-data entry, identity pipeline, Auth generation state, settle-once latch, both teardown flows, the `#main-app` hide path, and a hidden email/password form inside `#login-screen`. **3B** wires the cutover: removes the listener bypasses, repoints `retryStartup`, cuts the PIN `currentUser` writes, registers `onAuthStateChanged` as sole startup driver, and swaps `#login-screen` visibility. **3C** is browser verification, **3D** is the production push.
 - **Behavior change:** the real cutover — tenant-data access now requires a signed-in, valid-claim, resolved-employee user; PIN can no longer authenticate, authorize, restore identity, start listeners, or reach data.
 - **Risk:** highest — this is where a mistake could hang startup or lock users out.
 - **Browser verification:** the full browser test matrix below, in Chrome.
-- **Rollback:** git revert + redeploy to the Slice 2 state (PIN login works; rules are still open).
-- **Deployment GO/STOP:** GO only when every matrix case passes; STOP on any spinner-hang, any valid user denied, any invalid user admitted, or any PIN path still reaching data.
+- **Rollback:** four cases, per §3.16. **3A defective** — revert 3A and push, returning production to Slice 2. **3B local failure** — revert or reset the unpushed 3B commit; nothing is deployed, and production remains on 3A. **3D deployed failure** — revert the 3B cutover commit and push, returning production to 3A: dormant Auth scaffolding with PIN login fully functional. **Complete retreat** — revert 3A as well, only if a full return to Slice 2 is required. All recovery states have working PIN login because rules stay open.
+- **Deployment GO/STOP:** per gate. **3A** — GO if the app behaves identically including PIN login, `node --check` passes, sanity is 10/1/2, and protected internals show a clean diff; STOP on any behavior change at all, since 3A is defined as dormant. **3B** — no deployment decision; 3B is a local commit only. **3D** — GO only when every Gate 3C matrix case passes and PF1–PF6 returned go; STOP on any spinner-hang, any valid user denied, any invalid user admitted, or any PIN path still reaching data.
 
 ### Slice 4 — Legacy PIN cosmetic and dead-code cleanup only
 
@@ -348,16 +368,27 @@ Each slice changes only `index.html`. Slices are independently revertible.
 | 14 | Retry after failure | new generation; exactly one listener set; single showApp; LOCAL cleared |
 | 15 | Logout and reload | signOut → SIGNED_OUT; reload lands on login; no auto-data-load |
 | 16 | Firebase session restoration | reload while signed in → silent re-auth → APP_READY; no re-login |
-| 17 | Post-Slice-3 PIN attempt | PIN cannot authenticate/authorize/start listeners/reach data |
+| 17 | Post-Gate-3B PIN attempt | PIN cannot authenticate/authorize/start listeners/reach data |
 | 18 | Duplicate Auth callback / rapid retry | one listener set, one showApp (generation + latch guards) |
 | 19 | Stale callback from an older generation | ignored (generation mismatch) |
+| 20 | Gate 3A deployed to production | PIN login works exactly as before; no Auth behavior; app identical (P13) |
+| 21 | Sign out, then sign in again as the same user | full startup completes and `#main-app` is visible (P10 — the `_appShown` reset) |
+| 22 | User switch A → B without reload | A's listeners stopped, `LOCAL` reset, `#main-app` hidden; B resolves through the full identity pipeline; exactly one listener set (§3.12b) |
+| 23 | `signOut()` rejects | recoverable logout-failure surface with retry; **not** SIGNED_OUT; identity intact; tenant UI stays hidden; listeners stay stopped (§3.13a) |
+| 24 | Offline during claims refresh or the `ansatte` read | IDENTITY_LOAD_ERROR with retry; **not** AUTHZ_CLAIM_ERROR; no listeners |
+| 25 | Identity resolution stalls for 30 s | IDENTITY_LOAD_ERROR — the identity timeout, distinct from case 13's listener timeout; retry reruns the full identity pipeline |
 
 ---
 
 ## Rollback Plan
 
 - Slices 0, 1, 2, 4 roll back by reverting the single `index.html` change for that slice.
-- Slice 3 rolls back by **git revert + redeploy** to the Slice 2 state. Because Firestore/Storage rules remain open throughout M2, the reverted build's PIN login and data flow work immediately — there is no rules-driven lockout to recover from.
+- Slice 3 recovers per gate, because §3.16 splits it into a pushed Gate 3A, a Gate 3B committed locally and not pushed, and a Gate 3D push.
+  - **Gate 3A defective:** revert the 3A commit and push. Production returns to the Slice 2 state.
+  - **Gate 3B fails locally:** revert or reset the unpushed 3B commit. Nothing was deployed; production remains on Gate 3A with PIN login working. No push is involved in this recovery.
+  - **Gate 3D deployed and failing:** revert the 3B cutover commit and push. Production returns to Gate 3A — dormant Auth scaffolding, PIN login fully functional.
+  - **Complete retreat to Slice 2:** revert Gate 3A as well, only if returning all the way is required.
+  - Because Firestore/Storage rules remain open throughout M2, every recovery state has working PIN login and data flow immediately. There is no rules-driven lockout to recover from.
 - The generation token and single terminal latch mean a mid-startup failure never leaves duplicate listeners or a half-shown app; a retry (or a reload) always starts a clean attempt.
 
 ---
@@ -387,8 +418,8 @@ Rules remain open through all of M2; the app authenticates and reads claims but 
 
 ## Implementation GO/STOP Criteria
 
-- **GO** to implement, slice by slice, when: the startup driver is the single `onAuthStateChanged`; the initialization invariant holds (no data access before user + validated claims + resolved active employee + constructed `currentUser`); the coordinator guarantees exactly one terminal outcome with a 30-second bound and no indefinite spinner; migrations are removed from startup; and the PIN is fully powerless for identity/data at Slice 3.
-- **STOP** (do not proceed to the next slice) if: any valid user is denied or any invalid user is admitted; the spinner can hang; a partially initialized app can show; `startListeners` can run before the invariant is satisfied; a migration can run on the startup path; the PIN can still reach data after Slice 3; or any change would introduce employee-visible authorization differences (that belongs to M3) or rules tightening (that belongs to M7).
+- **GO** to implement, slice by slice, when: the startup driver is the single `onAuthStateChanged`; the initialization invariant holds (no data access before user + validated claims + resolved active employee + constructed `currentUser`); the coordinator guarantees exactly one terminal outcome with a 30-second bound and no indefinite spinner; migrations are removed from startup; and the PIN is fully powerless for identity/data at Gate 3B.
+- **STOP** (do not proceed to the next slice) if: any valid user is denied or any invalid user is admitted; the spinner can hang; a partially initialized app can show; `startListeners` can run before the invariant is satisfied; a migration can run on the startup path; the PIN can still reach data after Gate 3B (PIN remains fully functional after Gate 3A by design — see §3.16); or any change would introduce employee-visible authorization differences (that belongs to M3) or rules tightening (that belongs to M7).
 
 ## Section 3 — Slice 3: Auth cutover
 
@@ -730,18 +761,11 @@ Pushing main is deploying. A broken Auth cutover would lock six people out of a 
 
 #### Gate 3C — local browser matrix
 
-Against `python -m http.server` on the un-pushed working tree. Chrome Claude gates:
+Against `python -m http.server` on the un-pushed working tree, in Chrome. **The Browser Test Matrix is authoritative for the case list.** Gate 3C runs it in full rather than restating a subset here; maintaining a second case list here would create another source of drift.
 
-- happy path, admin;
-- happy path, employee;
-- explicit logout;
-- sign-out then sign-in as the same user (the §3.12 and `_appShown` lockout case);
-- user-switch to a different UID;
-- `signOut()` rejection produces the recoverable logout-failure surface, not `SIGNED_OUT`;
-- invalid claims produce `AUTHZ_CLAIM_ERROR`;
-- offline produces `IDENTITY_LOAD_ERROR` with retry;
-- listener failure produces `DATA_LISTENER_ERROR` with retry;
-- 30-second identity timeout.
+Cases 20–25 were added because Section 3 introduced behavior the original matrix predates: Gate 3A dormancy, the sign-out-then-same-user lockout path, user switch A→B, `signOut()` rejection, identity-load failure as distinct from authorization failure, and the identity timeout as distinct from the listener timeout.
+
+Gate 3C passes only when every matrix case passes.
 
 #### Gate 3D — tested-commit push
 
