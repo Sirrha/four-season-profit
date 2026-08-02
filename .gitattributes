@@ -1,0 +1,2 @@
+# Keep architecture docs LF to make review and verification deterministic across machines.
+docs/architecture/*.md text eol=lf
