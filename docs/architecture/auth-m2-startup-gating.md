@@ -1,6 +1,6 @@
 # Auth M2 — Firebase Authentication & Safe Startup Gating
 
-**Status:** Design agreed; not yet implemented. This document is the source of truth for the M2 work. No application code has changed yet.
+**Status:** Slices 0, 1 and 2 are shipped and live; Slice 3 is designed and reconciled but not implemented. Runtime remains at Slice 2 (`ca9e4b3`), and PIN remains the only identity path. This document is the source of truth for M2. See *Implementation Slices* and Section 3 for per-gate state.
 
 **Prompt of record:** `SORMENA-AUTH-M2-DESIGN-DOC-001`. Baseline recon: `SORMENA-AUTH-M2-STARTUP-RECON-001` (read-only, against `index.html` at commit `6ce8c6f`).
 
@@ -8,7 +8,7 @@
 
 ## Purpose
 
-M1 set Firebase Auth custom claims (`{ role, tenantId, ansattId }`) on the six approved accounts; those claims are live and verified but **inert** — nothing in the app reads them. M2 makes the app authenticate against Firebase Auth, read those claims, resolve the employee, and gate all tenant-data access behind a safe, non-hanging startup sequence. M2 replaces the PIN curtain as the runtime identity, without touching Firestore/Storage rules.
+M1 provisioned and verified custom claims (`{ role, tenantId, ansattId }`) for the six approved accounts on 2026-07-26 (design: `docs/architecture/auth-m1-provisioning.md`); PF1–PF3 must re-verify their current production state before Gate 3B. Those claims are **inert** — nothing in the app reads them. M2 makes the app authenticate against Firebase Auth, read those claims, resolve the employee, and gate all tenant-data access behind a safe, non-hanging startup sequence. M2 replaces the PIN curtain as the runtime identity, without touching Firestore/Storage rules.
 
 ## Scope
 
@@ -421,6 +421,8 @@ Rules remain open through all of M2; the app authenticates and reads claims but 
 - **GO** to implement, slice by slice, when: the startup driver is the single `onAuthStateChanged`; the initialization invariant holds (no data access before user + validated claims + resolved active employee + constructed `currentUser`); the coordinator guarantees exactly one terminal outcome with a 30-second bound and no indefinite spinner; migrations are removed from startup; and the PIN is fully powerless for identity/data at Gate 3B.
 - **STOP** (do not proceed to the next slice) if: any valid user is denied or any invalid user is admitted; the spinner can hang; a partially initialized app can show; `startListeners` can run before the invariant is satisfied; a migration can run on the startup path; the PIN can still reach data after Gate 3B (PIN remains fully functional after Gate 3A by design — see §3.16); or any change would introduce employee-visible authorization differences (that belongs to M3) or rules tightening (that belongs to M7).
 
+---
+
 ## Section 3 — Slice 3: Auth cutover
 
 ### 3.1 Objective
@@ -732,6 +734,40 @@ Run immediately before Gate 3B. Any single failure is a NO-GO. There is no PIN f
 | PF6 | Firestore and Storage rules confirmed still OPEN | C-Code |
 
 PF3 is the join between M1's claims and live tenant data, and nothing has re-verified it since provisioning.
+
+#### 3.15a PF execution mechanism
+
+PF1–PF3 require a credentialed read path to `sormena-prod`. **PF verification must not depend on or reuse the original M1 private key** — it authenticates a provisioning principal that was used for write-capable Admin SDK operations and is inappropriate for a read-only preflight. Permissions come from the service-account principal's IAM roles, not from the key material itself.
+
+The approved mechanism is a **temporary, least-privilege, keyless principal**: `roles/firebaseauth.viewer` for PF1–PF2 (read-only retrieval of known user records and their custom claims via `getUserByEmail()`) and `roles/datastore.viewer` for PF3, authenticated by short-lived service-account impersonation through application-default credentials. No long-lived JSON key is generated. The project Owner account takes `roles/iam.serviceAccountTokenCreator` on that principal only, for the duration of the supervised run.
+
+**Read-only IAM roles are the primary technical enforcement boundary.** Source review and a prohibited-method grep on the verifier are defense-in-depth, not proof by themselves that a script cannot write. The verifier MUST still be reviewed before execution and MUST emit only a masked report — no UIDs, no `ansattId` values, no tokens, no raw claims objects. Maria Syrota's intentional `Syrota`/`sirota` navn-email divergence (M1 §2) MUST be preserved and MUST NOT be treated as a defect.
+
+A **one-account dry run** MUST prove that `firebase-admin`'s `applicationDefault()` works with the impersonated credential before all six accounts are inspected. If it fails, **stop for review**; do not change authentication methods silently. The reviewed contingency for PF2 is the client-side `getIdTokenResult(true)` route, performed per account in a supervised session. No employee password may be requested or shared under any route.
+
+Cleanup in the same supervised session MUST revoke the credential, remove both viewer bindings and the token-creator binding, and delete the temporary principal, returning the machine to a state with no application-default credential.
+
+**PF6 is a separate capability** and is performed manually in the Firebase Console; deployed rules cannot be read through the data-access path above. Record, for Firestore and Storage separately: the semantic unauthenticated-access result, the deployment timestamp, and pass/fail. Do not paste complete rule text.
+
+Gate 3B is NO-GO if any check fails, if fewer than all six accounts are verified, if impersonated ADC cannot be proven, or if cleanup cannot be completed safely.
+
+#### 3.15b Credential readiness prerequisite
+
+PF1–PF3 prove that the six approved Auth accounts exist and are enabled, that their custom claims are valid, and that each claim `ansattId` binds to an active employee document. **They do not prove that any user possesses a password they know and can use.** Account existence and credential usability are different facts, and only the first is verified by the preflight.
+
+M1 §12 deferred credential distribution and password recovery to M2, and this document does not currently define either. **Credential readiness for all six accounts is NOT YET PROVEN.** All existing passwords MUST be treated as unknown.
+
+**Ownership model.** The administrator registers and manages the account; **the employee owns the password.** An administrator MUST NOT know, set, hold, or maintain a permanent employee password. Administrator capability is limited to: creating the employee record, entering the login email, choosing the approved role, binding the Auth identity to the correct `ansattId`, initiating a private password-setup or reset email, resending it, and disabling access when employment ends. The employee privately chooses and retains their own password.
+
+**Gate 3B is NO-GO until a separately reviewed credential-distribution and password-recovery path exists.** That path MUST define:
+
+- **first access** — how each user obtains a usable credential for the first time, without an administrator learning it;
+- **forgotten-password recovery** — how a user regains access without an administrator learning, setting, receiving, or storing the password. Recovery may be self-service, or the administrator may only initiate or resend the private reset email;
+- **failure handling** — what happens when a user cannot sign in in the local Gate 3B cutover build, where PIN has been removed and cannot serve as a recovery path. Production PIN remains live until the tested commit is pushed at Gate 3D.
+
+For the six existing accounts, the path is a supervised setup or reset for **all six**: each user receives their own setup/reset email, privately chooses a new password, and completes a supervised sign-in. No password may be requested, collected, displayed, transmitted, recorded, or shared with the operator. Gate 3C records pass/fail only, never credentials.
+
+This is a Gate 3B prerequisite, not a preflight check. **The PF set remains exactly PF1–PF6**; no PF7 is introduced. Gate 3C cannot pass unless all six sign-ins succeed locally; production PIN login remains live throughout, because the Gate 3B commit is not pushed until Gate 3D.
 
 ### 3.16 Gate structure
 

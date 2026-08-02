@@ -1,6 +1,6 @@
 # Auth M1 — Custom-Claims Provisioning Design
 
-**Status:** Design agreed from a review cycle (Herish + independent reviewer). Not yet executed. This document is the source of truth for the M1 provisioning run; the script does not exist yet.
+**Status:** Historical M1 provisioning design. The reviewed tool later shipped at `scripts/provision-claims/`, and a confirmed run on 2026-07-26 provisioned the six approved identities in `sormena-prod`; a rollback snapshot was captured outside the repository. This document preserves the M1 design and safety contract. It is not a current employee roster, a live account-status record, or a current execution runbook. For current state, see `docs/architecture/auth-m2-startup-gating.md` and `docs/system-inventory.md`.
 
 **Scope:** M1 sets Firebase Auth **custom claims** on six pre-created accounts in project `sormena-prod`. M1 changes **no app behaviour** — the app does not read claims until M2. Sections marked **[PROPOSAL — review]** are implementation detail I added on top of the agreed spec; everything else encodes the spec exactly.
 
@@ -232,6 +232,8 @@ node provision.js --rollback=<abs snapshot path> --confirm-rollback
 - The `sormena-prod` service-account key (id `9f6f830e1be2489ad73969d88c7e34ad40159747`) is used **only** for this provisioning run.
 - It is **revoked** in Google Cloud IAM (Service Accounts → Keys) **once verification passes.**
 - If a key is ever needed again, a **new** key is generated — this one is not reused after revocation.
+
+**Present state not proven (noted 2026-08-02).** The above records what M1 *required*, not what was verified. Whether revocation was performed has not been confirmed, and this document is not evidence that it was. The M2 preflight verification design does not depend on or reuse this key; see `docs/architecture/auth-m2-startup-gating.md` §3.15a.
 
 ---
 
