@@ -7215,7 +7215,6 @@ function renderTlAnsatte(){
           </div>
           <div style="display:flex;gap:4px;flex-shrink:0">
             <button class="btn btn-s" style="background:rgba(0,0,0,.05);border:1px solid var(--border);padding:5px 10px;font-size:10.5px" onclick="openAnsattModal('${a.id}')">✏️</button>
-            <button class="btn btn-s" style="background:rgba(220,50,50,.1);color:var(--danger);border:1px solid rgba(220,50,50,.25);padding:5px 10px;font-size:10.5px" onclick="deleteAnsatt('${a.id}')">🗑️</button>
           </div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px;color:var(--muted)">
@@ -7322,6 +7321,13 @@ async function saveAnsatt(){
   const id=document.getElementById('ans-id').value;
   const navn=document.getElementById('ans-navn').value.trim();
   if(!navn){showToast('Navn kreves','err');return}
+  // Veiledende varsel: bruker lokalt speil og kan overse ansatte som ikke er lastet inn. Like navn kan lagres etter bekreftelse.
+  const normAnsattNavn=s=>String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
+  const sammeNavn=dbAll('ansatte').some(x=>x&&x.id!==id&&normAnsattNavn(x.navn)===normAnsattNavn(navn));
+  if(sammeNavn&&!confirm('«'+navn+'» finnes allerede blant de ansatte.\n\nTo ansatte med samme navn gjør det vanskelig å skille dem i timelisten og i lønnsrapporten.\n\nVil du lagre likevel?')){
+    showToast('Lagring avbrutt — endre navnet for å skille de ansatte','err');
+    return;
+  }
   const data={
     navn,
     stilling:document.getElementById('ans-stilling').value.trim(),
@@ -7349,20 +7355,10 @@ async function saveAnsatt(){
 }
 
 async function deleteAnsatt(id){
-  const a=dbFind('ansatte',id);if(!a)return;
-  const vakter=dbAll('vakter').filter(v=>v.ansattId===id);
-  let msg='Slett ansatt "'+(a.navn||'')+'"?';
-  if(vakter.length>0){
-    msg+='\n\nADVARSEL: '+vakter.length+' vakter er knyttet til denne ansatte. De blir IKKE slettet — de blir værende som "ukjent ansatt" i timelisten.';
-  }
-  msg+='\n\nDette kan ikke angres.';
-  if(!confirm(msg))return;
-  try{
-    await dbDelete('ansatte',id);
-    showToast('Ansatt slettet');
-  } catch(e){
-    showToast('Feil: '+e.message,'err');
-  }
+  alert('Sletting av ansatte er deaktivert.\n\n'
+    +'Vakter og lønnshistorikk er knyttet til ansatt-oppføringen. Sletting kan fjerne lønnskostnaden fra tidligere perioder.\n\n'
+    +'Sett den ansatte som inaktiv i stedet: åpne Rediger og fjern haken ved «Aktiv». Da beholdes all historikk, og navnet vises fortsatt på gamle vakter.');
+  return;
 }
 
 // ─────────────────────────────────────────
