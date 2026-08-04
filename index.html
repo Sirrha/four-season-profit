@@ -640,6 +640,11 @@ select.fi:focus{background-color:#fff}
       <button class="pin-btn" onclick="pinPress('0')" style="grid-column:2">0</button>
       <button class="pin-btn del" onclick="pinDelete()">⌫</button>
     </div>
+    <div id="auth-credential-form" style="display:none">
+      <input id="auth-email" type="email">
+      <input id="auth-password" type="password">
+      <button id="auth-submit" type="button"></button>
+    </div>
   </div>
 </div>
 
@@ -1715,6 +1720,144 @@ function renderIfActive(col){
   if(currentPage===map[col]||currentPage==='oversikt'||currentPage==='rapporter'){
     renderPage(currentPage);
   }
+}
+
+// ─────────────────────────────────────────
+// AUTH M2 · SLICE 3 · GATE 3A — DORMANT SCAFFOLDING
+// Nothing below is wired. No landed entry routine has an external caller, no
+// onAuthStateChanged observer is registered, and no Auth call executes at boot.
+// Gate 3B wires it. Design: docs/architecture/auth-m2-startup-gating.md §3.3–§3.14.
+// ─────────────────────────────────────────
+
+let authGeneration=0;          // §3.12 identity attempt token — deliberately separate from startupGeneration
+let authBoundUid=null;         // UID bound to the constructed currentUser (§3.5 condition 4)
+let authAttemptSettled=false;  // §3.12a generation-bound settle-once latch
+let authIdentityTimer=null;    // §3.12a the single identity timeout handle
+
+// §3.12a — the first current-generation outcome wins; settling cancels the timeout.
+// The outcome is returned to the caller, never stored: surfacing it is Gate 3B work.
+function authSettleIdentityAttempt(gen,outcome){
+  if(gen!==authGeneration)return null;
+  if(authAttemptSettled)return null;
+  authAttemptSettled=true;
+  if(authIdentityTimer){clearTimeout(authIdentityTimer);authIdentityTimer=null}
+  return outcome;
+}
+
+// §3.11 — a definitive negative versus an inability to obtain an answer. Unknown maps to
+// IDENTITY_LOAD_ERROR as the safe default: it offers retry without asserting a verdict.
+function authClassifyIdentityFailure(err){
+  const code=String((err&&(err.code||err.message))||'');
+  if(/user-disabled|user-token-expired/.test(code))return 'SIGNED_OUT';
+  return 'IDENTITY_LOAD_ERROR';
+}
+
+// §3.5 — the single guarded entry to tenant listeners. Evaluation order is normative:
+// generation freshness first, so a superseded attempt mutates nothing.
+function authGuardedTenantDataEntry(gen){
+  if(gen!==authGeneration)return null;
+  const user=firebase.auth().currentUser;
+  if(!user)return 'SIGNED_OUT';
+  if(!currentUser||!authBoundUid)return null;
+  if(user.uid!==authBoundUid)return null;
+  startListeners();
+  return 'ready';
+}
+
+// §3.3, §3.9, §3.11, §3.12 — the full identity pipeline. Generation is rechecked after every
+// suspension point. Definitive negatives settle AUTHZ_CLAIM_ERROR; an inability to answer
+// settles IDENTITY_LOAD_ERROR. This routine never calls authSignedOutTeardown: canonical
+// signed-out establishment is reserved for onAuthStateChanged(null) at Gate 3B.
+async function authResolveIdentity(user){
+  const gen=++authGeneration;
+  authAttemptSettled=false;
+  if(authIdentityTimer){clearTimeout(authIdentityTimer);authIdentityTimer=null}
+  authIdentityTimer=setTimeout(()=>{authSettleIdentityAttempt(gen,'IDENTITY_LOAD_ERROR')},30000);
+  try{
+    if(!user)return authSettleIdentityAttempt(gen,'SIGNED_OUT');
+    const tok=await user.getIdTokenResult(true);
+    if(gen!==authGeneration||authAttemptSettled)return null;
+    const claims=(tok&&tok.claims)||{};
+    const role=claims.role;
+    const rawAnsattId=claims.ansattId;
+    if(claims.tenantId!==TENANT_ID||(role!=='admin'&&role!=='employee')||typeof rawAnsattId!=='string'||!rawAnsattId.trim()){
+      return authSettleIdentityAttempt(gen,'AUTHZ_CLAIM_ERROR');
+    }
+    const normalizedAnsattId=rawAnsattId.trim();
+    const snap=await tenantCol('ansatte').doc(normalizedAnsattId).get();
+    if(gen!==authGeneration||authAttemptSettled)return null;
+    if(!snap.exists)return authSettleIdentityAttempt(gen,'AUTHZ_CLAIM_ERROR');
+    const emp=snap.data()||{};
+    const rawNavn=emp.navn;
+    if(emp.aktiv===false||typeof rawNavn!=='string'||!rawNavn.trim()){
+      return authSettleIdentityAttempt(gen,'AUTHZ_CLAIM_ERROR');
+    }
+    const normalizedNavn=rawNavn.trim();
+    currentUser={name:normalizedNavn,ansattId:normalizedAnsattId,role:role==='admin'?'admin':'staff',email:user.email||null};
+    authBoundUid=user.uid;
+    const outcome=authGuardedTenantDataEntry(gen);
+    if(!outcome)return null;
+    return authSettleIdentityAttempt(gen,outcome);
+  }catch(e){
+    if(gen!==authGeneration)return null;
+    return authSettleIdentityAttempt(gen,authClassifyIdentityFailure(e));
+  }
+}
+
+// §3.13b step 3 / §3.14 — the #main-app hide path. Mirrors showApp()'s display write.
+function hideMainApp(){
+  const el=document.getElementById('main-app');
+  if(el)el.style.display='none';
+}
+
+// §3.13a — signOut() rejected while the logout attempt owned the current generation.
+// Identity and bound UID stay intact, tenant UI stays hidden, listeners stay stopped.
+// The recoverable surface and its retry control are Gate 3B.
+function authClassifySignOutRejection(){
+  return 'LOGOUT_FAILURE';
+}
+
+// §3.13a — explicit logout is a REQUEST and does not itself establish the signed-out state.
+// Step 1's control-disable has no Auth-owned control at Gate 3A; it binds when the control
+// is wired at Gate 3B. Steps 2–5 land here.
+async function authExplicitLogoutTeardown(){
+  const gen=++authGeneration;
+  if(authIdentityTimer){clearTimeout(authIdentityTimer);authIdentityTimer=null}
+  authAttemptSettled=false;
+  hideMainApp();
+  stopListeners();
+  try{
+    await firebase.auth().signOut();
+  }catch(e){
+    if(gen!==authGeneration)return null;
+    return authClassifySignOutRejection(e);
+  }
+  return null;
+}
+
+// §3.13b — canonical observer-null teardown. Idempotent and synchronous, no awaits, so no
+// user action can interleave. DORMANT at Gate 3A: no observer wrapper, no registration, and
+// no caller. Step 9 reveals only the existing outer #login-screen; the hidden credential
+// container stays display:none until Gate 3B.
+function authSignedOutTeardown(){
+  stopListeners();
+  authGeneration++;
+  startupGeneration++;
+  if(startupTimer){clearTimeout(startupTimer);startupTimer=null}
+  authAttemptSettled=false;
+  hideMainApp();
+  document.getElementById('loading-screen').classList.add('hidden');
+  const se=document.getElementById('startup-error');
+  if(se)se.classList.add('hidden');
+  currentUser=null;
+  authBoundUid=null;
+  try{sessionStorage.removeItem('fs_user')}catch(e){}
+  resetLocalCollections();
+  STARTUP_COLS.forEach(col=>{delete startupState[col]});
+  startupSettled=false;
+  if(startupTimer){clearTimeout(startupTimer);startupTimer=null}
+  _appShown=false;
+  document.getElementById('login-screen').classList.remove('hidden');
 }
 
 // ─────────────────────────────────────────
