@@ -7,7 +7,297 @@
 > - **Firebase**: prosjektet er **`sormena-prod`**. `four-season-as` er KUN tenant-path-prefikset (`TENANT_ID`), ikke prosjektnavnet (bekreftet SECURITY-RULES-RECON-001).
 > - **Team** (ikke i koden, ikke avledbart fra git): **Athar Abdulalim** (kone, butikksjef, medeier), **Aboud Alkreman** (deltids), **Maria Syrota** (100%), **Yussef Ahmad** (kassemedeier), **Anastasiia Doroshenko** (deltids). Med Herish er teamet **seks personer** — samme antall som de seks godkjente Auth-kontoene fra M1 (`docs/architecture/auth-m1-provisioning.md` §2). Det finnes **ingen** ansatt «Ali» — det var et fragment av Athars etternavn.
 
+> **GJELDENDE BASELINE — TILLEGG 2026-08-22 (load-bearing, overstyrer eldre punkter der de er i konflikt):**
+> - **Auth-kontoer finnes allerede.** M1 (2026-07-26) skrev og Admin-SDK-verifiserte custom claims på **seks** produksjons-Firebase-Auth-kontoer; claimsene er **inerte** (ingenting i index.html leser dem ennå). Herish = `role:admin`, `tenantId:four-season-as`, `ansattId:Ij7AmknF9ZDAdWgwQGJi`; fem ansatte har employee-claims. Kilde: `docs/architecture/auth-m1-provisioning.md` §2 + M1-utførelsesrecord. Verdier sist verifisert 2026-07-26 (ikke re-lest i dag).
+> - **Gate 3A er SHIPPET men DORMANT.** Rettelse av 2026-08-02-punktet «Gate 3A — ikke implementert»: Gate 3A dormant stillas landet i `8170cf0` (2026-08-04) og ligger i index.html (~L1726). Ingen `onAuthStateChanged`-registrering, ingen kaller, ingen Auth-kall ved boot. Gate 3B/3C/3D er IKKE gjort. **PIN er fortsatt eneste LIVE identitetssti** (USERS/checkPin/boot).
+> - **Firestore er ÅPENT — kilde OG deployert.** Både `firestore.rules` og de live deployerte reglene er `match /tenants/{tenantId}/{document=**} { allow read, write: if true; }`. Deployert tilstand observert 2026-08-22 13:49 CEST (Console, Herish-relayed). Ingen server-side auth/ansatt/admin-isolasjon. PIN er IKKE en Firestore-autorisasjonsgrense.
+> - **Gjeldende produktretning = Employee V1 admin-auth + rules cutover, KUN DESIGN.** Console-basert S1–S5 (cutover-design + device-amendment + binding-design Option B: `authBindings/{uid}` + `employeeAuthLock/{ansattId}`). `authBindings`/`employeeAuthLock` finnes IKKE i kildekoden ennå. Employee-innlogging/Timeregistrering-ruting er mål, ikke aktivert.
+> - **Route A / Q31 er PENSJONERT** og er IKKE den gjeldende blokkereren. Q31 = NOT_ESTABLISHED, B1 spent/retired. Se SUPERSEDED-banner på Route A-seksjonen under.
+
 **Sist oppdatert**: 2026-08-02 — inventaret reflekterer runtime-kilde gjennom **M2 Slice 2 (`ca9e4b3`)**; Slice 3 er designet og dokumentert, men ikke implementert. Historisk kontekst er ikke fullstendig omskrevet. Se «Gjeldende baseline»-callout over. Forrige innholdsoppdatering: 2026-07-06, after V2C.5.2c.2 — kvittering → direkte-utgift [BANKRECON-V2C.5.2c.2-SHIP-001] (commit 361eea3). Merk: den historiske konteksten under er ikke fullstendig oppdatert mellom V2C.8A.2 og c.2 — de daterte bullet-ene er autoritative per sin dato. Foregående oppdatering var 2026-07-02, after Bank Reconciliation V2C.8A.2 — Leverandørregister klikk-semantikk [BANKRECON-V2C.8A.2-SHIP-001] shipped (commit 6a24456). V2C.8A.x visuelt/UX-lag på leverandør-detaljsiden, alt live-testet på ekte DNB-data 2026-07-01/02: V2C.8A.2 (6a24456, radklikk i Leverandørregister → `openLeverandorPage`, ny «✏ Rediger»-knapp), V2C.8A.1 (e85e1f7, matched-row «Se leverandør →» + «Andre utkast i Innboks»-fallback; typo var no-op), foundation V2C.8A (3385a9d, read-only leverandør-detaljside, 6 aggregerings-helpers). Samme produksjons-bue: V2C.5 dokument-upload/link/view/download (1d21fe8, Firebase Storage), V2C.2.2 defensiv leverandørfilter med navn-fallback (f6e6ec5). V2-buen: chunk-tellingen utvidet 12→14; V2C.5 + V2C.8A.x ferdig. Prior: V2C.4 documents-kolleksjon foundation (4dd7288, Sage 16/16, rent dataligg). Prior: V2C.3 allokeringsbygger (61ac8a0, alle 6 betalingsmønstre representerbare), V2C.2.1 beskrivelse-display-fix (68070b3), V2C.2 søkbar fakturavelger (3506529, Sage 17/17). Prior: V2C.1 linkedAllocations-skjema + backfill [BANKRECON-V2C.1-SHIP-001] (commit 328296d, 2026-06-29) — Sage GREEN, backfill kjørt (77 txs emptyLinks, zero-drift Q-A:A1). Prior: V2C scanner-integrasjon [BANKRECON-V2C-SHIP-001] (commit 2f12ecf, 2026-06-28) + V2B statement-scoping [BANKRECON-V2B-MERGED-SHIP-001] (commit 95b1789, 2026-06-27, match-night ship) shipped; V2A statement-skjema + backfill [BANKRECON-V2A-SHIP-001] (commit 90ee528) Sage GREEN (3 txs → 1 historical-prelinje statement). Prior: Økonomi panels E3a + E3b shipped + gated GREEN (Bank reconciliation took priority over E3c-E3f per PRIORITY-REORDER-001). Bank V1A.1 + V1A.2 shipped (V1A.2 gate YELLOW on count-doesn't-drop, superseded by V2 close-statement model; V1A.2-fix DROPPED per V2 design-lock D4). Prior: Phase E3a Summary cards row [E3A-SHIP-001] (commit 779b23a) — Sage gate GREEN. E1 pair complete (E1a footer/rename + E1b validator refactor). Prior: Phase E1a (footer restructure + utgifter→økonomi rename) — Sage E1a gate GREEN. Eldre anker: Stage 0 recon for the purchases→expenses-mirror migration arc (read-only — ingen kode shippet, ingen sanity-invariant-bevegelse). Bekreftet steady-state: `WRITE_TO_PURCHASES=true`, sanity invariants 9 / 1 / 2 uendret, reader-fanout (2f.0a..2f.0h) + writer dual-write (2f.1a..2f.1c.1) komplett. Prior milestone: Scanner auto-save V1 (`33cd2dc` / `b100d85` / `6880f42`) — Sage gate PASS. Mirror at 41. Soak alive.
+
+## Route A — identitetsprovisjonering (Firebase Auth)
+
+> **SUPERSEDED / HISTORISK (2026-08-22):** Denne Route A-planen (V2.5, IAM-provisioner, tooling-tjenestekonto, Gate 3B-via-Route-A) er **erstattet** av den aksepterte Console-baserte admin-auth + rules-cutover-designen (S1–S5). Beholdt som historikk; ikke gjeldende arbeidsflyt.
+
+**Status per 2026-08-11.** Arkitektur **V2.5 FROZEN**. Denne seksjonen er et
+systemkart, ikke en utførelsesdagbok.
+
+> **Om dette dokumentet og evidence-status:** system-inventory.md orienterer
+> Herish, Sirrha, Soren og C-Code om hva som er etablert, hvilken workflow-
+> tilstand vi er i, og hva som er lukket, parkert eller neste. **Det er ikke
+> bevis for gjeldende Google Cloud-tilstand.** Observerte sky-, prosjekt-,
+> browser- og IAM-verdier her er **siste verifiserte observasjon**, ikke live
+> Class B evidence.
+
+---
+
+### CLOSED · Change 1 — custom provisioning role
+
+Egendefinert prosjekt-nivå IAM-rolle opprettet og verifisert.
+
+```
+Role ID   SormenaRouteAProvisioner
+Title     Sormena Route A Provisioning
+Stage     GA
+Status    Enabled
+Binding   BOUND TO NO PRINCIPAL
+```
+
+**Nøyaktig syv tillatelser:**
+
+```
+firebaseauth.users.create      datastore.entities.get
+firebaseauth.users.get         datastore.entities.list
+firebaseauth.users.update      datastore.entities.create
+                               datastore.entities.update
+```
+
+**Permanent ekskludert fra DENNE rollen:**
+
+```
+firebaseauth.configs.getHashConfig
+firebaseauth.users.sendEmail
+firebaseauth.users.delete
+datastore.entities.delete
+```
+
+> **Permanent invariant:** `SormenaRouteAProvisioner` inneholder nøyaktig disse
+> syv godkjente tillatelsene. De fire over er permanent ekskludert fra rollen.
+
+**Arkivert bevisbegrensning.** Arcen ble lukket som
+`POST_CREATION_VERIFICATION_INCOMPLETE` med formell aksept (Block 6C).
+
+**Ingen avvik ble etablert i den delen av etterverifikasjonen som kunne
+verifiseres. De historiske kategoriene uten pre-arc baseline forble
+`NOT_ESTABLISHED` og ble akseptert som en ikke-blokkerende bevisbegrensning.**
+
+**Selve rollen er verifisert:** Enabled · nøyaktig syv tillatelser · bundet til
+ingen prinsipal. **Statusen er CLOSED.**
+
+---
+
+### CURRENT WORKFLOW STATE · Change 2 — dedikert tooling-tjenestekonto
+
+**Block 0 baseline etablert** (før endring — lærdommen fra Change 1).
+
+```
+brukeradministrerte tjenestekontoer     1
+brukeradministrerte nøkler              0
+dedikert Route A tooling-konto          IKKE OPPRETTET
+custom provisioning role                finnes, ubundet
+komplett enabled-service baseline       41
+IAM-rollegrupperinger                   10
+```
+
+**API-tilstand ved baseline:**
+
+```
+iam.googleapis.com                NOT_ENABLED
+iamcredentials.googleapis.com     NOT_ENABLED
+Cloud Resource Manager API        ENABLED
+Identity Toolkit API              ENABLED
+Cloud Firestore API               ENABLED
+```
+
+> **Evidence-status:** Verdiene over er **siste verifiserte observasjon**, ikke
+> live Class B evidence. Enhver utførelse som avhenger av dem må reetablere dem
+> ferskt i sitt eget evidence-vindu.
+
+**Ingen etablert organisasjonspolicy-blokker mot opprettelse av tjenestekonto.**
+
+**IAM-baselinen ble etablert som uttømmende** for det observerte prosjekt-nivå
+synet etter at Google-provided grants ble inkludert.
+
+**Token Creator historisk komparator:** prosjekt-nivå eksponering · nøyaktig én
+innehaver · innehaver privat korrelert til den eksisterende historiske
+tjenestekontoen. **Ingen rå prinsipal-identitet dokumenteres.**
+
+---
+
+### CURRENT WORKFLOW STATE · PREREQ 1 — aktivering av IAM API
+
+**Teknisk forutsetning for opprettelse av tjenestekonto**, verifisert fra
+offisiell dokumentasjon. **Ikke** en organisasjonspolicy-blokker.
+
+**Varige workflow-fakta — disse er gjeldende:**
+
+```
+ENABLE_ACTION_SUBMITTED
+RETRY_NOT_AUTHORIZED
+OPERASJONSNIVÅ-UTFALL: UNRESOLVED
+NEXT = read-only operation-outcome diagnostic
+```
+
+Enable-handlingen mot `iam.googleapis.com` ble **sendt nøyaktig én gang** og
+**ikke gjentatt**.
+
+**Siste verifiserte observasjon — morgen settled-state recovery, 2026-08-11:**
+
+```
+SETTLED_STATE_MATCHES_PRE_ACTION_BASELINE
+
+komplett enabled-service set     41
+iam.googleapis.com               NOT_ENABLED
+iamcredentials.googleapis.com    NOT_ENABLED
+delta mot historisk komparator   0
+additions                        ingen
+removals                         ingen
+```
+
+> **Evidence-status:** Verdiene over dokumenterer den siste verifiserte
+> observasjonen per 2026-08-11. De er lagret historikk/systemstatus, **IKKE live
+> Class B evidence** for en senere utførelsesøkt. Enhver handling som avhenger
+> av gjeldende API-, prosjekt-, browser- eller IAM-tilstand må reetablere denne
+> tilstanden ferskt i sitt eget evidence-vindu.
+
+> **Dette er verken suksess eller feil.** Det etablerer ikke at ingen operasjon
+> ble sendt — én ble det. Det etablerer ikke at senere propagering er umulig, at
+> tilstanden var uavbrutt mellom observasjonene, eller at et nytt forsøk er
+> trygt.
+
+**Verifisert leverandørkobling** — gjelder uansett hvordan PREREQ 1 løses:
+
+```
+aktivering av  iam.googleapis.com   aktiverer OGSÅ  iamcredentials.googleapis.com
+deaktivering av iam.googleapis.com  deaktiverer IKKE iamcredentials
+deaktivering av iamcredentials      deaktiverer OGSÅ iam.googleapis.com
+aktivering av  iamcredentials       aktiverer IKKE  iam.googleapis.com
+```
+
+**Koblingen er asymmetrisk og leverandørstyrt.** `IAM enabled + Credentials
+disabled` er ikke en oppnåelig konfigurasjon.
+
+---
+
+### NEXT · Read-only operation-outcome diagnostic
+
+**Neste arkitekturoppgave. Ingen ny settled-state-loop** — morgenens loop er
+terminal.
+
+**Formål:** avgjøre om en autoritativ Google Cloud-flate kan etablere
+utfallet eller statusen til den allerede sendte Service Usage enable-operasjonen.
+
+**Designretning under vurdering:** Cloud Audit Logs / Logs Explorer for Service
+Usage `EnableService` Admin Activity-oppføringen, med valgfritt read-only
+Service Usage operation-status-oppslag **kun hvis** en operasjons-ID og
+eksisterende leseautorisasjon trygt kan etableres.
+
+**Ingen utførelse er autorisert.**
+
+---
+
+### PARKED / NOT AUTHORIZED
+
+```
+TOKEN_CREATOR_CONTAINMENT_REQUIRED_BEFORE_BLOCK_3    PARKED
+    må løses før custom-rollen bindes i Block 3
+
+Gate 3B                                              NOT AUTHORIZED
+Architecture V2.5                                    FROZEN
+kontinuitetsdokument                                 INGEN OPPDATERING AUTORISERT
+SORMENA-OWNERSHIP-MIGRATION-001                      UTSATT
+```
+
+**Hvorfor Token Creator-porten finnes:** aktivering av IAM Service Account
+Credentials API kan gjøre en **allerede tildelt** Token Creator-kapabilitet
+brukbar gjennom den tjenesten. Det gir ingen ny tillatelse, men reiser separate
+spørsmål om **prinsipal-isolasjon, revisjonsattribusjon og proveniens** for
+handlinger utført som den dedikerte tooling-identiteten.
+
+---
+
+### Adopterte utførelseskontroll-policyer
+
+**Ligger under frosne V2.5. Endrer ikke V2.5.**
+
+#### Transport Evidence Boundary / Short Persistence Window Policy
+
+> **Et transport-fremrykk lukker det gjeldende live evidence-vinduet.**
+
+```
+KLASSE A   varig arkitektur-, policy- og leverandøranalysemateriale
+           bæres på tvers av grenser — kun via eksplisitt whitelist
+
+KLASSE B   live browser-, prosjekt-, API- og IAM-tilstand
+           utløper ved hver transportgrense, uavhengig av opphav
+           inkluderer menneskelig attestering av tilsiktet konto
+
+KLASSE C   vindusavgrenset Herish persistensgodkjenning
+           utløper hvis transporten rykker fram før den autoriserte handlingen
+```
+
+**Kjerneprinsipp:** de substansielle egenskapene kan **reetableres på nytt**
+etter en transporthendelse og må aldri antas fra transportkontinuitet alene.
+
+> **Merk for lesere av dette dokumentet:** utløpt Class B-tilstand blir ikke
+> live igjen fordi den er skrevet ned. Bruk inventaret til å orientere deg —
+> aldri som bevis for gjeldende tilstand når en utførelsesport krever ferskt
+> bevis.
+
+#### Post-Persistence Recovery Policy
+
+Sendt — eller potensielt sendt — handling **pluss** transporttap før fullstendig
+tilstandsverifisering utløser **kun read-only recovery**.
+
+> **Persistenshandlingen gjentas aldri automatisk.**
+
+---
+
+### Route A sekvens — høynivå
+
+```
+ 1  løs PREREQ 1
+ 2  opprett dedikert tooling-tjenestekonto
+ 3  verifiser den
+ 4  løs Token Creator containment før Block 3
+ 5  bind den eksakte custom provisioning-rollen
+ 6  fullfør owner bootstrap
+ 7  Gate 3B autentiseringsovergang
+ 8  runtime isolation refresh
+ 9  Gate 3C-1
+10  Gate 3C-2
+11  Gate 3D
+12  produksjons-/rules-bekreftelse
+13  Gate 3E
+14  ansattkonto / first-access utrulling
+15  Timereg V1
+```
+
+**Sekvensen tolkes eller omorganiseres ikke.**
+
+---
+
+### Varige verifiserte fakta — reetableres ikke
+
+**Disse er Class A. De bæres på tvers av evidence-grenser.**
+
+```
+serviceusage.services.enable    påkrevd tillatelse for API-aktivering
+roles/owner                     gir IKKE automatisk impersonering
+                                Token Creator må tildeles eksplisitt
+PAB                             støtter IKKE frittstående Google-kontoer
+                                som prinsipaltype
+IAM API                         verifisert teknisk forutsetning for
+                                opprettelse av tjenestekonto
+```
+
+---
+
+### Purchases → expenses-migrasjon
+
+**PAUSET, ikke forlatt.** Se seksjonene nedenfor for full tilstand. Steady-state:
+`WRITE_TO_PURCHASES=true`, sanity-invarianter **10 / 1 / 2** uendret,
+reader-fanout og writer dual-write komplett. **Route A-arbeidet har ikke rørt
+migrasjonsryggraden.**
+
+```
+grep -c "if(WRITE_TO_PURCHASES)" index.html   → 10
+grep -c "dbAll('purchases')"     index.html   → 1
+grep -c "dbFind('purchases'"     index.html   → 2
+```
+
+---
 
 - **Siste endring**: Bank Reconciliation V2C.5.2c.2 — kvittering → direkte-utgift-registrering [BANKRECON-V2C.5.2c.2-SHIP-001] (2026-07-06 / commit 361eea3). Et KVITTERING-dokument kan nå bli en **direkte utgift** (expenses-native, Path A: gjenbruker `buildExpenseDocFromOperatingForm` med spread-override), koblet til bank-tx + dokument, og markerer tx **dokumentert/Matchet**. **Ingen leverandørgjeld** (`linkedPurchaseId` null), **ingen fakturaallokering**. Mekanisme (b): nytt felt `bankTransactions.documentedExpenseId` + ÉN gren i `getBankTxStatus` (etter `linkedeFakturaer`-sjekk, før direction-fallback) — `linkedeFakturaer`-logikken urørt. **Bevisst divergens (DESIGN-010 D4)**: en dokumentert direkte-utgift fullfører avstemming, ulikt bare `supplier_credit`/`expected_refund`/`unapplied_review` som forblir review/unmatched — med vilje. Ny **Drivstoff**-kategori i `DEFAULT_EXPENSE_TAXONOMY['misc']` (D2). Ny modal `#v2c5-2c2-modal` + `openReceiptExpenseModal`/`closeReceiptExpenseModal`/`submitReceiptExpense`. «Registrer som utgift»-knapp (`.v2c5-2c2-receipt-btn`) på receipt-doc-rader (`_canReceipt = docType==='receipt' && !linkedExpenseId`). **D5**: beløp PREFYLLES fra `Math.abs(tx.belop)` (et kortkjøp ER tx-beløpet — motsatt av faktura-regelen DESIGN-007). Writes: 1 `dbAdd('expenses')` + 2 `dbUpdate` (`documents.linkedExpenseId`, `bankTransactions.documentedExpenseId`/`documentedAt`). `expenseKind:'misc'` (ingen ny kind — `EXPENSE_KINDS` fortsatt 12), `source:'v2c5.2c.2_receipt'`, `processingLevel:'receipt'`. Diff +96/-0. **node --check OK.** **Ennå ikke formelt Sage-gated** (venter Circle K nettleser-aksept). Sanity **10/1/2** (Path A, ingen `WRITE_TO_PURCHASES`-blokk lagt til). **To v1.1-oppfølgingskandidater**: (1) `accountantStatus` leser `missing_info` for kvitteringer fordi bilaget ligger i `documents` (via `linkedDocumentId`), ikke i `expense.originalFiles` → kandidat: regnskaps-readiness (`getAccountingReadiness`) bør honorere lenkede dokumenter; (2) Drivstoff er ikke synlig i det generiske Ny-utgift-skjemaet for Four Season fordi seedet `expense_taxonomy` er sentinel-gated (`expenseTaxonomySeeded` → `ensureExpenseTaxonomySeed` re-seeder ikke) → kandidat: engangs-upsert av misc-taxonomien (INGEN migrasjon skrevet i c.2). Kvittering-modalen leser kategorier fra KONSTANTEN (`DEFAULT_EXPENSE_TAXONOMY['misc']`), ikke det seedede kolleksjonen, så Drivstoff er tilgjengelig der umiddelbart uten migrasjon.
 
