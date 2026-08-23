@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="no">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ansatt-skall (LOKAL TEST) — ETR-1</title>
+  <!--
+    ETR-1 isolated entry page. Standalone from the live index.html boot path.
+    Loads ONLY local ETR-1 module(s). No CDN, no Firebase SDK, no remote script,
+    no remote font, no analytics, no fetch/XHR/WebSocket. Fixture-only.
+    Enabled only with ?emp=1 in the URL.
+  -->
+  <style>
+    :root { color-scheme: light; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; background: #f2f4f2; color: #1b2b20; }
+    .wrap { max-width: 480px; margin: 0 auto; padding: 24px 16px 60px; }
+    .brand { font-size: 20px; font-weight: 700; margin-bottom: 2px; }
+    .brand span { color: #2e7d46; }
+    .tag { font-size: 12px; color: #777; margin-bottom: 20px; }
+    .disabled { padding: 16px; border: 1px solid #ddd; border-radius: 10px; background: #fff; color: #555; font-size: 14px; }
+    button { font-family: inherit; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand">Ansatt-skall <span>(LOKAL TEST)</span></div>
+    <div class="tag">ETR-1 · fikstur-modus · ingen ekte innlogging, ingen produksjonsdata</div>
+    <div id="emp-root"></div>
+  </div>
+
+  <script type="module">
+    const root = document.getElementById('emp-root');
+    const enabled = new URLSearchParams(location.search).get('emp') === '1';
+    if (!enabled) {
+      const d = document.createElement('div');
+      d.className = 'disabled';
+      d.textContent = 'Lokalt ansatt-skall er deaktivert. Legg til ?emp=1 i URL-en for å åpne fikstur-testmodus.';
+      root.appendChild(d);
+    } else {
+      import('./employee-shell-ui.mjs')
+        .then((m) => m.mountEmployeeShell(root))
+        .catch((err) => {
+          const d = document.createElement('div');
+          d.className = 'disabled';
+          d.textContent = 'Kunne ikke laste ansatt-skallet: ' + (err && err.message ? err.message : String(err));
+          root.appendChild(d);
+        });
+    }
+  </script>
+</body>
+</html>
