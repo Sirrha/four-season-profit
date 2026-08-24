@@ -12,6 +12,7 @@ import {
   ETR2A_POLICY, attendanceIdFor,
   clockIn, clockOut, reasonRequiredForClock,
   tenantWorkDate, fmtTenantHM, tenantLocalHMToUtcMs, computeClockTimes,
+  startBreak, endBreak, declareBreak, reasonRequiredForBreak,
 } from './employee-shell-core.mjs';
 
 const POLICY = ETR2A_POLICY;
@@ -46,6 +47,10 @@ const REASON_LABELS = {
   FORGOT_CLOCK_OUT: 'Glemte å stemple ut', LEFT_EARLY: 'Gikk tidlig',
   SICK_DEPARTURE: 'Syk – dro hjem', COVERED_FOR_COLLEAGUE: 'Dekket for kollega',
   APP_UNAVAILABLE: 'Appen var utilgjengelig',
+  // ETR-2b break reason labels
+  FORGOT_BREAK_START: 'Glemte å starte pause', FORGOT_BREAK_END: 'Glemte å avslutte pause',
+  EXTENDED_BREAK: 'Forlenget pause', WORK_RELATED_INTERRUPTION: 'Arbeidsrelatert avbrudd',
+  PERSONAL_REASON: 'Personlig årsak',
 };
 
 // ---- Today's fixture planned shifts (one per routable ansattId), TODAY -------
@@ -155,15 +160,33 @@ export function mountEmployeeShell(root) {
     if (att && att.status === 'clocked_in') stateText = 'Stemplet inn kl. ' + fmtHM(att.observedClockInAt);
     else if (att && att.status === 'clocked_out') stateText = 'Stemplet ut kl. ' + fmtHM(att.observedClockOutAt) + ' (inn ' + fmtHM(att.observedClockInAt) + ')';
     card.appendChild(el('div', { text: 'Status: ' + stateText, style: 'font-size:13px;color:#555;margin-top:8px' }));
+    if (att && att.breakState === 'on_break') {
+      card.appendChild(el('div', { text: 'På pause siden kl. ' + fmtHM(att.openBreakStartedAt), style: 'font-size:13px;color:#6a5acd;font-weight:600;margin-top:4px' }));
+    } else if (att && att.observedBreakMinutesTotal > 0) {
+      // OBSERVED total shown as reference only (never auto-substituted for a declaration)
+      card.appendChild(el('div', { text: 'Observert pausetid: ' + att.observedBreakMinutesTotal + ' min (' + att.breakCount + ' pauser)', style: 'font-size:12px;color:#888;margin-top:4px' }));
+    }
     root.appendChild(card);
 
-    // dominant clock action
+    // dominant action(s) — break state machine (Freeze 003 §3.4)
+    const breaksOn = POLICY.breakMode !== 'none';
     if (!att) {
       root.appendChild(bigBtn('STEMPLE INN', '#2e7d46', () => openClockDialog(membership, shift, attId, 'in')));
     } else if (att.status === 'clocked_in') {
-      root.appendChild(bigBtn('STEMPLE UT', '#b8860b', () => openClockDialog(membership, shift, attId, 'out')));
+      if (att.breakState === 'on_break') {
+        // clock-out hidden/blocked while on_break, consistent with core BREAK_OPEN
+        root.appendChild(bigBtn('AVSLUTT PAUSE', '#b8860b', () => openBreakDialog(membership, shift, attId, 'break_end')));
+      } else {
+        if (breaksOn) root.appendChild(bigBtn('START PAUSE', '#6a5acd', () => openBreakDialog(membership, shift, attId, 'break_start')));
+        root.appendChild(bigBtn('STEMPLE UT', '#b8860b', () => openClockDialog(membership, shift, attId, 'out')));
+      }
     } else {
       root.appendChild(el('div', { text: 'Vakten er fullført for i dag.', style: 'text-align:center;color:#2e7d46;font-weight:600;padding:12px' }));
+    }
+
+    // break declaration entry (only when there is an attendance and no break is open)
+    if (breaksOn && att && (att.status === 'clocked_in' || att.status === 'clocked_out') && att.breakState !== 'on_break') {
+      root.appendChild(linkBtn('Registrer pausetid →', () => openDeclareBreakDialog(membership, shift, attId)));
     }
 
     // secondary entry points
@@ -232,6 +255,80 @@ export function mountEmployeeShell(root) {
       if (res.code === 'REASON_REQUIRED') {
         const rr = reasonRequiredForClock(reasonKind, { declaredAt: declared, observedAt: now, plannedAt, policy: POLICY });
         errBox.textContent = 'Årsak kreves (avvik ' + Math.round(rr.declarationDeviationMin) + ' min fra registrert / ' + Math.round(rr.varianceMin) + ' min fra planlagt). Velg en gyldig årsak' + (reasonCode === 'OTHER' ? ' og skriv et notat.' : '.');
+      } else {
+        errBox.textContent = 'Kunne ikke registrere: ' + res.code;
+      }
+    });
+    root.appendChild(submit);
+    root.appendChild(backBtn('Avbryt', () => goToday(membership)));
+  }
+
+  // ETR-2b: minimal START/END BREAK confirm dialog. Observed break time = the single
+  // injected instant on confirm; no reason prompt here (variance lives on declaration).
+  function openBreakDialog(membership, shift, attId, kind) {
+    clear(root);
+    const previewMs = Date.now();
+    const isStart = kind === 'break_start';
+    root.appendChild(el('h2', { text: isStart ? 'Start pause' : 'Avslutt pause', style: 'font-size:18px;margin:0 0 4px' }));
+    root.appendChild(el('div', { text: tenantLabel(shift.tenantId), style: 'font-size:13px;color:#666;margin-bottom:12px' }));
+    root.appendChild(el('div', { text: 'Nå (forhåndsvisning): ' + fmtHM(previewMs) + ' — faktisk observert tidspunkt registreres når du bekrefter.', style: 'font-size:12px;color:#888;margin-bottom:8px' }));
+    const errBox = el('div', { style: 'color:#a33;font-size:13px;min-height:18px;margin-bottom:8px' });
+    root.appendChild(errBox);
+    const submit = el('button', { text: isStart ? 'Bekreft pausestart' : 'Bekreft pauseslutt', style: 'width:100%;max-width:360px;padding:12px;border:0;border-radius:10px;background:#6a5acd;color:#fff;font-size:15px;font-weight:700;cursor:pointer' });
+    submit.addEventListener('click', () => {
+      const now = Date.now();   // single injected action instant = observed break time
+      const actor = actorFromMembership(membership);
+      const scope = { tenantId: membership.tenantId };
+      const existing = attendanceStore.get(attId);
+      const res = isStart
+        ? startBreak({ actor, existing, scope }, now, POLICY)
+        : endBreak({ actor, existing, scope }, now, POLICY);
+      if (res.ok) { attendanceStore.set(attId, res.attendance); goToday(membership); return; }
+      errBox.textContent = 'Kunne ikke registrere: ' + res.code;
+    });
+    root.appendChild(submit);
+    root.appendChild(backBtn('Avbryt', () => goToday(membership)));
+  }
+
+  // ETR-2b: dedicated employee break DECLARATION. Observed total is shown as reference
+  // only; the declared minutes are an explicit employee entry (never auto-filled from
+  // observed). Reason prompt follows B13-B16 via the core variance gate.
+  function openDeclareBreakDialog(membership, shift, attId) {
+    clear(root);
+    const att = attendanceStore.get(attId);
+    root.appendChild(el('h2', { text: 'Registrer pausetid', style: 'font-size:18px;margin:0 0 4px' }));
+    root.appendChild(el('div', { text: tenantLabel(shift.tenantId) + ' · forventet ' + POLICY.expectedBreakMinutes + ' min', style: 'font-size:13px;color:#666;margin-bottom:8px' }));
+    root.appendChild(el('div', { text: 'Observert (kun referanse): ' + (att ? att.observedBreakMinutesTotal : 0) + ' min', style: 'font-size:12px;color:#888;margin-bottom:8px' }));
+    root.appendChild(el('label', { text: 'Din oppgitte totale pausetid (minutter):', style: 'display:block;font-size:13px;margin-bottom:4px' }));
+    const minInput = el('input', { attrs: { type: 'number', min: '0', step: '1', placeholder: 'minutter' }, style: 'width:100%;max-width:360px;padding:8px;font-size:15px;margin-bottom:12px' });
+    root.appendChild(minInput);
+    root.appendChild(el('label', { text: 'Årsak (kreves ved avvik):', style: 'display:block;font-size:13px;margin-bottom:4px' }));
+    const reasonSel = el('select', { style: 'width:100%;max-width:360px;padding:8px;font-size:15px;margin-bottom:8px' });
+    reasonSel.appendChild(el('option', { text: '— Ingen —', attrs: { value: '' } }));
+    for (const key of Object.keys(POLICY.reasonCodes)) {
+      const cfg = POLICY.reasonCodes[key];
+      if (cfg.appliesTo.includes('break')) reasonSel.appendChild(el('option', { text: REASON_LABELS[key] || key, attrs: { value: key } }));
+    }
+    root.appendChild(reasonSel);
+    const noteInput = el('input', { attrs: { type: 'text', placeholder: 'Notat (kreves ved «Annet»)' }, style: 'width:100%;max-width:360px;padding:8px;font-size:14px;margin-bottom:10px' });
+    root.appendChild(noteInput);
+    const errBox = el('div', { style: 'color:#a33;font-size:13px;min-height:18px;margin-bottom:8px' });
+    root.appendChild(errBox);
+    const submit = el('button', { text: 'Bekreft pausetid', style: 'width:100%;max-width:360px;padding:12px;border:0;border-radius:10px;background:#2e7d46;color:#fff;font-size:15px;font-weight:700;cursor:pointer' });
+    submit.addEventListener('click', () => {
+      const now = Date.now();
+      const raw = (minInput.value || '').trim();
+      if (raw === '' || !/^\d+$/.test(raw)) { errBox.textContent = 'Oppgi et helt antall minutter (0 eller mer).'; return; }
+      const declaredBreakMinutesTotal = parseInt(raw, 10);
+      const reasonCode = reasonSel.value || null;
+      const reasonNote = (noteInput.value || '').trim() || null;
+      const actor = actorFromMembership(membership);
+      const scope = { tenantId: membership.tenantId };
+      const res = declareBreak({ actor, existing: attendanceStore.get(attId), declaredBreakMinutesTotal, reasonCode, reasonNote, scope }, now, POLICY);
+      if (res.ok) { attendanceStore.set(attId, res.attendance); goToday(membership); return; }
+      if (res.code === 'REASON_REQUIRED') {
+        const rr = reasonRequiredForBreak(declaredBreakMinutesTotal, POLICY);
+        errBox.textContent = 'Årsak kreves (avvik ' + Math.round(rr.varianceMin) + ' min fra forventet ' + POLICY.expectedBreakMinutes + ' min). Velg en gyldig årsak' + (reasonCode === 'OTHER' ? ' og skriv et notat.' : '.');
       } else {
         errBox.textContent = 'Kunne ikke registrere: ' + res.code;
       }

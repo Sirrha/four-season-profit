@@ -39,6 +39,10 @@ import {
   fmtTenantHM,
   tenantLocalHMToUtcMs,
   computeClockTimes,
+  // ETR-2b break path:
+  startBreak,
+  endBreak,
+  declareBreak,
 } from './employee-shell-core.mjs';
 
 let passed = 0;
@@ -155,6 +159,13 @@ function clockedOut(over) {
   const a = clockedIn(over);
   const res = clockOut({ actor: emp('ans-a1'), existing: a, declaredEndAt: over.declaredEnd != null ? over.declaredEnd : D(20), reasonCode: over.outReason || 'MANAGEMENT_DECISION', reasonNote: null, scope: SCOPE }, over.outNow != null ? over.outNow : D(20), POL);
   assert.ok(res.ok, 'clockedOut helper expected ok, got ' + res.code);
+  return res.attendance;
+}
+function onBreak(over) {
+  over = over || {};
+  const a = clockedIn(over);
+  const res = startBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, over.breakNow != null ? over.breakNow : D(13), POL);
+  assert.ok(res.ok, 'onBreak helper expected ok, got ' + res.code);
   return res.attendance;
 }
 
@@ -886,6 +897,190 @@ t('P3e observed clock-out EQUAL to clock-in is not rejected by the chronology gu
   const r = clockOut({ actor: emp('ans-a1'), existing: a, declaredEndAt: D(12), reasonCode: 'MANAGEMENT_DECISION', scope: SCOPE }, D(12), POL);
   assert.ok(r.ok, r.code); // equality allowed; no minimum-duration policy invented here
   assert.equal(r.attendance.observedClockOutAt, D(12));
+});
+
+// =====================================================================
+// ETR-2b — BREAK PATH (Freeze 003 §3 + prebuild design ruling). B1-B18 map to
+// BRK-B* here to avoid name collision with the ETR-2a corrective B1-B9 family.
+// =====================================================================
+t('BRK-B1 break_start while working ALLOW', () => {
+  const a = clockedIn(); // observedClockInAt = D(12)
+  const r = startBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(13), POL);
+  assert.ok(r.ok, r.code);
+  assert.equal(r.attendance.breakState, 'on_break');
+  assert.equal(r.attendance.openBreakStartedAt, D(13));
+  assert.equal(r.attendance.breakCount, 0);       // no increment on start
+  assert.equal(r.attendance.revision, 2);
+  assert.equal(r.event.type, 'break_start');
+});
+t('BRK-B2 break_start before clock_in REJECT', () => {
+  const r = startBreak({ actor: emp('ans-a1'), existing: null, scope: SCOPE }, D(13), POL);
+  assert.equal(r.ok, false); assert.equal(r.code, 'NO_ATTENDANCE');
+});
+t('BRK-B3 break_start after clock_out REJECT', () => {
+  const a = clockedOut(); // status clocked_out
+  const r = startBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(21), POL);
+  assert.equal(r.ok, false); assert.equal(r.code, 'NOT_CLOCKED_IN');
+});
+t('BRK-B4 break_start while already on_break REJECT', () => {
+  const a = onBreak();
+  const r = startBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(14), POL);
+  assert.equal(r.ok, false); assert.equal(r.code, 'BREAK_ALREADY_OPEN');
+});
+t('BRK-B5 break_end while working REJECT', () => {
+  const a = clockedIn();
+  const r = endBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(13), POL);
+  assert.equal(r.ok, false); assert.equal(r.code, 'BREAK_NOT_OPEN');
+});
+t('BRK-B6 two sequential breaks ALLOW', () => {
+  let a = onBreak();
+  a = endBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(13, 10), POL).attendance;
+  const s2 = startBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(15), POL);
+  assert.ok(s2.ok, s2.code);
+  const e2 = endBreak({ actor: emp('ans-a1'), existing: s2.attendance, scope: SCOPE }, D(15, 20), POL);
+  assert.ok(e2.ok, e2.code);
+  assert.equal(e2.attendance.breakCount, 2);
+  assert.equal(e2.attendance.observedBreakMinutesTotal, 30);
+});
+t('BRK-B7 clock_out while break open REJECT', () => {
+  const a = onBreak();
+  const r = clockOut({ actor: emp('ans-a1'), existing: a, declaredEndAt: D(20), reasonCode: 'MANAGEMENT_DECISION', scope: SCOPE }, D(20), POL);
+  assert.equal(r.ok, false); assert.equal(r.code, 'BREAK_OPEN');
+});
+t('BRK-B8 break events preserve contiguous ordering in the attendance stream', () => {
+  const ci = clockIn({ actor: emp('ans-a1'), shift: mkShift('ans-a1'), declaredStartAt: D(12), scope: SCOPE }, D(12), POL);
+  const bs = startBreak({ actor: emp('ans-a1'), existing: ci.attendance, scope: SCOPE }, D(13), POL);
+  const be = endBreak({ actor: emp('ans-a1'), existing: bs.attendance, scope: SCOPE }, D(13, 15), POL);
+  const events = [ci.event, bs.event, be.event];
+  assert.deepEqual(events.map((e) => e.revision), [1, 2, 3]);
+  assert.equal(detectRevisionGaps(events).hasGap, false);
+  for (const e of events) assert.equal(eventIdMatchesRevision(e), true);
+  assert.deepEqual(events.map((e) => e.type), ['clock_in', 'break_start', 'break_end']);
+});
+t('BRK-B9 observedBreakMinutesTotal accumulates on each completed break_end', () => {
+  let a = onBreak();
+  a = endBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(13, 12), POL).attendance;
+  assert.equal(a.observedBreakMinutesTotal, 12);
+  assert.equal(a.breakCount, 1);
+  a = startBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(15), POL).attendance;
+  a = endBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(15, 8), POL).attendance;
+  assert.equal(a.observedBreakMinutesTotal, 20);
+  assert.equal(a.breakCount, 2);
+});
+t('BRK-B10 employee edit of an observed break projection fact REJECT', () => {
+  const a = onBreak();
+  for (const f of ['openBreakStartedAt', 'observedBreakMinutesTotal', 'breakState', 'breakCount']) {
+    const r = employeeEdit({ actor: emp('ans-a1'), existing: a, patch: { [f]: 1 }, scope: SCOPE }, D(14), POL);
+    assert.equal(r.ok, false, f); assert.ok(r.code.startsWith('FIELD_NOT_EDITABLE'), f);
+  }
+});
+t('BRK-B11 manager edit of an observed break projection fact REJECT', () => {
+  const a = onBreak();
+  for (const f of ['openBreakStartedAt', 'observedBreakMinutesTotal', 'breakState', 'breakCount']) {
+    const r = managerCorrection({ actor: admin(), existing: a, patch: { [f]: 1 }, reasonCode: 'MANAGEMENT_DECISION', scope: SCOPE }, D(14), POL);
+    assert.equal(r.ok, false, f); assert.ok(r.code.startsWith('FIELD_NOT_CORRECTABLE'), f);
+  }
+});
+t('BRK-B12 client-supplied observed break start cannot replace injected now', () => {
+  const a = clockedIn();
+  const r = startBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE, observedBreakStartAt: D(9), openBreakStartedAt: D(9) }, D(13), POL);
+  assert.ok(r.ok, r.code);
+  assert.equal(r.attendance.openBreakStartedAt, D(13)); // forced to injected now
+});
+t('BRK-B13 declared break total within tolerance, no reason ALLOW', () => {
+  const a = clockedOut();
+  const r = declareBreak({ actor: emp('ans-a1'), existing: a, declaredBreakMinutesTotal: 33, scope: SCOPE }, D(21), POL); // |33-30|=3 <= 5
+  assert.ok(r.ok, r.code);
+  assert.equal(r.attendance.declaredBreakMinutesTotal, 33);
+  assert.equal(r.event.type, 'employee_declaration');
+});
+t('BRK-B14 declared break total beyond tolerance, no reason REJECT', () => {
+  const a = clockedOut();
+  const r = declareBreak({ actor: emp('ans-a1'), existing: a, declaredBreakMinutesTotal: 45, scope: SCOPE }, D(21), POL); // |45-30|=15 > 5
+  assert.equal(r.ok, false); assert.equal(r.code, 'REASON_REQUIRED');
+});
+t('BRK-B15 declared break total beyond tolerance with applicable break reason ALLOW', () => {
+  const a = clockedOut();
+  const r = declareBreak({ actor: emp('ans-a1'), existing: a, declaredBreakMinutesTotal: 45, reasonCode: 'EXTENDED_BREAK', scope: SCOPE }, D(21), POL);
+  assert.ok(r.ok, r.code);
+  assert.equal(r.attendance.declaredBreakMinutesTotal, 45);
+});
+t('BRK-B16 reason code not applicable to break REJECT', () => {
+  const a = clockedOut();
+  const r = declareBreak({ actor: emp('ans-a1'), existing: a, declaredBreakMinutesTotal: 45, reasonCode: 'FORGOT_CLOCK_IN', scope: SCOPE }, D(21), POL);
+  assert.equal(r.ok, false); assert.equal(r.code, 'REASON_REQUIRED');
+});
+t('BRK-B17 employee write to approvedBreakMinutesTotal REJECT', () => {
+  const a = clockedOut();
+  const r = employeeEdit({ actor: emp('ans-a1'), existing: a, patch: { approvedBreakMinutesTotal: 30 }, scope: SCOPE }, D(21), POL);
+  assert.equal(r.ok, false); assert.ok(r.code.startsWith('FIELD_NOT_EDITABLE'));
+});
+t('BRK-B18 breakMode none -> ALL break transitions unavailable at core level', () => {
+  const pol = Object.assign({}, POL, { breakMode: 'none' });
+  // startBreak disabled on a working attendance
+  const a = clockedIn();
+  const s = startBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(13), pol);
+  assert.equal(s.ok, false); assert.equal(s.code, 'BREAK_DISABLED');
+  // endBreak disabled even on an otherwise on-break attendance (set up under normal policy)
+  const open = onBreak();
+  const e = endBreak({ actor: emp('ans-a1'), existing: open, scope: SCOPE }, D(14), pol);
+  assert.equal(e.ok, false); assert.equal(e.code, 'BREAK_DISABLED');
+  // declareBreak disabled even on an otherwise declarable (clocked_out) attendance
+  const done = clockedOut();
+  const d = declareBreak({ actor: emp('ans-a1'), existing: done, declaredBreakMinutesTotal: 30, scope: SCOPE }, D(21), pol);
+  assert.equal(d.ok, false); assert.equal(d.code, 'BREAK_DISABLED');
+});
+
+// ---- Break chronology / integrity (not new business policy) ----
+t('BRK-chron non-finite openBreakStartedAt REJECT', () => {
+  const a = Object.assign({}, onBreak(), { openBreakStartedAt: NaN });
+  const r = endBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(14), POL);
+  assert.equal(r.ok, false); assert.equal(r.code, 'OPEN_BREAK_NOT_FINITE');
+});
+t('BRK-chron endBreak now < openBreakStartedAt REJECT', () => {
+  const a = onBreak(); // open at D(13)
+  const r = endBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(12, 30), POL);
+  assert.equal(r.ok, false); assert.equal(r.code, 'BREAK_END_BEFORE_START');
+});
+t('BRK-chron endBreak now === openBreakStartedAt ALLOW (zero-minute segment)', () => {
+  const a = onBreak(); // open at D(13)
+  const r = endBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(13), POL);
+  assert.ok(r.ok, r.code);
+  assert.equal(r.attendance.observedBreakMinutesTotal, 0);
+  assert.equal(r.attendance.breakCount, 1);
+});
+
+// ---- Admin-only approved break total (counterpart of BRK-B17) ----
+t('BRK-approved admin may set approvedBreakMinutesTotal; employee cannot', () => {
+  const a = clockedOut();
+  const ok1 = managerCorrection({ actor: admin(), existing: a, patch: { approvedBreakMinutesTotal: 30 }, reasonCode: 'MANAGEMENT_DECISION', scope: SCOPE }, D(21), POL);
+  assert.ok(ok1.ok, ok1.code);
+  assert.equal(ok1.attendance.approvedBreakMinutesTotal, 30);
+  const badVal = managerCorrection({ actor: admin(), existing: a, patch: { approvedBreakMinutesTotal: -5 }, reasonCode: 'MANAGEMENT_DECISION', scope: SCOPE }, D(21), POL);
+  assert.equal(badVal.ok, false); assert.equal(badVal.code, 'APPROVED_BREAK_INVALID');
+  const empTry = employeeEdit({ actor: emp('ans-a1'), existing: a, patch: { approvedBreakMinutesTotal: 30 }, scope: SCOPE }, D(21), POL);
+  assert.equal(empTry.ok, false); assert.ok(empTry.code.startsWith('FIELD_NOT_EDITABLE'));
+});
+
+// ---- Load-bearing multiple-break scenario (design-correction proof) ----
+t('BRK-load 10+20 sequential breaks: no intermediate reason demand; totals + revisions correct', () => {
+  let a = clockedIn(); // in D(12), revision 1
+  a = startBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(13), POL).attendance;      // rev 2
+  const e1 = endBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(13, 10), POL);        // rev 3, +10, NO reason demanded
+  assert.ok(e1.ok, e1.code);
+  a = e1.attendance;
+  assert.equal(a.observedBreakMinutesTotal, 10);
+  assert.equal(a.breakCount, 1);
+  a = startBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(15), POL).attendance;      // rev 4
+  const e2 = endBreak({ actor: emp('ans-a1'), existing: a, scope: SCOPE }, D(15, 20), POL);        // rev 5, +20
+  assert.ok(e2.ok, e2.code);
+  a = e2.attendance;
+  assert.equal(a.observedBreakMinutesTotal, 30);
+  assert.equal(a.breakCount, 2);
+  const d = declareBreak({ actor: emp('ans-a1'), existing: a, declaredBreakMinutesTotal: 30, scope: SCOPE }, D(16), POL); // |30-30|=0, no reason
+  assert.ok(d.ok, d.code);                     // rev 6
+  assert.equal(d.attendance.declaredBreakMinutesTotal, 30);
+  assert.equal(d.attendance.revision, 6);      // contiguous 1..6
 });
 
 // ---- Concurrency (DEFERRED to emulator; cannot be proven in fixtures) ----

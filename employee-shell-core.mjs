@@ -120,18 +120,28 @@ export const ETR2A_POLICY = Object.freeze({
   employeeClockingEnabled: true,
   managerCorrectionRequiresReason: true,
   maxEditWindowHours: 36,         // rule-enforced upper bound on the edit deadline
+  // ETR-2b break policy (PROVISIONAL Four Season business settings, not invariants):
+  breakMode: 'trackedStartEnd',   // 'trackedStartEnd' | 'fixedAutoDeduct' | 'manualTotal' | 'none'
+  expectedBreakMinutes: 30,
+  breakVarianceToleranceMinutes: 5,
   // reason codes: machine keys only; labels are UI concern; appliesTo/requiresNote
   reasonCodes: Object.freeze({
     FORGOT_CLOCK_IN:       { appliesTo: ['clock_in'], requiresNote: false },
     LATE_ARRIVAL:          { appliesTo: ['clock_in'], requiresNote: false },
-    MANAGEMENT_DECISION:   { appliesTo: ['clock_in', 'clock_out', 'manager'], requiresNote: false },
-    OTHER:                 { appliesTo: ['clock_in', 'clock_out', 'manager'], requiresNote: true },
+    MANAGEMENT_DECISION:   { appliesTo: ['clock_in', 'clock_out', 'manager', 'break'], requiresNote: false },
+    OTHER:                 { appliesTo: ['clock_in', 'clock_out', 'manager', 'break'], requiresNote: true },
     FORGOT_CLOCK_OUT:      { appliesTo: ['clock_out'], requiresNote: false },
     LEFT_EARLY:            { appliesTo: ['clock_out'], requiresNote: false },
     SICK_DEPARTURE:        { appliesTo: ['clock_out'], requiresNote: false },
     COVERED_FOR_COLLEAGUE: { appliesTo: ['clock_in', 'clock_out'], requiresNote: false },
     APP_UNAVAILABLE:       { appliesTo: ['clock_in', 'clock_out'], requiresNote: false },
     RETROACTIVE_ENTRY:     { appliesTo: ['manager'], requiresNote: false },
+    // ETR-2b break reason codes (appliesTo 'break')
+    FORGOT_BREAK_START:        { appliesTo: ['break'], requiresNote: false },
+    FORGOT_BREAK_END:          { appliesTo: ['break'], requiresNote: false },
+    EXTENDED_BREAK:            { appliesTo: ['break'], requiresNote: false },
+    WORK_RELATED_INTERRUPTION: { appliesTo: ['break'], requiresNote: false },
+    PERSONAL_REASON:           { appliesTo: ['break'], requiresNote: false },
   }),
 });
 
@@ -398,6 +408,11 @@ export function clockIn({ actor, shift, existing, declaredStartAt, reasonCode, r
     declaredStartAt: declared, declaredEndAt: null,
     approvedStartAt: null, approvedEndAt: null, approvedByUid: null, approvedAt: null,
     status: 'clocked_in', employeeEditCount: 0, employeeEditDeadline: deadline,
+    // ETR-2b break projection (Freeze 003 §3.3). Observed break history lives in the
+    // append-only break_start/break_end events; these are derived current-state fields.
+    breakState: 'working', openBreakStartedAt: null,
+    observedBreakMinutesTotal: 0, declaredBreakMinutesTotal: null,
+    approvedBreakMinutesTotal: null, breakCount: 0,
     revision: 1, createdAt: now, updatedAt: now,
   };
   const event = mkEvent('clock_in', attendance, actor, now, reasonCode, reasonNote, {
@@ -419,6 +434,9 @@ export function clockOut({ actor, existing, declaredEndAt, reasonCode, reasonNot
   // revision, event, mutation, or observed/provenance fact. Equality is allowed.
   if (!isFiniteInstant(existing.observedClockInAt)) return err('OBSERVED_IN_NOT_FINITE');
   if (now < existing.observedClockInAt) return err('CLOCK_OUT_BEFORE_CLOCK_IN');
+  // ETR-2b: cannot clock out while a break is open. The employee must end the break
+  // first; never silently auto-close and never synthesize a break_end here.
+  if (existing.breakState === 'on_break') return err('BREAK_OPEN');
   const observedClockOutAt = now;                        // server/injected; immutable
   const declared = (declaredEndAt == null) ? now : declaredEndAt;
   if (declared !== observedClockOutAt && policy.employeeMayAdjustTime !== true) return err('TIME_ADJUST_NOT_ALLOWED');
@@ -502,7 +520,9 @@ export function employeeEdit({ actor, existing, patch, reasonCode, reasonNote, s
 // fields are correctable. Observed times, ownership, stable identity, shift linkage/
 // snapshot, counters, revision, event history, approval provenance, status and any
 // arbitrary field are never caller-mutable through the generic correction patch.
-const MANAGER_CORRECTABLE = ['declaredStartAt', 'declaredEndAt', 'note'];
+// ETR-2b: approvedBreakMinutesTotal is an admin-only APPROVED fact; adding it here (and
+// NOT to EMPLOYEE_EDITABLE) lets an admin establish/correct it while employees cannot.
+const MANAGER_CORRECTABLE = ['declaredStartAt', 'declaredEndAt', 'note', 'approvedBreakMinutesTotal'];
 export function managerCorrection({ actor, existing, patch, reasonCode, reasonNote, scope }, now, policy) {
   if (!existing) return err('NO_ATTENDANCE');
   if (!isFiniteInstant(now)) return err('NOW_NOT_FINITE');                           // P2-4
@@ -524,6 +544,11 @@ export function managerCorrection({ actor, existing, patch, reasonCode, reasonNo
     }
   }
   if (proposed.declaredEndAt != null && proposed.declaredStartAt != null && proposed.declaredEndAt < proposed.declaredStartAt) return err('END_BEFORE_START');
+  // ETR-2b: approvedBreakMinutesTotal (admin-only) must be a finite non-negative integer.
+  if ('approvedBreakMinutesTotal' in changed) {
+    const v = proposed.approvedBreakMinutesTotal;
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) return err('APPROVED_BREAK_INVALID');
+  }
   if (policy.managerCorrectionRequiresReason && !isReasonValid('manager', reasonCode, reasonNote, policy)) return err('REASON_REQUIRED'); // C28
   // provenance derived from authorized actor/time; revision monotonic
   const attendance = Object.assign({}, existing, changedValues(changed), { revision: existing.revision + 1, updatedAt: now });
@@ -569,6 +594,98 @@ export function approve({ actor, existing, approvedStartAt, approvedEndAt, scope
     approvedStartAt: { before: existing.approvedStartAt, after: approvedStartAt },
     approvedEndAt: { before: existing.approvedEndAt, after: approvedEndAt },
     status: { before: existing.status, after: 'approved' },
+  });
+  return ok({ attendance, event });
+}
+
+// =====================================================================
+// ETR-2b — BREAK PATH (fixture-only). break_start / break_end are OBSERVATION
+// transitions (no variance gate); declareBreak() is the DECLARED transition that
+// carries the two-threshold break-variance gate (declared vs expected). Governing:
+// Freeze 003 §3 + SIRRHA-CCODE-ETR2B-PREBUILD-DESIGN-RULING-001.
+// =====================================================================
+// Break variance is evaluated ONLY on the declaration (declared vs expected), never
+// per intermediate break_end (multiple sequential breaks are frozen behavior).
+export function reasonRequiredForBreak(declaredBreakMinutesTotal, policy) {
+  const varianceMin = Math.abs(declaredBreakMinutesTotal - policy.expectedBreakMinutes);
+  return { required: varianceMin > policy.breakVarianceToleranceMinutes, varianceMin };
+}
+
+// START BREAK — observation transition. Observed start = the single injected now.
+export function startBreak({ actor, existing, scope }, now, policy) {
+  if (!existing) return err('NO_ATTENDANCE');
+  if (!isFiniteInstant(now)) return err('NOW_NOT_FINITE');                            // P2-4 parity
+  const se = laterScopeError(actor, existing, ['employee', 'admin'], true, scope);    // reuse P2-2 scope + role + own
+  if (se) return err(se);
+  if (!policy || policy.breakMode === 'none') return err('BREAK_DISABLED');           // B18
+  if (existing.status !== 'clocked_in') return err('NOT_CLOCKED_IN');                 // B2 (no attendance) / B3 (clocked_out)
+  if (existing.breakState === 'on_break') return err('BREAK_ALREADY_OPEN');           // B4
+  if (existing.breakState !== 'working') return err('BREAK_STATE_INVALID');           // fail-closed
+  const observedBreakStartAt = now;                     // server/injected; client cannot supply (B12)
+  const attendance = Object.assign({}, existing, {
+    breakState: 'on_break', openBreakStartedAt: observedBreakStartAt,
+    revision: existing.revision + 1, updatedAt: now,
+  });
+  const event = mkEvent('break_start', attendance, actor, now, null, null, {
+    observedBreakStartAt: { before: null, after: observedBreakStartAt },
+    breakState: { before: 'working', after: 'on_break' },
+  });
+  return ok({ attendance, event });
+}
+
+// END BREAK — observation transition. Observed end = the single injected now.
+// NO expected-total variance check here (design ruling §5A).
+export function endBreak({ actor, existing, scope }, now, policy) {
+  if (!existing) return err('NO_ATTENDANCE');
+  if (!isFiniteInstant(now)) return err('NOW_NOT_FINITE');
+  const se = laterScopeError(actor, existing, ['employee', 'admin'], true, scope);
+  if (se) return err(se);
+  if (!policy || policy.breakMode === 'none') return err('BREAK_DISABLED');           // B18
+  if (existing.status !== 'clocked_in') return err('NOT_CLOCKED_IN');
+  if (existing.breakState !== 'on_break') return err('BREAK_NOT_OPEN');               // B5
+  if (!isFiniteInstant(existing.openBreakStartedAt)) return err('OPEN_BREAK_NOT_FINITE'); // chronology/integrity
+  if (now < existing.openBreakStartedAt) return err('BREAK_END_BEFORE_START');        // chronology; equality allowed
+  const observedBreakEndAt = now;
+  const segmentMinutes = Math.round((observedBreakEndAt - existing.openBreakStartedAt) / MINUTE_MS); // deterministic minute rule
+  const attendance = Object.assign({}, existing, {
+    breakState: 'working', openBreakStartedAt: null,
+    observedBreakMinutesTotal: existing.observedBreakMinutesTotal + segmentMinutes,   // B9 (recomputed each break_end)
+    breakCount: existing.breakCount + 1,                                              // B6 (completed pair only)
+    revision: existing.revision + 1, updatedAt: now,
+  });
+  const event = mkEvent('break_end', attendance, actor, now, null, null, {
+    observedBreakEndAt: { before: null, after: observedBreakEndAt },
+    observedBreakMinutesTotal: { before: existing.observedBreakMinutesTotal, after: attendance.observedBreakMinutesTotal },
+    breakState: { before: 'on_break', after: 'working' },
+  });
+  return ok({ attendance, event });
+}
+
+// DEDICATED EMPLOYEE BREAK DECLARATION — the DECLARED transition (design ruling §2/§5B).
+// Sets declaredBreakMinutesTotal and appends an employee_declaration event; carries the
+// two-threshold break-variance gate (DECLARED vs EXPECTED). Never widens employeeEdit,
+// never writes observed or approved break facts.
+const BREAK_DECLARABLE_STATUSES = ['clocked_in', 'clocked_out'];
+export function declareBreak({ actor, existing, declaredBreakMinutesTotal, reasonCode, reasonNote, scope }, now, policy) {
+  if (!existing) return err('NO_ATTENDANCE');
+  if (!isFiniteInstant(now)) return err('NOW_NOT_FINITE');
+  const se = laterScopeError(actor, existing, ['employee', 'admin'], true, scope);
+  if (se) return err(se);
+  if (!policy || policy.breakMode === 'none') return err('BREAK_DISABLED');           // B18 (fail-closed parity with startBreak/endBreak)
+  if (existing.status === 'approved') return err('ALREADY_APPROVED');
+  if (!BREAK_DECLARABLE_STATUSES.includes(existing.status)) return err('STATUS_NOT_DECLARABLE'); // fail-closed
+  if (existing.breakState === 'on_break') return err('BREAK_OPEN');                   // cannot declare a total while a break is open
+  // explicit finite, non-negative, integer-minute contract
+  if (typeof declaredBreakMinutesTotal !== 'number' || !Number.isInteger(declaredBreakMinutesTotal) || declaredBreakMinutesTotal < 0) return err('DECLARED_BREAK_INVALID');
+  if (existing.declaredBreakMinutesTotal === declaredBreakMinutesTotal) return err('NO_CHANGE'); // no-op fabricates nothing
+  // two-threshold gate: DECLARED total vs EXPECTED (B13-B16); observed is never substituted.
+  const rr = reasonRequiredForBreak(declaredBreakMinutesTotal, policy);
+  if (rr.required && !isReasonValid('break', reasonCode, reasonNote, policy)) return err('REASON_REQUIRED'); // B14 / B16
+  const attendance = Object.assign({}, existing, {
+    declaredBreakMinutesTotal, revision: existing.revision + 1, updatedAt: now,
+  });
+  const event = mkEvent('employee_declaration', attendance, actor, now, reasonCode, reasonNote, {
+    declaredBreakMinutesTotal: { before: existing.declaredBreakMinutesTotal, after: declaredBreakMinutesTotal },
   });
   return ok({ attendance, event });
 }
