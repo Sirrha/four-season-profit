@@ -143,6 +143,8 @@ export function mountEmployeeShell(root) {
   function goToday(membership) {
     clear(root);
     const shift = todayShiftFor(membership.ansattId, membership.tenantId);
+    // ETR-2c: attendance id derives from the authoritative scope.shiftId; in this fixture
+    // the synthesized shift.shiftId IS the scope.shiftId seed, so this equals the id clockIn produces.
     const attId = attendanceIdFor(shift.shiftId, membership.ansattId);
     const att = attendanceStore.get(attId) || null;   // L1: two reads (shift + attendance), no query
 
@@ -244,7 +246,7 @@ export function mountEmployeeShell(root) {
       const reasonCode = reasonSel.value || null;
       const reasonNote = (noteInput.value || '').trim() || null;
       const actor = actorFromMembership(membership);
-      const scope = { tenantId: membership.tenantId };   // P2-2/P2-3: structural tenant/path scope, mandatory
+      const scope = { tenantId: membership.tenantId, shiftId: shift.shiftId };   // ETR-2c: full ScheduleScope — scope.shiftId is authority; the fixture shift.shiftId seeds it (equal packaging)
       let res;
       if (kind === 'in') {
         res = clockIn({ actor, shift, existing: attendanceStore.get(attId), declaredStartAt: declared, reasonCode, reasonNote, scope }, now, POLICY);

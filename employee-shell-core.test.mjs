@@ -137,7 +137,10 @@ const WD = '2026-08-24';
 const D = (h, m = 0) => Date.UTC(2026, 7, 24, h, m, 0); // 2026-08-24 hh:mm UTC
 const NEXT = (h, m = 0) => Date.UTC(2026, 7, 25, h, m, 0);
 const DEADLINE = endOfTenantLocalDayUtcMs(WD, POL.timezone, 0); // 2026-08-25 00:00 CEST = 2026-08-24 22:00 UTC
-const SCOPE = { tenantId: 'tenant-alpha' }; // P2-2/P2-3: structural request-path tenant scope for fixtures
+// ETR-2c: clockIn now requires a full ScheduleScope { tenantId, shiftId }; shiftId matches
+// the fixture shift.shiftId ('shift-1' from mkShift) so attendance ids are unchanged. The
+// tenant-only later transitions ignore the extra shiftId field.
+const SCOPE = { tenantId: 'tenant-alpha', shiftId: 'shift-1' };
 
 function emp(ansattId, over) { return Object.assign({ uid: 'auth-' + ansattId, accessRole: 'employee', ansattId, accessEnabled: true, tenantId: 'tenant-alpha' }, over || {}); }
 function admin(over) { return Object.assign({ uid: 'auth-admin', accessRole: 'admin', ansattId: 'ans-admin', accessEnabled: true, tenantId: 'tenant-alpha' }, over || {}); }
@@ -311,7 +314,7 @@ t('C25 shift edit emits a shift_revision event', () => {
 t('S2/C23 shift revised AFTER attendance -> plannedSnapshot + plannedShiftRevision UNCHANGED', () => {
   const b = createShift({ shiftId: 'sh', ansattId: 'ans-a1', plannedStartAt: D(12), plannedEndAt: D(20), workDate: WD, actorUid: 'auth-admin' }, D(8));
   b.shift.tenantId = 'tenant-alpha';
-  const att = clockIn({ actor: emp('ans-a1'), shift: b.shift, declaredStartAt: D(12), scope: SCOPE }, D(12), POL).attendance;
+  const att = clockIn({ actor: emp('ans-a1'), shift: b.shift, declaredStartAt: D(12), scope: { tenantId: 'tenant-alpha', shiftId: 'sh' } }, D(12), POL).attendance;
   reviseShift(b.shift, b.events, { plannedStartAt: D(13), plannedEndAt: D(21) }, D(13), 'auth-admin'); // revise later
   assert.deepEqual(att.plannedSnapshot, { startAt: D(12), endAt: D(20) }); // snapshot immutable
   assert.equal(att.plannedShiftRevision, 1);
@@ -320,7 +323,7 @@ t('S3 counterexample: 12:00-20:00 -> revised 13:00-21:00 -> clock 13:00', () => 
   const b = createShift({ shiftId: 'sh', ansattId: 'ans-a1', plannedStartAt: D(12), plannedEndAt: D(20), workDate: WD, actorUid: 'auth-admin' }, D(8));
   const rev = reviseShift(b.shift, b.events, { plannedStartAt: D(13), plannedEndAt: D(21) }, D(12, 40), 'auth-admin');
   rev.shift.tenantId = 'tenant-alpha';
-  const att = clockIn({ actor: emp('ans-a1'), shift: rev.shift, declaredStartAt: D(13), scope: SCOPE }, D(13), POL).attendance;
+  const att = clockIn({ actor: emp('ans-a1'), shift: rev.shift, declaredStartAt: D(13), scope: { tenantId: 'tenant-alpha', shiftId: 'sh' } }, D(13), POL).attendance;
   assert.deepEqual(att.plannedSnapshot, { startAt: D(13), endAt: D(21) });
   assert.equal(att.plannedShiftRevision, 2);
   const r1 = shiftRevisionState(rev.events, 1); // original still retrievable

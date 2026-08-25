@@ -145,8 +145,9 @@ export const ETR2A_POLICY = Object.freeze({
   }),
 });
 
-function ok(x) { return Object.assign({ ok: true }, x); }
-function err(code) { return { ok: false, code }; }
+// Exported for the ETR-2c schedule-core engine (one-way import). Pure result shapes.
+export function ok(x) { return Object.assign({ ok: true }, x); }
+export function err(code) { return { ok: false, code }; }
 
 // ---- Deterministic identity -------------------------------------------------
 export function attendanceIdFor(shiftId, ansattId) {
@@ -226,7 +227,8 @@ export function computeClockTimes({ nowMs, declaredHM, workDate, timezone, mayAd
 }
 
 // ---- Fail-closed declared-time sanity (B2), shared by every transition -------
-function isFiniteInstant(v) { return typeof v === 'number' && Number.isFinite(v); }
+// Exported for the ETR-2c schedule-core engine (one-way import).
+export function isFiniteInstant(v) { return typeof v === 'number' && Number.isFinite(v); }
 function withinTenantWorkDay(v, workDate, policy) {
   const s = startOfTenantLocalDayUtcMs(workDate, policy.timezone);
   const e = endOfTenantLocalDayUtcMs(workDate, policy.timezone, policy.graceHours);
@@ -251,6 +253,19 @@ function scopeTenantError(actor, scope) {
   if (typeof scope.tenantId !== 'string' || !scope.tenantId) return 'SCOPE_TENANT_INVALID';
   if (typeof actor.tenantId !== 'string' || !actor.tenantId) return 'MISSING_ACTOR_TENANT';
   if (actor.tenantId !== scope.tenantId) return 'CROSS_TENANT';
+  return null;
+}
+// ETR-2c: DISTINCT full ScheduleScope structural validator (tenantId + shiftId), used
+// ONLY by clockIn (attendance identity) and the four schedule validators. It is kept
+// separate from the tenant-only contract above so the later attendance transitions
+// (clockOut/employeeEdit/managerCorrection/approve/breaks) never accidentally require
+// scope.shiftId. Structural validation ONLY; actor-tenant match is applied by the caller
+// AFTER this, so a malformed scope can never reach id derivation (SCOPE-1..4, SCOPE-6).
+// Returns an error code string, or null when structurally valid.
+export function scheduleScopeError(scope) {
+  if (!scope || typeof scope !== 'object') return 'MISSING_SCOPE';                        // SCOPE-1
+  if (typeof scope.tenantId !== 'string' || !scope.tenantId) return 'SCOPE_TENANT_INVALID'; // SCOPE-2
+  if (typeof scope.shiftId !== 'string' || !scope.shiftId) return 'SCOPE_SHIFT_INVALID';    // SCOPE-3
   return null;
 }
 // Shared actor/role/tenant scope contract for LATER transitions (B7 + P2-2). Tenant stays
@@ -378,8 +393,14 @@ export function clockIn({ actor, shift, existing, declaredStartAt, reasonCode, r
   // authority mechanism.
   const se = scopeTenantError(actor, scope);
   if (se) return err(se);                                                                            // MISSING_SCOPE / SCOPE_TENANT_INVALID / MISSING_ACTOR_TENANT / CROSS_TENANT (C3)
+  // ETR-2c: attendance identity is AUTHORITATIVE from scope.shiftId. Require it structurally
+  // here (kept after the tenant-scope check so existing cross-tenant/scope error codes are
+  // preserved); a malformed scope.shiftId never reaches id derivation below.
+  if (typeof scope.shiftId !== 'string' || !scope.shiftId) return err('SCOPE_SHIFT_INVALID');
   if (!shift || typeof shift.shiftId !== 'string' || !shift.shiftId) return err('NO_SHIFT');        // C7 shiftId required
-  if (shift.status !== 'assigned') return err('SHIFT_NOT_ASSIGNED');                                 // C8 cancelled
+  // ETR-2c: legacy shift.shiftId is inspected for equality/integrity ONLY, never authority.
+  if (shift.shiftId !== scope.shiftId) return err('SHIFT_SCOPE_MISMATCH');                           // T126
+  if (shift.status !== 'assigned') return err('SHIFT_NOT_ASSIGNED');                                 // C8 cancelled / open (T118/T120)
   if (shift.ansattId !== actor.ansattId) return err('NOT_OWN_SHIFT');                                // C2 (after tenant scope)
   if (existing) return err('DUPLICATE_ATTENDANCE');                                                  // C4 deterministic id exists
   if (plannedShiftRevision != null && plannedShiftRevision !== shift.revision) return err('SHIFT_REVISION_MISMATCH'); // S5
@@ -395,12 +416,12 @@ export function clockIn({ actor, shift, existing, declaredStartAt, reasonCode, r
   const rr = reasonRequiredForClock('clock_in', { declaredAt: declared, observedAt: observedClockInAt, plannedAt: shift.plannedStartAt, policy });
   if (rr.required && !isReasonValid('clock_in', reasonCode, reasonNote, policy)) return err('REASON_REQUIRED'); // C15/C19/C20
 
-  const attendanceId = attendanceIdFor(shift.shiftId, actor.ansattId);
+  const attendanceId = attendanceIdFor(scope.shiftId, actor.ansattId); // ETR-2c: authoritative from scope.shiftId (T124/T125)
   if (!attendanceId) return err('NO_SHIFT');
   const deadline = editDeadlineFor(now, shift.workDate, policy); // B4: cutoff capped by maxEditWindowHours
 
   const attendance = {
-    attendanceId, shiftId: shift.shiftId, ansattId: actor.ansattId, createdByUid: actor.uid,
+    attendanceId, shiftId: scope.shiftId, ansattId: actor.ansattId, createdByUid: actor.uid, // ETR-2c: attendance.shiftId from scope
     workDate: shift.workDate,
     plannedSnapshot: { startAt: shift.plannedStartAt, endAt: shift.plannedEndAt },
     plannedShiftRevision: shift.revision,
