@@ -1,8 +1,278 @@
 # System-inventar — Four Season AS
 
+## MÅLT SJEKKPUNKT — 2026-08-27 (gjeldende tilstand, les først)
+
+<!--
+  Denne seksjonen OVERSTYRER «MÅLT SJEKKPUNKT 2026-08-23» under der de er i
+  konflikt — særlig hele seksjon B (ucommittet working tree / ni defektklasser /
+  BLOCKED-HOLD) og seksjon A sitt HEAD-anker. 2026-08-23-seksjonen beholdes som
+  historisk dokumentasjon. Faktabasis: eier-manuell commit 4d27d3b (2026-08-27),
+  akseptert åtte-fils staging (Sirrha FINAL-ACCEPTANCE), Phase-2 read-only
+  pakkesammenligning (MATCH), aksepterte tekniske resultater for ETR-2a-korreksjon,
+  ETR-2b, ETR-2c, Slice003 «Dagen din» og state-driven primary CTA. Ingen
+  kildekode endret av denne dokumentoppdateringen.
+-->
+
+### A. COMMITTED REPOSITORY BASELINE (per 2026-08-27)
+
+- **Feature-branch**: `feature/employee-time-registration`. **HEAD** =
+  `4d27d3b967d8bdb9f581470d8e2fbfeb9e634138`, subject
+  `feat(employee): add employee home, schedule, day truth and state-driven primary CTA`
+  (parent `c40fa0404bd4d14e01d8f4053b8235b8d0a13703`). Committen ble utført
+  **eier-manuelt av Herish** 2026-08-27 12:44 CEST etter Safe-Continuation-ruling.
+  Ingen push er utført i denne sekvensen; siste etablerte upstream-anker er
+  `c40fa0404bd4d14e01d8f4053b8235b8d0a13703`. **COMMITTED (lokalt).**
+- **Committet pakke = nøyaktig 8 filer** (1421 innsettinger / 93 slettinger;
+  identiteter hash-verifisert i akseptert staging):
+  1. `employee-shell-core.mjs` — 53336 B — `af0725c98e4583149cc859f7a07041b34bd6b807fe854c2e52c7088c606c82a9`
+  2. `employee-shell-core.test.mjs` — 83802 B — `cfbfd0234e12caa427eee3baef8b461efd3b3c8304c5502741b8c750f80c174c`
+  3. `employee-shell-ui.mjs` — 54056 B — `981a158a7052be43d746fb545cf4e802548b4593562f6197725fd1611ce57135`
+  4. `employee-shell.html` — 17038 B — `e6026e145d1062f757a6b081dae339bac87b26a07f8a013abf0194b5c7aaf287`
+  5. `employee-schedule-fixture.mjs` — 6140 B — `e5faab6b8e53bbb5297a1fccba07f88311cd9e29a41e7f68bae841fe35992005` (NY)
+  6. `employee-schedule-view.mjs` — 5030 B — `58f19778ebd6b45ea5202a78ff08d927402d74448542a9d629d927a140a8cd50` (NY)
+  7. `employee-schedule-week.mjs` — 8176 B — `e9ecb26fc6f980d3e09c109f7567fc3dbf128c9dc986f44378501fd0fd359388` (NY)
+  8. `employee-schedule-week.test.mjs` — 18355 B — `1764472ff3c477b2180e1a75a1394d64c1c663bff4ff19b8d6906a0dc3acc5bf` (NY)
+  `docs/system-inventory.md` og `RouteA/` er **IKKE** i committen (verifisert i
+  commit-stat). **ESTABLISHED.**
+
+### B. HVA COMMITTEN REPRESENTERER (fullført ETR-2-arbeid, fikstur-kun)
+
+Alt under er **fikstur/lokal demo** — ingen Firestore-/nettverks-/Firebase-tilgang,
+isolert fra live boot-sti; `vakter` skrives ALDRI (frossen regel intakt).
+
+- **ETR-2a klokke-sti, KORRIGERT tilstand.** 2026-08-23-sjekkpunktets ni
+  blokkerende defektklasser ble deretter autorisert, korrigert gjennom aksepterte
+  korrektiv-bygg (bl.a. whitelist-basert `reviseShift`/`managerCorrection`,
+  fail-closed deklarert-tid-sanity B2, to-terskel-grunnmodell i `employeeEdit`,
+  policy-håndhevelse B4, godkjenning krever fullført utstempling, tenant-scope
+  P2-2/P2-3, tenant-tidssone-helpers B8, ett injisert handlingsinstant B9) og er
+  nå del av committet kilde. **COMMITTED / ESTABLISHED.**
+- **ETR-2b pauser**: `break_start`/`break_end` som observasjons-transisjoner,
+  `declareBreak` med to-terskel pausevarians, clock-out nektes ved åpen pause.
+  **COMMITTED.**
+- **ETR-2c**: attendance-identitet autoritativ fra `scope.shiftId` (full
+  ScheduleScope i `clockIn`); schedule-core-motoren selv lå allerede i parent
+  `c40fa04`. **COMMITTED.**
+- **Ansatt-hjem (Visual Slice 001 + Polish Slice 002)**: Sormena-hjem med hero/
+  neste-vakt/ukestripe, chrome/nav, «Min plan»-ukevisning (`employee-schedule-view.mjs`,
+  read-only) og delt timeplan-sannhet (`ownScheduleFor` → `buildFourSeasonSchedule`).
+  **COMMITTED.**
+- **«Dagen din» (Slice003)**: kildebevisst dagsoppsummering `daySummaryFor` —
+  materiell-differanse-regel (declared vs observed), pausefradrag declared-over-observed
+  (aldri summert), total kun ved komplett dag, N1 fail-closed (negativ netto ⇒ ingen
+  total), «Oppgitt/Registrert arbeidstid»-etikett. **COMMITTED.**
+- **State-driven primary CTA**: `primaryActionFor` + `PRIMARY_ACTION_POLICY`
+  (`finishWindowMinutes: 10`, PRESENTASJONS-policy, uavhengig av
+  `varianceToleranceMinutes: 15` som er bevart eksakt med streng `>`).
+  GRØNN = kun betoning, aldri tilgjengelighet; presedens: åpen pause →
+  AVSLUTT PAUSE ubetinget; ikke innstemplet + tillatt → STEMPLE INN; innenfor/etter
+  10-min-vindu mot GJELDENDE planlagt slutt → STEMPLE UT; før vindu + forventet
+  pause ikke tatt → START PAUSE; ellers ingen grønn. Kablet kun i rutet `goToday`.
+  **COMMITTED.**
+- **Fikstur-timeplan**: kanonisk Maria-dagvakt `12:00→20:00` (den midlertidige
+  produktreview-formen 20:00→00:00 / 07:00→15:00 er reversert og pensjonert).
+  **COMMITTED / PROVISIONAL (fiksturverdier).**
+
+### C. MÅLT TESTTILSTAND (akseptert, per commit-tidspunkt)
+
+- `node employee-shell-core.test.mjs` → **183 passed / 0 failed** (167 tidligere +
+  16 nye PA-T0..PA-T15 for primary-CTA-selektoren).
+- `node schedule-core.test.mjs` → **129/0 + ORDER_PROOFS 16/0 + PREDICATE_PROOFS 5/0**.
+- `TZ=Europe/Oslo node employee-schedule-week.test.mjs` → **32/0** — M2 grønn mot
+  sin frosne, uendrede forventning etter kanonisk fikstur-restore.
+- `node --check` rent på alle tre shell-filene. **ESTABLISHED.**
+
+### D. WORKING TREE / LIVE-FLATE (per 2026-08-27)
+
+- Working tree etter commit: **`docs/system-inventory.md` er eneste trackede
+  modifikasjon** (denne oppdateringen); `RouteA/` forblir utracket og uinspisert.
+  Staging tom. **ESTABLISHED.**
+- **Live-appen er uendret**: `index.html` SHA256
+  `a6dc92885fa5a2a24c8036a487b0a177ae60408fdbb439bd2ced80805db33305` (re-verifisert
+  i Phase-2-sammenligningen 2026-08-27). PIN er fortsatt eneste LIVE identitetssti;
+  sanity-invariant **10 / 1 / 2** uendret. **ESTABLISHED.**
+
+### E. ÅPNE / FREMTIDIGE PUNKTER (egne gates — blokkerer ikke hverandre)
+
+- **Push** av `4d27d3b` til origin: **OPEN**, krever egen gate. Ingen PR/merge/deploy.
+- **Preview-server-lukking**: loopback-server 127.0.0.1:8765 (python, PID 47168)
+  kjører fortsatt kun for manuell review. Lukking = **OPEN**, egen forpliktelse.
+- **No-cache preview-policy** (Cache-Control på review-serving; etablert etter
+  stale-cache-diagnosen 2026-08-27): **OPEN**, egen forpliktelse.
+- **Månedsvisning (Month View)**: **FUTURE / NOT IMPLEMENTED** — neste produktslice,
+  utenfor committet pakke.
+- Seksjon C/D/F i 2026-08-23-sjekkpunktet (frossen arkitektur, identitetsmodell,
+  lønnssats-risiko) **står fortsatt** og overstyres ikke av denne seksjonen.
+
+<!--
+  MÅLT SJEKKPUNKT 2026-08-23 (HISTORISK — supersedert 2026-08-27, se seksjonen over). Denne seksjonen var
+  den gjeldende tilstandsbeskrivelsen og OVERSTYRER eldre «Gjeldende arbeidsbue»/
+  «Gjeldende produktretning»-punkter under der de er i konflikt. Faktabasis:
+  read-only repo-inspeksjon + Freeze 003, ETR-2a exact-source ruling, vakter-recon,
+  SIRRHA-STARTUP-READ-FIRST (checkpoint 2026-08-23). Ingen kildekode endret av denne
+  oppdateringen.
+-->
+
+## MÅLT SJEKKPUNKT — 2026-08-23 (gjeldende tilstand, les først)
+
+> **HISTORISK (2026-08-27):** Dette sjekkpunktet er beholdt som historisk dokumentasjon.
+> Seksjon A (HEAD-anker) og hele seksjon B (ucommittet ETR-2a / ni defektklasser /
+> BLOCKED-HOLD) er **SUPERSEDED** av «MÅLT SJEKKPUNKT — 2026-08-27» over:
+> korreksjonene ble senere autorisert, bygget, akseptert og committet i `4d27d3b`.
+> Seksjon C/D/F forblir gjeldende.
+
+Statusetiketter brukt under: **COMMITTED** (i git-historikk), **UNCOMMITTED** (kun
+lokal working tree), **ESTABLISHED** (målt/verifisert fakta), **FROZEN** (låst
+arkitektur), **PROVISIONAL** (fikstur-verdi, kan endres uten migrasjon), **FUTURE /
+NOT IMPLEMENTED** (planlagt grense, finnes ikke i kode), **BLOCKED / HOLD**.
+
+Denne seksjonen er selvstendig lesbar for en fersk AI-kontekst. Ikke behandle noen
+fikstur som produksjonsintegrert; ikke behandle noen planlagt funksjon som eksisterende.
+
+### A. COMMITTED REPOSITORY BASELINE
+
+- **Feature-branch**: `feature/employee-time-registration`. **HEAD** =
+  `339891ac1731f562fb85a0bffeb10b524684fba9`, subject
+  `feat(employee): add fixture membership routing shell` (parent
+  `cf758af1dadfd288d0c15f66d2c6cf928398fddd`). **COMMITTED**.
+- **ETR-1 (committed på HEAD)** = fikstur-ansattskall for medlemskaps-ruting. Fire
+  filer, 424 innsettinger: `employee-shell-core.mjs` (rene ruting-funksjoner),
+  `employee-shell-core.test.mjs`, `employee-shell-ui.mjs`, `employee-shell.html`.
+  **Kun fikstur** — ingen Firestore-/nettverks-/Firebase-tilgang, isolert fra
+  live boot-sti. `index.html` er IKKE rørt av ETR-1. ETR-1 exact-source review =
+  **PASS**. **ESTABLISHED / COMMITTED**.
+- **Live-/main-app** (produksjonsflaten på sormena.no) er uendret av ETR-arbeidet:
+  enkeltfil `index.html`, SHA256
+  `a6dc92885fa5a2a24c8036a487b0a177ae60408fdbb439bd2ced80805db33305` (verifisert
+  uendret på denne branchen). **PIN er fortsatt eneste LIVE identitetssti**
+  (`USERS`-map + `checkPin` + `sessionStorage 'fs_user'`). Firestore-regler er
+  **ÅPNE** (`allow read, write: if true` under `/tenants/{tenantId}/{document=**}`),
+  kilde OG deployert (observert 2026-08-22). Firebase-prosjekt = **`sormena-prod`**;
+  `TENANT_ID` = `four-season-as` (kun path-prefiks). Sanity-invariant **10 / 1 / 2**.
+  **ESTABLISHED**. (Detaljert flate-inventar under er fortsatt korrekt fordi
+  `index.html` ikke er endret.)
+
+### B. CURRENT UNCOMMITTED WORKING TREE
+
+- **ETR-2a klokke-sti-fikstur finnes KUN som ucommittet lokalt arbeid.** Fire filer
+  er modifisert i working tree (mot committed ETR-1):
+  - `employee-shell-core.mjs` — `597f723e5d8a91bf95ad304ed9fa38749c4fd39149951b84fcf6f3a0028a87e5`
+  - `employee-shell-core.test.mjs` — `12b1495b9070829baed4ad6d418ae13afb533431556b3ed6991f873cbb0dd7f9`
+  - `employee-shell-ui.mjs` — `29fb817192e1c9da4613f8b4901685749873ed7e6995c17417b8e9adeefb8640`
+  - `employee-shell.html` — `d737eb2216beeced27fee0252b2f1f3a6988283c51b4c0196c2a1a714af21a9e`
+  - Utracket: `RouteA/` (urelatert — ikke inspisert, ikke endret). Ingenting staget.
+  **UNCOMMITTED**.
+- Suite kjører for tiden **74/74** (0 feil), alle 9 ETR-1 ruting-tester bevart.
+  **Men 74/74 er IKKE godkjenning.**
+- **Exact-source review-disposisjon = CORRECTIONS REQUIRED / DO NOT COMMIT**
+  (`SIRRHA-CCODE-ETR2A-EXACT-SOURCE-REVIEW-RULING-001`). Pakke-/integritetssjekk
+  PASS; selve kilden strøk den uavhengige porten. **Ni blokkerende defektklasser** i
+  eksakt kilde:
+  1. `reviseShift()` kan anvende ikke-whitelistede patch-nøkler og stille mutere
+     beskyttet shift-identitet/workDate/proveniens uten å logge dem i revisjonseventet.
+  2. Deklarert-tid-sanity håndheves ikke konsekvent på initielle klokkehandlinger
+     (end-before-start og deklarert dato utenfor workDate ble akseptert med grunn).
+  3. `employeeEdit()` kan omgå to-terskel-grunnmodellen og lage store uforklarte
+     deklarasjonsendringer; no-op-redigering håndteres ikke riktig.
+  4. Annonsert provisorisk policy-form er ikke fullt implementert (`untilApproved`,
+     cutoff-modus, `maxEditWindowHours` håndheves ikke som beskrevet).
+  5. `managerCorrection()` er denylist- (ikke whitelist-) basert; kan ta imot
+     vilkårlige/status-/teller-/proveniens-endringer og ugyldige intervaller.
+  6. Godkjenning kan lykkes mens oppføringen fortsatt er `clocked_in` (ingen
+     fullført ut-stempling).
+  7. Rolle-/tenant-kontinuitet etter innstempling er svakere enn ved innstempling
+     (ikke-støttet rolle og kryss-tenant senere overganger kan passere).
+  8. Today/Clocking-UI utleder arbeidsdato/-tid fra enhetens/vertens tidssone i
+     stedet for injisert tenant-policy-tidssone.
+  9. UI kan vise ett tidspunkt som «observert» og lagre et annet (`Date.now()` kalt
+     på nytt ved bekreftelse).
+- **Korrigerende bygg er IKKE autorisert** på tidspunktet for dette sjekkpunktet.
+  **ETR-2b (pauser) er IKKE startet.** Den ucommittede working tree MÅ IKKE
+  committes; ETR-2b MÅ IKKE begynne fra dette ukorrigerte punktet.
+  **BLOCKED / HOLD — venter på Herish korrigerende-bygg-autorisasjon.**
+
+### C. GOVERNING ARCHITECTURE / SYSTEM BOUNDARIES (FROZEN — Freeze 003)
+
+Tre-lags tidsgrense (frossen):
+
+```
+A. PLANLAGT TIMEPLAN     NYTT objekt. Hva ledelsen har til hensikt.   FUTURE / NOT IMPLEMENTED
+B. ANSATT-OPPMØTE        NYTT objekt. Klokke-observasjoner,           FIXTURE (ETR-2a, ucommittet)
+                         deklarasjoner, grunner, review-tilstand,
+                         append-only audit/event-historikk.
+C. BETALBAR / ØKONOMISK  EKSISTERENDE `vakter`. Admin-vedlikeholdt.   ESTABLISHED (live)
+```
+
+- **FROSSEN REGEL: ansatt-stier skriver ALDRI `vakter` i ETR-2.** Oppmøte→betalbar
+  synkronisering er en senere, separat designet, godkjennings-gated integrasjon.
+- **`vakter`-semantikk (målt recon, ESTABLISHED)**: `vakter` er den eksisterende
+  admin-vedlikeholdte **faktiske/betalbare timelisten**, ikke en planlagt roster.
+  Den mater allerede lønns-/økonomi-utdata: `vaktKost.fullCost` (brutto ×
+  `(1 + 0.243)` full arbeidsgiverbelastning) → `sumLonnskostForPeriode` →
+  Oversikt «Lønnskost i dag/uke/måned» og «Teoretisk etter lønn», Rapport
+  «Lønnskost»/«Lønnsandel», og CSV/PDF-eksport. `vakter` har **ingen** historikk,
+  **ingen** godkjenning, **ingen** planlagt-vs-faktisk, **ingen** klokke-inn/ut i dag
+  (kun `opprettet`; redigering overskriver på stedet uten spor). Ansatt-oppmøte MÅ
+  være et **separat** objekt; admin-godkjenning er det som promoterer den betalbare
+  posten.
+- **Frossen data-/sannhetsmodell** (Freeze 003): fire lag `PLANNED / OBSERVED /
+  DECLARED / APPROVED` kollapses aldri; observerte tidsstempler er **immutable for
+  alle inkl. ledelse**; hendelser er **create-only** (ingen update/delete);
+  monoton `revision` med avledet event-id gjør manglende hendelser synlige (deteksjon,
+  ikke håndhevelse); uavhengig shift-revisjons-historikk + immutable `plannedSnapshot`
+  + `plannedShiftRevision` som join-nøkkel; deterministisk `attendanceId =
+  {shiftId}_{ansattId}`; to terskler (deklarert-vs-observert og deklarert-vs-planlagt).
+  Rene validatorer er funksjoner av `(actor, existing, proposed, now, policy)` — `now`
+  og tidssone injiseres, aldri lest inne. **FROZEN.**
+- **Pauser**: konseptuelt frosset for **ETR-2b**, IKKE implementert. Pauser lever i
+  samme oppmøte-event-strøm (`break_start`/`break_end`), fire lag som klokketid,
+  clock_out nektes mens en pause er åpen. **FUTURE / NOT IMPLEMENTED.**
+- **Ansatt-UX to flater**: enkel mobil-først **I dag / Stempling** vs rikt
+  **My Work & Economy**-portal. ETR-2a bygger kun Today/Clocking-fiksturen + en
+  placeholder-rute til portalen; portalinnholdet bygges ikke i ETR-2a.
+- **Fremtidig betalbar/lønns-integrasjon** må kobles gjennom en ren betalbar grense;
+  lønnsautoritet hører IKKE hjemme i oppmøte.
+
+### D. IDENTITET / TENANT-AUTORITET (akseptert modell)
+
+- **Frossen autoritetsmodell**: `users/{uid}` = **ingen** forretningsautoritet;
+  `memberships/{uid}_{tenantId}` = autoritet (felt: `uid`, `tenantId`, `accessRole`,
+  `ansattId`, `accessEnabled`); `tenants/{tenantId}/employeeAuthLock/{ansattId}` som
+  binding. Ruting: 0 kvalifiserte medlemskap → no-access, 1 → direkte, 2+ → dør-velger.
+  **Null custom-claim-autoritet** i denne modellen.
+- **Tilstand**: dette er den **aksepterte** modellen for ansatt-identitet, bevist kun i
+  ETR-1-fiksturen (`employee-shell-core.mjs` ruting). Den er **FUTURE / NOT
+  IMPLEMENTED i `index.html`**. Live-identitet er fortsatt PIN. Firestore-regler er
+  åpne → **ingen server-side isolasjon**; PIN er ikke en Firestore-autorisasjonsgrense.
+- M1 (2026-07-26) skrev inerte custom claims på seks prod-Auth-kontoer; **ingenting i
+  `index.html` leser dem**. Den aksepterte modellen bruker `memberships`, ikke claims,
+  som autoritet. Kryss-tenant-scoping må håndheves av regler (tenant-i-path +
+  egen-`ansattId`/membership), ikke av dagens klient-side `dbAll`-filtrering.
+
+### E. PRODUKTFLATE / FREMTIDIGE PLACEHOLDERE
+
+- Live-appens 10 sider (se «Sider» og «Brukersidens funksjoner» under) er uendret.
+- Aksepterte ansatt-produktområder — **full timeplan (måned/år), arbeidede/godkjente/
+  ventende timer, sykdom/fravær, lønn/økonomi, skatt, feriepenger, lønnsslipper,
+  ansettelseskontrakt/dokumenter** — er **FUTURE / NOT IMPLEMENTED**: reserverte
+  grenser, ingen lønns-/skatte-/feriepengeberegning og ingen dokument-plumbing
+  eksisterer. Estimerte verdier skal aldri fremstå som lønnsbekreftede; proveniens er
+  en datategenskap, ikke en UI-tekst (frossen prinsipp, ikke bygget).
+
+### F. KJENT EKSISTERENDE ØKONOMI-RISIKO (ikke fikset her)
+
+- **Nåværende-sats historisk rekalkuleringsrisiko**: `vaktKost` beregner arbeidskost
+  fra **nåværende** `ansatte.timelonn`. Endres en ansatts sats, kan tidligere
+  måneders «Lønnskost»/«Lønnsandel»/«Teoretisk etter lønn» **stille endres**, fordi
+  ingen sats snapshotes eller effektiv-dateres i den betalbare posten. Fremtidig
+  betalbar/lønns-håndtering må snapshote eller effektiv-datere satsen. **Skal IKKE
+  fikses i ETR-2a/2b uten separat autorisasjon.** ESTABLISHED risiko (målt recon).
+
+---
+
 > **GJELDENDE BASELINE (oppdatert 2026-08-02, runtime-kilde gjennom M2 Slice 2 commit ca9e4b3) — load-bearing, les først:**
 > - **Sanity er nå `10 / 1 / 2`** (`if(WRITE_TO_PURCHASES)`=10, `dbAll('purchases')`=1, `dbFind('purchases'`=2). Skiftet **9→10** ved **V2C.5.2a Path B** (commit 7715de1, 02.07, Sage-GREEN). Enhver eldre milestone-bullet som sier «9 / 1 / 2» var korrekt på sin dato — **ikke gjeldende**. `EXPENSE_KINDS.length`=12.
-> - **Gjeldende arbeidsbue = Auth M2** (Firebase-autentisering + trygg oppstartsgating). **Slice 0** ferdig (`95e2b20` — firebase-auth SDK lastet, inert), **Slice 1** ferdig (`647ebb3` — retry-sikker oppstartskoordinator), **Slice 2** ferdig (`ca9e4b3` — migrasjonene fjernet fra oppstart). **Slice 3-designet er ferdig og forsonet** — fire dokumentasjons-commits landet, ingen runtime-endring: `cdb28a5` (Seksjon 3 lagt til), `1dd87c6` (overskriftsnivå), `088f9ad` (30 forsoningspunkter), `5232f33` (normalizedNavn i revisjonsstempel). Slice 3 er delt i fire gates: **3A** dormant stillas (pushes), **3B** cutover (kun lokal commit), **3C** nettleser-matrise, **3D** produksjonspush. **Neste: Gate 3A — IKKE implementert ennå.** **Ingenting av Auth-cutoveren er live**; runtime står på Slice 2 (`ca9e4b3`) og PIN er fortsatt eneste identitetssti. Sanity-baseline uendret `10 / 1 / 2`. Design: `docs/architecture/auth-m2-startup-gating.md`.
+> - **[SUPERSEDED — se MÅLT SJEKKPUNKT 2026-08-23 øverst; gjeldende arbeidsbue er nå ETR (employee time registration) på branch `feature/employee-time-registration`.]** ~~Gjeldende arbeidsbue = Auth M2~~ (Firebase-autentisering + trygg oppstartsgating). **Slice 0** ferdig (`95e2b20` — firebase-auth SDK lastet, inert), **Slice 1** ferdig (`647ebb3` — retry-sikker oppstartskoordinator), **Slice 2** ferdig (`ca9e4b3` — migrasjonene fjernet fra oppstart). **Slice 3-designet er ferdig og forsonet** — fire dokumentasjons-commits landet, ingen runtime-endring: `cdb28a5` (Seksjon 3 lagt til), `1dd87c6` (overskriftsnivå), `088f9ad` (30 forsoningspunkter), `5232f33` (normalizedNavn i revisjonsstempel). Slice 3 er delt i fire gates: **3A** dormant stillas (pushes), **3B** cutover (kun lokal commit), **3C** nettleser-matrise, **3D** produksjonspush. **Neste: Gate 3A — IKKE implementert ennå.** **Ingenting av Auth-cutoveren er live**; runtime står på Slice 2 (`ca9e4b3`) og PIN er fortsatt eneste identitetssti. Sanity-baseline uendret `10 / 1 / 2`. Design: `docs/architecture/auth-m2-startup-gating.md`.
 > - **Forrige arbeidsbue = V2C bankavstemming** (13 chunks shippet, 2 ekte produksjonssaves) — komplett. **IKKE** «Phase 2f reader-fanout» — den er forlengst komplett (2f.0a..2f.0h + dual-write 2f.1a..2f.1c.1), `WRITE_TO_PURCHASES` stabil på `true`.
 > - **Firebase**: prosjektet er **`sormena-prod`**. `four-season-as` er KUN tenant-path-prefikset (`TENANT_ID`), ikke prosjektnavnet (bekreftet SECURITY-RULES-RECON-001).
 > - **Team** (ikke i koden, ikke avledbart fra git): **Athar Abdulalim** (kone, butikksjef, medeier), **Aboud Alkreman** (deltids), **Maria Syrota** (100%), **Yussef Ahmad** (kassemedeier), **Anastasiia Doroshenko** (deltids). Med Herish er teamet **seks personer** — samme antall som de seks godkjente Auth-kontoene fra M1 (`docs/architecture/auth-m1-provisioning.md` §2). Det finnes **ingen** ansatt «Ali» — det var et fragment av Athars etternavn.
@@ -11,7 +281,7 @@
 > - **Auth-kontoer finnes allerede.** M1 (2026-07-26) skrev og Admin-SDK-verifiserte custom claims på **seks** produksjons-Firebase-Auth-kontoer; claimsene er **inerte** (ingenting i index.html leser dem ennå). Herish = `role:admin`, `tenantId:four-season-as`, `ansattId:Ij7AmknF9ZDAdWgwQGJi`; fem ansatte har employee-claims. Kilde: `docs/architecture/auth-m1-provisioning.md` §2 + M1-utførelsesrecord. Verdier sist verifisert 2026-07-26 (ikke re-lest i dag).
 > - **Gate 3A er SHIPPET men DORMANT.** Rettelse av 2026-08-02-punktet «Gate 3A — ikke implementert»: Gate 3A dormant stillas landet i `8170cf0` (2026-08-04) og ligger i index.html (~L1726). Ingen `onAuthStateChanged`-registrering, ingen kaller, ingen Auth-kall ved boot. Gate 3B/3C/3D er IKKE gjort. **PIN er fortsatt eneste LIVE identitetssti** (USERS/checkPin/boot).
 > - **Firestore er ÅPENT — kilde OG deployert.** Både `firestore.rules` og de live deployerte reglene er `match /tenants/{tenantId}/{document=**} { allow read, write: if true; }`. Deployert tilstand observert 2026-08-22 13:49 CEST (Console, Herish-relayed). Ingen server-side auth/ansatt/admin-isolasjon. PIN er IKKE en Firestore-autorisasjonsgrense.
-> - **Gjeldende produktretning = Employee V1 admin-auth + rules cutover, KUN DESIGN.** Console-basert S1–S5 (cutover-design + device-amendment + binding-design Option B: `authBindings/{uid}` + `employeeAuthLock/{ansattId}`). `authBindings`/`employeeAuthLock` finnes IKKE i kildekoden ennå. Employee-innlogging/Timeregistrering-ruting er mål, ikke aktivert.
+> - **[SUPERSEDED — se MÅLT SJEKKPUNKT 2026-08-23 øverst (seksjon C/D); ETR-2 tre-lags tidsmodell + membership-identitet er gjeldende retning.]** ~~Gjeldende produktretning = Employee V1 admin-auth + rules cutover, KUN DESIGN.~~ Console-basert S1–S5 (cutover-design + device-amendment + binding-design Option B: `authBindings/{uid}` + `employeeAuthLock/{ansattId}`). `authBindings`/`employeeAuthLock` finnes IKKE i kildekoden ennå. Employee-innlogging/Timeregistrering-ruting er mål, ikke aktivert.
 > - **Route A / Q31 er PENSJONERT** og er IKKE den gjeldende blokkereren. Q31 = NOT_ESTABLISHED, B1 spent/retired. Se SUPERSEDED-banner på Route A-seksjonen under.
 
 **Sist oppdatert**: 2026-08-02 — inventaret reflekterer runtime-kilde gjennom **M2 Slice 2 (`ca9e4b3`)**; Slice 3 er designet og dokumentert, men ikke implementert. Historisk kontekst er ikke fullstendig omskrevet. Se «Gjeldende baseline»-callout over. Forrige innholdsoppdatering: 2026-07-06, after V2C.5.2c.2 — kvittering → direkte-utgift [BANKRECON-V2C.5.2c.2-SHIP-001] (commit 361eea3). Merk: den historiske konteksten under er ikke fullstendig oppdatert mellom V2C.8A.2 og c.2 — de daterte bullet-ene er autoritative per sin dato. Foregående oppdatering var 2026-07-02, after Bank Reconciliation V2C.8A.2 — Leverandørregister klikk-semantikk [BANKRECON-V2C.8A.2-SHIP-001] shipped (commit 6a24456). V2C.8A.x visuelt/UX-lag på leverandør-detaljsiden, alt live-testet på ekte DNB-data 2026-07-01/02: V2C.8A.2 (6a24456, radklikk i Leverandørregister → `openLeverandorPage`, ny «✏ Rediger»-knapp), V2C.8A.1 (e85e1f7, matched-row «Se leverandør →» + «Andre utkast i Innboks»-fallback; typo var no-op), foundation V2C.8A (3385a9d, read-only leverandør-detaljside, 6 aggregerings-helpers). Samme produksjons-bue: V2C.5 dokument-upload/link/view/download (1d21fe8, Firebase Storage), V2C.2.2 defensiv leverandørfilter med navn-fallback (f6e6ec5). V2-buen: chunk-tellingen utvidet 12→14; V2C.5 + V2C.8A.x ferdig. Prior: V2C.4 documents-kolleksjon foundation (4dd7288, Sage 16/16, rent dataligg). Prior: V2C.3 allokeringsbygger (61ac8a0, alle 6 betalingsmønstre representerbare), V2C.2.1 beskrivelse-display-fix (68070b3), V2C.2 søkbar fakturavelger (3506529, Sage 17/17). Prior: V2C.1 linkedAllocations-skjema + backfill [BANKRECON-V2C.1-SHIP-001] (commit 328296d, 2026-06-29) — Sage GREEN, backfill kjørt (77 txs emptyLinks, zero-drift Q-A:A1). Prior: V2C scanner-integrasjon [BANKRECON-V2C-SHIP-001] (commit 2f12ecf, 2026-06-28) + V2B statement-scoping [BANKRECON-V2B-MERGED-SHIP-001] (commit 95b1789, 2026-06-27, match-night ship) shipped; V2A statement-skjema + backfill [BANKRECON-V2A-SHIP-001] (commit 90ee528) Sage GREEN (3 txs → 1 historical-prelinje statement). Prior: Økonomi panels E3a + E3b shipped + gated GREEN (Bank reconciliation took priority over E3c-E3f per PRIORITY-REORDER-001). Bank V1A.1 + V1A.2 shipped (V1A.2 gate YELLOW on count-doesn't-drop, superseded by V2 close-statement model; V1A.2-fix DROPPED per V2 design-lock D4). Prior: Phase E3a Summary cards row [E3A-SHIP-001] (commit 779b23a) — Sage gate GREEN. E1 pair complete (E1a footer/rename + E1b validator refactor). Prior: Phase E1a (footer restructure + utgifter→økonomi rename) — Sage E1a gate GREEN. Eldre anker: Stage 0 recon for the purchases→expenses-mirror migration arc (read-only — ingen kode shippet, ingen sanity-invariant-bevegelse). Bekreftet steady-state: `WRITE_TO_PURCHASES=true`, sanity invariants 9 / 1 / 2 uendret, reader-fanout (2f.0a..2f.0h) + writer dual-write (2f.1a..2f.1c.1) komplett. Prior milestone: Scanner auto-save V1 (`33cd2dc` / `b100d85` / `6880f42`) — Sage gate PASS. Mirror at 41. Soak alive.
