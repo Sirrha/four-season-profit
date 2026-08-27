@@ -1093,6 +1093,188 @@ t('CONC C38/C39/T28 deferred to emulator (documented, not asserted here)', () =>
   assert.ok(true);
 });
 
+// =====================================================================
+// SLICE003 — "Dagen din" source-aware day summary (daySummaryFor). Pure; absolute instants
+// built via tenantLocalHMToUtcMs so results are identical under any ambient TZ.
+// =====================================================================
+import { daySummaryFor } from './employee-shell-core.mjs';
+const DS_TZ = 'Europe/Oslo';
+const DSAT = (wd, hm) => tenantLocalHMToUtcMs(wd, hm, DS_TZ);
+const DSD = '2026-08-26';
+const dsAtt = (o) => Object.assign({ observedClockInAt: null, observedClockOutAt: null, declaredStartAt: null, declaredEndAt: null, breakState: 'working', openBreakStartedAt: null, observedBreakMinutesTotal: 0, declaredBreakMinutesTotal: null, breakCount: 0, status: 'clocked_out', updatedAt: DSAT(DSD, '23:00') }, o);
+t('DS-1 Herish vector: declared 12:00 + observed 18:24 + observed break 5 + observed out 18:31 => 6 t 26 min Oppgitt arbeidstid with observed receipt', () => {
+  const s = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '18:24'), declaredStartAt: DSAT(DSD, '12:00'), observedClockOutAt: DSAT(DSD, '18:31'), declaredEndAt: DSAT(DSD, '18:31'), observedBreakMinutesTotal: 5, breakCount: 1 }) });
+  assert.equal(s.start.source, 'declared'); assert.equal(s.start.at, DSAT(DSD, '12:00')); assert.equal(s.start.observedAt, DSAT(DSD, '18:24'));
+  assert.equal(s.breakRow.kind, 'observed'); assert.equal(s.breakRow.minutes, 5); assert.equal(s.breakRow.count, 1);
+  assert.equal(s.end.source, 'observed'); assert.equal(s.end.at, DSAT(DSD, '18:31'));
+  assert.equal(s.total.minutes, 386); assert.equal(s.total.hours, 6); assert.equal(s.total.mins, 26); assert.equal(s.total.label, 'Oppgitt arbeidstid'); assert.equal(s.anyDeclared, true);
+});
+t('DS-2 fully observed completed day => Registrert arbeidstid, observed sources, no declaration provenance', () => {
+  const s = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '12:00'), declaredStartAt: DSAT(DSD, '12:00'), observedClockOutAt: DSAT(DSD, '20:00'), declaredEndAt: DSAT(DSD, '20:00'), observedBreakMinutesTotal: 30, breakCount: 1 }) });
+  assert.equal(s.start.source, 'observed'); assert.equal(s.end.source, 'observed'); assert.equal(s.anyDeclared, false);
+  assert.equal(s.total.minutes, 450); assert.equal(s.total.label, 'Registrert arbeidstid'); assert.equal(s.breakRow.kind, 'observed');
+});
+t('DS-3 materially different declared start => declared primary + observed receipt metadata', () => {
+  const s = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '12:10'), declaredStartAt: DSAT(DSD, '12:00'), observedClockOutAt: DSAT(DSD, '20:00'), declaredEndAt: DSAT(DSD, '20:00') }) });
+  assert.equal(s.start.source, 'declared'); assert.equal(s.start.at, DSAT(DSD, '12:00')); assert.equal(s.start.observedAt, DSAT(DSD, '12:10'));
+  assert.equal(s.end.source, 'observed'); assert.equal(s.total.minutes, 480); assert.equal(s.total.label, 'Oppgitt arbeidstid');
+});
+t('DS-4 materially different declared end => declared primary + observed receipt metadata', () => {
+  const s = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '12:00'), declaredStartAt: DSAT(DSD, '12:00'), observedClockOutAt: DSAT(DSD, '20:40'), declaredEndAt: DSAT(DSD, '20:00') }) });
+  assert.equal(s.end.source, 'declared'); assert.equal(s.end.at, DSAT(DSD, '20:00')); assert.equal(s.end.observedAt, DSAT(DSD, '20:40'));
+  assert.equal(s.start.source, 'observed'); assert.equal(s.total.minutes, 480); assert.equal(s.total.label, 'Oppgitt arbeidstid');
+});
+t('DS-5 declared break total supersedes observed total and is never added', () => {
+  const s = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '12:00'), declaredStartAt: DSAT(DSD, '12:00'), observedClockOutAt: DSAT(DSD, '20:00'), declaredEndAt: DSAT(DSD, '20:00'), observedBreakMinutesTotal: 5, breakCount: 1, declaredBreakMinutesTotal: 30 }) });
+  assert.equal(s.breakRow.kind, 'declared'); assert.equal(s.breakRow.minutes, 30); assert.equal(s.breakRow.observedMinutes, 5); assert.equal(s.breakRow.count, 1);
+  assert.equal(s.total.deductionMinutes, 30); assert.equal(s.total.minutes, 450); assert.equal(s.total.label, 'Oppgitt arbeidstid');
+  const z = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '12:00'), declaredStartAt: DSAT(DSD, '12:00'), observedClockOutAt: DSAT(DSD, '20:00'), declaredEndAt: DSAT(DSD, '20:00'), observedBreakMinutesTotal: 45, breakCount: 2, declaredBreakMinutesTotal: 0 }) });
+  assert.equal(z.total.minutes, 480, 'declared 0 wins over observed 45 (not summed)'); assert.equal(z.total.label, 'Oppgitt arbeidstid');
+});
+t('DS-6 open break => explicit open row with openBreakStartedAt and NO total', () => {
+  const s = daySummaryFor({ attendance: dsAtt({ status: 'clocked_in', observedClockInAt: DSAT(DSD, '12:00'), declaredStartAt: DSAT(DSD, '12:00'), breakState: 'on_break', openBreakStartedAt: DSAT(DSD, '15:04'), observedBreakMinutesTotal: 10, breakCount: 1 }) });
+  assert.equal(s.onBreak, true); assert.equal(s.breakRow.kind, 'open'); assert.equal(s.breakRow.sinceAt, DSAT(DSD, '15:04')); assert.equal(s.total, null);
+  const s2 = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '12:00'), declaredStartAt: DSAT(DSD, '12:00'), observedClockOutAt: DSAT(DSD, '20:00'), declaredEndAt: DSAT(DSD, '20:00'), breakState: 'on_break', openBreakStartedAt: DSAT(DSD, '19:00') }) });
+  assert.equal(s2.total, null, 'open break suppresses total even with an end');
+});
+t('DS-7 missing end => end.at null and NO total; no attendance => null', () => {
+  const s = daySummaryFor({ attendance: dsAtt({ status: 'clocked_in', observedClockInAt: DSAT(DSD, '12:00'), declaredStartAt: DSAT(DSD, '12:00') }) });
+  assert.equal(s.end.at, null); assert.equal(s.total, null); assert.equal(s.start.source, 'observed');
+  assert.equal(daySummaryFor({ attendance: null }), null); assert.equal(daySummaryFor({}), null);
+});
+t('DS-8 final net duration is floored to whole minutes, never rounded up', () => {
+  const inAt = DSAT(DSD, '12:00'), outAt = DSAT(DSD, '20:00') + 59 * 1000 + 999; // 8h + 59.999s
+  const s = daySummaryFor({ attendance: dsAtt({ observedClockInAt: inAt, declaredStartAt: inAt, observedClockOutAt: outAt, declaredEndAt: outAt, observedBreakMinutesTotal: 7, breakCount: 1 }) });
+  assert.equal(s.total.minutes, 480 - 7);
+  const s2 = daySummaryFor({ attendance: dsAtt({ observedClockInAt: inAt, declaredStartAt: inAt, observedClockOutAt: inAt + 30 * 1000, declaredEndAt: inAt + 30 * 1000 }) });
+  assert.equal(s2.total.minutes, 0, '30 seconds floors to 0');
+});
+t('DS-9 valid overnight absolute instants across midnight compute correctly without rollover logic', () => {
+  const s = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '22:00'), declaredStartAt: DSAT(DSD, '22:00'), observedClockOutAt: DSAT('2026-08-27', '02:00'), declaredEndAt: DSAT('2026-08-27', '02:00'), observedBreakMinutesTotal: 15, breakCount: 1 }) });
+  assert.equal(s.total.minutes, 240 - 15); assert.equal(s.total.label, 'Registrert arbeidstid');
+  const d = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '22:30'), declaredStartAt: DSAT(DSD, '22:00'), observedClockOutAt: DSAT('2026-08-27', '02:00'), declaredEndAt: DSAT('2026-08-27', '02:00') }) });
+  assert.equal(d.start.source, 'declared'); assert.equal(d.total.minutes, 240); assert.equal(d.total.label, 'Oppgitt arbeidstid');
+});
+t('DS-10 equal/default declared values create NO declaration provenance (unprovable after capture)', () => {
+  const s = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '12:00'), declaredStartAt: DSAT(DSD, '12:00'), observedClockOutAt: DSAT(DSD, '20:00'), declaredEndAt: DSAT(DSD, '20:00') }) });
+  assert.equal(s.start.source, 'observed'); assert.equal(s.end.source, 'observed'); assert.equal(s.anyDeclared, false); assert.equal(s.total.label, 'Registrert arbeidstid');
+});
+t('DS-11 break source/count metadata: observed row with count; none row when nothing recorded', () => {
+  const o = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '12:00'), declaredStartAt: DSAT(DSD, '12:00'), observedClockOutAt: DSAT(DSD, '20:00'), declaredEndAt: DSAT(DSD, '20:00'), observedBreakMinutesTotal: 12, breakCount: 2 }) });
+  assert.deepEqual(o.breakRow, { kind: 'observed', minutes: 12, count: 2 });
+  const n = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '12:00'), declaredStartAt: DSAT(DSD, '12:00'), observedClockOutAt: DSAT(DSD, '20:00'), declaredEndAt: DSAT(DSD, '20:00') }) });
+  assert.equal(n.breakRow.kind, 'none'); assert.equal(n.total.minutes, 480);
+});
+t('DS-12 no fabricated receipt/event time: result carries only stored instants; updatedAt is never surfaced', () => {
+  const s = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '18:24'), declaredStartAt: DSAT(DSD, '12:00'), observedClockOutAt: DSAT(DSD, '18:31'), declaredEndAt: DSAT(DSD, '18:31'), updatedAt: DSAT(DSD, '19:45') }) });
+  const txt = JSON.stringify(s); assert.ok(!txt.includes(String(DSAT(DSD, '19:45'))), 'updatedAt must not appear'); assert.ok(!('receiptAt' in s.start) && !('declaredAt' in s.start));
+  assert.equal(s.start.observedAt, DSAT(DSD, '18:24'));
+});
+t('DS-13 N1: break deduction greater than the gross span => NO total (not clamped to 0, no negative flag); facts remain', () => {
+  const base = { observedClockInAt: DSAT(DSD, '12:00'), declaredStartAt: DSAT(DSD, '12:00'), observedClockOutAt: DSAT(DSD, '12:20'), declaredEndAt: DSAT(DSD, '12:20') };
+  const o = daySummaryFor({ attendance: dsAtt(Object.assign({}, base, { observedBreakMinutesTotal: 30, breakCount: 1 })) });
+  assert.equal(o.total, null, 'observed 30 min break over a 20 min span => no total');
+  assert.equal(o.start.at, DSAT(DSD, '12:00')); assert.equal(o.end.at, DSAT(DSD, '12:20')); assert.deepEqual(o.breakRow, { kind: 'observed', minutes: 30, count: 1 });
+  const d = daySummaryFor({ attendance: dsAtt(Object.assign({}, base, { observedBreakMinutesTotal: 5, breakCount: 1, declaredBreakMinutesTotal: 30 })) });
+  assert.equal(d.total, null, 'declared 30 min break over a 20 min span => no total (declared supersedes, never summed)');
+  assert.equal(d.breakRow.kind, 'declared'); assert.equal(d.anyDeclared, true);
+  const exact = daySummaryFor({ attendance: dsAtt(Object.assign({}, base, { observedBreakMinutesTotal: 20, breakCount: 1 })) });
+  assert.ok(exact.total && exact.total.minutes === 0, 'deduction equal to the span is a legitimate 0-minute total');
+  assert.ok(!('negative' in (exact.total || {})), 'no negative flag is exposed on any total');
+  const h = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '18:24'), declaredStartAt: DSAT(DSD, '12:00'), observedClockOutAt: DSAT(DSD, '18:31'), declaredEndAt: DSAT(DSD, '18:31'), observedBreakMinutesTotal: 5, breakCount: 1 }) });
+  assert.equal(h.total.minutes, 386); assert.equal(h.total.hours, 6); assert.equal(h.total.mins, 26); assert.equal(h.total.label, 'Oppgitt arbeidstid');
+});
+
+// =====================================================================
+// STATE-DRIVEN PRIMARY ACTION (presentation-only selector; PA-T1..PA-T15).
+// GREEN = emphasis only, never availability. Finish window = 10 min before the
+// CURRENT planned end. Absolute instants; deterministic under any ambient TZ.
+// =====================================================================
+import { primaryActionFor, PRIMARY_ACTION_POLICY } from './employee-shell-core.mjs';
+// Minimal clocked-in attendance for the selector (only the fields it may read).
+const paAtt = (o) => Object.assign({ status: 'clocked_in', breakState: 'working', openBreakStartedAt: null, observedBreakMinutesTotal: 0, declaredBreakMinutesTotal: null, breakCount: 0 }, o);
+const paShift = (end) => ({ plannedEndAt: end != null ? end : D(20) });
+
+t('PA-T0 finish window is presentation policy (10 min), independent of varianceToleranceMinutes', () => {
+  assert.equal(PRIMARY_ACTION_POLICY.finishWindowMinutes, 10);
+  assert.equal(POL.varianceToleranceMinutes, 15, 'variance truth boundary untouched');
+});
+t('PA-T1 before shift / clock-in not permitted -> none', () => {
+  assert.equal(primaryActionFor({ attendance: null, shift: paShift(), clockInPermitted: false, now: D(10), policy: POL }), null);
+  assert.equal(primaryActionFor({ attendance: null, shift: paShift(), now: D(10), policy: POL }), null, 'missing permission verdict fails closed');
+});
+t('PA-T2 not clocked in + existing model permits clock-in -> stemple_inn', () => {
+  assert.equal(primaryActionFor({ attendance: null, shift: paShift(), clockInPermitted: true, now: D(12), policy: POL }), 'stemple_inn');
+  assert.equal(primaryActionFor({ attendance: null, shift: paShift(), clockInPermitted: 'yes', now: D(12), policy: POL }), null, 'only a strict true verdict counts');
+});
+t('PA-T3 working + expected break not taken + before finish window -> start_pause', () => {
+  assert.equal(primaryActionFor({ attendance: clockedIn(), shift: paShift(), clockInPermitted: false, now: D(15), policy: POL }), 'start_pause');
+});
+t('PA-T4 breakMode none -> no start_pause green (and no other green before the window)', () => {
+  const pol = Object.assign({}, POL, { breakMode: 'none' });
+  assert.equal(primaryActionFor({ attendance: paAtt(), shift: paShift(), now: D(15), policy: pol }), null);
+});
+t('PA-T5 expected break already taken/declared -> no start_pause green before the window', () => {
+  assert.equal(primaryActionFor({ attendance: paAtt({ breakCount: 1, observedBreakMinutesTotal: 25 }), shift: paShift(), now: D(15), policy: POL }), null);
+  assert.equal(primaryActionFor({ attendance: paAtt({ observedBreakMinutesTotal: 1 }), shift: paShift(), now: D(15), policy: POL }), null, 'observed minutes without a completed pair still count as taken');
+  assert.equal(primaryActionFor({ attendance: paAtt({ declaredBreakMinutesTotal: 30 }), shift: paShift(), now: D(15), policy: POL }), null, 'declared total settles the break');
+  assert.equal(primaryActionFor({ attendance: paAtt({ declaredBreakMinutesTotal: 0 }), shift: paShift(), now: D(15), policy: POL }), null, 'an explicit 0-minute declaration also settles it');
+});
+t('PA-T6 open break before finish window -> avslutt_pause', () => {
+  assert.equal(primaryActionFor({ attendance: paAtt({ breakState: 'on_break', openBreakStartedAt: D(15) }), shift: paShift(), now: D(15, 10), policy: POL }), 'avslutt_pause');
+});
+t('PA-T7 open break inside/after finish window -> avslutt_pause (break precedence over stemple_ut)', () => {
+  assert.equal(primaryActionFor({ attendance: paAtt({ breakState: 'on_break', openBreakStartedAt: D(19, 40) }), shift: paShift(), now: D(19, 55), policy: POL }), 'avslutt_pause');
+  assert.equal(primaryActionFor({ attendance: paAtt({ breakState: 'on_break', openBreakStartedAt: D(19, 40) }), shift: paShift(), now: D(20, 30), policy: POL }), 'avslutt_pause', 'still break-first after planned end');
+});
+t('PA-T8 11 minutes before current planned end -> not stemple_ut', () => {
+  const r = primaryActionFor({ attendance: clockedIn(), shift: paShift(), now: D(19, 49), policy: POL });
+  assert.notEqual(r, 'stemple_ut');
+  assert.equal(r, 'start_pause', 'outside the window the untaken expected break still guides');
+  assert.equal(primaryActionFor({ attendance: paAtt({ breakCount: 1, observedBreakMinutesTotal: 30 }), shift: paShift(), now: D(19, 49), policy: POL }), null, 'break taken + before window -> no green at all');
+});
+t('PA-T9 exactly 10 minutes before current planned end -> stemple_ut (inclusive boundary)', () => {
+  assert.equal(primaryActionFor({ attendance: clockedIn(), shift: paShift(), now: D(19, 50), policy: POL }), 'stemple_ut');
+});
+t('PA-T10 at/after planned end while still clocked in -> stemple_ut stays green', () => {
+  assert.equal(primaryActionFor({ attendance: clockedIn(), shift: paShift(), now: D(20), policy: POL }), 'stemple_ut');
+  assert.equal(primaryActionFor({ attendance: clockedIn(), shift: paShift(), now: D(23), policy: POL }), 'stemple_ut');
+});
+t('PA-T11 planned end revised later than plannedSnapshot -> window follows the CURRENT planned end', () => {
+  const att = clockedIn();                                   // plannedSnapshot.endAt = D(20)
+  const revised = mkShift('ans-a1', { end: D(22) });         // CURRENT planned end = D(22)
+  assert.equal(att.plannedSnapshot.endAt, D(20), 'precondition: snapshot still carries the old end');
+  assert.notEqual(primaryActionFor({ attendance: att, shift: revised, now: D(21), policy: POL }), 'stemple_ut', 'D(21) is inside the OLD window only');
+  assert.equal(primaryActionFor({ attendance: att, shift: revised, now: D(21, 50), policy: POL }), 'stemple_ut');
+});
+t('PA-T12 overnight end -> absolute-instant comparison yields the correct 10-minute window', () => {
+  const night = paShift(NEXT(2));                            // ends 02:00 the next day
+  assert.equal(primaryActionFor({ attendance: paAtt(), shift: night, now: D(23), policy: POL }), 'start_pause', 'crossing midnight needs no special case');
+  assert.equal(primaryActionFor({ attendance: paAtt(), shift: night, now: NEXT(1, 49), policy: POL }), 'start_pause');
+  assert.equal(primaryActionFor({ attendance: paAtt(), shift: night, now: NEXT(1, 50), policy: POL }), 'stemple_ut');
+});
+t('PA-T13 late clock-in already inside the finish window -> stemple_ut right after clock-in', () => {
+  const att = clockedIn({ declared: D(19, 55), now: D(19, 55), reasonCode: 'LATE_ARRIVAL' });
+  assert.equal(primaryActionFor({ attendance: att, shift: paShift(), now: D(19, 56), policy: POL }), 'stemple_ut');
+});
+t('PA-T14 indeterminate/missing required state -> none (fail closed)', () => {
+  assert.equal(primaryActionFor({ attendance: paAtt(), shift: paShift(), now: NaN, policy: POL }), null);
+  assert.equal(primaryActionFor({ attendance: paAtt(), shift: paShift(), now: D(15), policy: null }), null);
+  assert.equal(primaryActionFor({ attendance: 'garbage', shift: paShift(), now: D(15), policy: POL }), null);
+  assert.equal(primaryActionFor({ attendance: paAtt({ status: 'clocked_out' }), shift: paShift(), now: D(20), policy: POL }), null, 'clocked out -> no green');
+  assert.equal(primaryActionFor({ attendance: paAtt({ status: 'weird' }), shift: paShift(), now: D(15), policy: POL }), null);
+  assert.equal(primaryActionFor({ attendance: paAtt({ breakState: 'weird' }), shift: paShift(), now: D(15), policy: POL }), null);
+  assert.equal(primaryActionFor({ attendance: paAtt(), shift: null, now: D(15), policy: POL }), null, 'no current planned end -> window undeterminable -> none');
+  assert.equal(primaryActionFor({ attendance: paAtt(), shift: { plannedEndAt: NaN }, now: D(15), policy: POL }), null);
+});
+t('PA-T15 permitted secondary action stays available independent of green emphasis (existing availability layer)', () => {
+  const att = clockedIn();
+  assert.equal(primaryActionFor({ attendance: att, shift: paShift(), now: D(15), policy: POL }), 'start_pause', 'green guides to the break...');
+  const out = clockOut({ actor: emp('ans-a1'), existing: att, declaredEndAt: D(15), reasonCode: 'LEFT_EARLY', scope: SCOPE }, D(15), POL);
+  assert.ok(out.ok, '...but clock-out remains permitted by the EXISTING rules at the same instant: ' + (out.ok ? 'ok' : out.code));
+  assert.equal(out.attendance.status, 'clocked_out');
+});
+
 console.log(lines.join('\n'));
 console.log('\nEMPLOYEE_SHELL_TESTS: ' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);

@@ -711,6 +711,100 @@ export function declareBreak({ actor, existing, declaredBreakMinutesTotal, reaso
   return ok({ attendance, event });
 }
 
+// ---- Source-aware day summary ("Dagen din", Slice003) ------------------------
+// PURE derivation over the EXISTING attendance projection only. Governing:
+// SOREN-SIRRHA-EMPLOYEE-DAY-TRUTH-FORGOTTEN-REGISTRATIONS-DESIGN-001 + Sirrha Slice003 freeze.
+//  - start/end source = material-difference rule: declaredStartAt (resp. declaredEndAt) is the
+//    effective value ONLY when it differs from observedClockInAt (resp. observedClockOutAt);
+//    otherwise the observed instant is effective and no declaration provenance is claimed
+//    (the projection defaults declared* to the observed instant, so equality is unprovable).
+//  - break deduction = declaredBreakMinutesTotal when non-null, else observedBreakMinutesTotal;
+//    the two are NEVER added. An open break suppresses any total.
+//  - total only when effective start AND effective end exist and breakState !== 'on_break';
+//    arithmetic on stored ABSOLUTE instants (works across midnight; no rollover logic here);
+//    the FINAL net duration is floored to whole minutes, never rounded up.
+//  - label: 'Oppgitt arbeidstid' if any material declared start/end or a declared break total,
+//    else 'Registrert arbeidstid'. No approval/payroll/economic truth is read or produced.
+//  - No event timestamps or completed break intervals are fabricated; updatedAt is NOT a receipt.
+export function daySummaryFor({ attendance }) {
+  if (!attendance || typeof attendance !== 'object') return null;
+  const a = attendance;
+  const obsIn = isFiniteInstant(a.observedClockInAt) ? a.observedClockInAt : null;
+  const obsOut = isFiniteInstant(a.observedClockOutAt) ? a.observedClockOutAt : null;
+  const decIn = isFiniteInstant(a.declaredStartAt) ? a.declaredStartAt : null;
+  const decOut = isFiniteInstant(a.declaredEndAt) ? a.declaredEndAt : null;
+  const startDeclared = obsIn != null && decIn != null && decIn !== obsIn;
+  const endDeclared = obsOut != null && decOut != null && decOut !== obsOut;
+  const start = obsIn == null ? null : (startDeclared ? decIn : obsIn);
+  const end = obsOut == null ? null : (endDeclared ? decOut : obsOut);
+  const onBreak = a.breakState === 'on_break';
+  const declaredBreak = (Number.isInteger(a.declaredBreakMinutesTotal) && a.declaredBreakMinutesTotal >= 0) ? a.declaredBreakMinutesTotal : null;
+  const observedBreak = (typeof a.observedBreakMinutesTotal === 'number' && Number.isFinite(a.observedBreakMinutesTotal) && a.observedBreakMinutesTotal > 0) ? a.observedBreakMinutesTotal : 0;
+  const breakCount = Number.isInteger(a.breakCount) && a.breakCount > 0 ? a.breakCount : 0;
+  let breakRow;
+  if (onBreak) breakRow = { kind: 'open', sinceAt: isFiniteInstant(a.openBreakStartedAt) ? a.openBreakStartedAt : null, observedMinutes: observedBreak, count: breakCount };
+  else if (declaredBreak != null) breakRow = { kind: 'declared', minutes: declaredBreak, observedMinutes: observedBreak, count: breakCount };
+  else if (observedBreak > 0 || breakCount > 0) breakRow = { kind: 'observed', minutes: observedBreak, count: breakCount };
+  else breakRow = { kind: 'none', minutes: 0, count: 0 };
+  const anyDeclared = startDeclared || endDeclared || declaredBreak != null;
+  let total = null;
+  if (start != null && end != null && !onBreak) {
+    const deduction = declaredBreak != null ? declaredBreak : observedBreak;
+    const net = Math.floor((end - start) / MINUTE_MS - deduction);          // final net floored, never rounded up
+    // N1: an internally inconsistent day (deduction exceeds the gross span) yields NO total — fail closed,
+    // never clamp to zero and never expose a substitute flag; Start/Pause/Slutt facts remain visible.
+    if (net >= 0) total = { minutes: net, hours: Math.floor(net / 60), mins: net % 60, deductionMinutes: deduction, label: anyDeclared ? 'Oppgitt arbeidstid' : 'Registrert arbeidstid' };
+  }
+  return {
+    start: { at: start, source: startDeclared ? 'declared' : 'observed', observedAt: obsIn },
+    end: { at: end, source: endDeclared ? 'declared' : 'observed', observedAt: obsOut },
+    breakRow, onBreak, anyDeclared, total,
+  };
+}
+
+// ---- State-driven primary action (PRESENTATION-ONLY emphasis selector) -------
+// Governing: SOREN-SIRRHA-STATE-DRIVEN-PRIMARY-CTA-DESIGN-REVIEW-001 +
+// SIRRHA-SOREN-STATE-DRIVEN-PRIMARY-CTA-ACCEPTANCE-002.
+// GREEN = the primary normal next action Sormena expects from the employee NOW.
+// Green decides EMPHASIS ONLY, never availability: availability stays with the
+// existing attendance transitions; this selector stores nothing, mutates nothing,
+// creates no state/event/projection, and is willing to return null (no green).
+// finishWindowMinutes is PRESENTATION policy — independent of varianceToleranceMinutes.
+export const PRIMARY_ACTION_POLICY = Object.freeze({ finishWindowMinutes: 10 });
+
+// Binding precedence (fail closed; absolute-instant comparisons, so overnight
+// shifts need no wall-clock special case):
+//   1. open break                                      -> 'avslutt_pause' (unconditional, incl. inside/after the finish window)
+//   2. not clocked in + existing model permits clock-in -> 'stemple_inn'
+//   3. clocked in, no open break, now within/after the finish window
+//      (10 min before the CURRENT planned end, NOT plannedSnapshot)
+//                                                       -> 'stemple_ut' (stays green at/after planned end while clocked in)
+//   4. clocked in, before the window, break genuinely expected and not yet taken/declared
+//                                                       -> 'start_pause'
+//   5. any other / undetermined                         -> null (no green)
+// clockInPermitted is the EXISTING availability verdict, computed by the caller
+// from the existing rules; this selector never re-derives or widens availability.
+export function primaryActionFor({ attendance, shift, clockInPermitted, now, policy }) {
+  if (!isFiniteInstant(now)) return null;
+  if (!policy || typeof policy !== 'object') return null;
+  if (attendance == null) return clockInPermitted === true ? 'stemple_inn' : null;
+  if (typeof attendance !== 'object') return null;
+  if (attendance.status !== 'clocked_in') return null;               // clocked_out / unknown / malformed -> no green
+  if (attendance.breakState === 'on_break') return 'avslutt_pause';  // precedence 1
+  if (attendance.breakState !== 'working') return null;              // fail-closed on unknown break state
+  const plannedEndAt = (shift && typeof shift === 'object' && isFiniteInstant(shift.plannedEndAt)) ? shift.plannedEndAt : null;
+  if (plannedEndAt == null) return null;                             // window undeterminable -> no green
+  if (now >= plannedEndAt - PRIMARY_ACTION_POLICY.finishWindowMinutes * MINUTE_MS) return 'stemple_ut'; // precedence 3
+  if (policy.breakMode === 'none') return null;                      // no break expected under this mode
+  const expected = policy.expectedBreakMinutes;
+  if (typeof expected !== 'number' || !Number.isFinite(expected) || expected <= 0) return null;
+  const breakAddressed =
+    (Number.isInteger(attendance.breakCount) && attendance.breakCount > 0) ||
+    (typeof attendance.observedBreakMinutesTotal === 'number' && attendance.observedBreakMinutesTotal > 0) ||
+    attendance.declaredBreakMinutesTotal != null;                    // an explicit declaration (incl. 0) settles the break
+  return breakAddressed ? null : 'start_pause';                      // precedence 4 / 5
+}
+
 // ---- Pure invariant predicates (used directly by tests + future rules) -------
 export function assertObservedImmutable(existing, proposed) {
   if (existing.observedClockInAt != null && proposed.observedClockInAt !== existing.observedClockInAt) return err('OBSERVED_IN_IMMUTABLE');
