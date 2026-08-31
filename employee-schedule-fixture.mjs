@@ -12,17 +12,32 @@ import { isoWeekMonday, addDays } from './employee-schedule-week.mjs';
 
 export const FOUR_SEASON_TENANT = Object.freeze({ tenantId: 'four-season', label: 'Four Season' });
 export const ROLE_LABELS = Object.freeze({ 'daglig-leder': 'Daglig leder', 'butikksjef': 'Butikksjef', 'butikkmedarbeider': 'Butikkmedarbeider' });
+// PLANNING COMPENSATION — DEMO/EKSEMPELTALL ONLY (truth-layer-A estimate INPUT for the local
+// Vaktplan preview). These are NOT payroll truth, NOT the payable ansatte.timelonn in
+// index.html, and are never written to vakter or any payable record. model 'timelonn' carries
+// plannedHourlyRate (kr/t); model 'fastlonn' carries plannedMonthlySalary (kr/mnd). A missing or
+// invalid object DERIVES the honest UNKNOWN state (Yussef below, deliberately) — an explicit
+// "unknown" is never stored and a missing basis is never silently treated as zero.
 export const FOUR_SEASON_PEOPLE = Object.freeze([
-  { uid: 'uid-maria',  ansattId: 'ans-maria',  name: 'Maria',  roleKey: 'butikkmedarbeider' }, // default review identity
-  { uid: 'uid-aboud',  ansattId: 'ans-aboud',  name: 'Aboud',  roleKey: 'butikkmedarbeider' },
-  { uid: 'uid-yussef', ansattId: 'ans-yussef', name: 'Yussef', roleKey: 'butikkmedarbeider' },
-  { uid: 'uid-athar',  ansattId: 'ans-athar',  name: 'Athar',  roleKey: 'butikksjef' },
-  { uid: 'uid-herish', ansattId: 'ans-herish', name: 'Herish', roleKey: 'daglig-leder' },
+  { uid: 'uid-maria',  ansattId: 'ans-maria',  name: 'Maria',  roleKey: 'butikkmedarbeider', compensation: { model: 'timelonn', plannedHourlyRate: 250 } }, // default review identity
+  { uid: 'uid-aboud',  ansattId: 'ans-aboud',  name: 'Aboud',  roleKey: 'butikkmedarbeider', compensation: { model: 'timelonn', plannedHourlyRate: 220 } },
+  { uid: 'uid-yussef', ansattId: 'ans-yussef', name: 'Yussef', roleKey: 'butikkmedarbeider' },                                                              // no planning compensation -> derived UNKNOWN (demo)
+  { uid: 'uid-athar',  ansattId: 'ans-athar',  name: 'Athar',  roleKey: 'butikksjef',        compensation: { model: 'fastlonn', plannedMonthlySalary: 52000 } },
+  { uid: 'uid-herish', ansattId: 'ans-herish', name: 'Herish', roleKey: 'daglig-leder',      compensation: { model: 'fastlonn', plannedMonthlySalary: 60000 } },
 ]);
 export const FOUR_SEASON_MEMBERSHIPS = Object.freeze(FOUR_SEASON_PEOPLE.map((p) => Object.freeze({
   uid: p.uid, tenantId: FOUR_SEASON_TENANT.tenantId, accessRole: 'employee', ansattId: p.ansattId, accessEnabled: true,
 })));
 const ROLE_OF = {}; for (const p of FOUR_SEASON_PEOPLE) ROLE_OF[p.ansattId] = p.roleKey;
+
+// Fixture-level MANAGER context for the local Vaktplan (design: manager context and the
+// "as employee" selection are both fixture-level; no production auth semantics invented).
+// The frozen planned-schedule engine requires accessRole 'admin' for schedule writes.
+export const FOUR_SEASON_MANAGER_ACTOR = Object.freeze({
+  uid: 'uid-herish', accessRole: 'admin', ansattId: 'ans-herish', accessEnabled: true,
+  tenantId: FOUR_SEASON_TENANT.tenantId,
+  canManageSchedule: true, canViewOwnSchedule: true,   // capability-shaped routing (local fixture, not production auth)
+});
 
 // Build the tenant-keyed container { 'four-season': { [shiftId]: projection } }. Pure & deterministic
 // for a given (anchorWorkDate, timezone). The anchor day always carries an assigned Maria shift so the
@@ -112,4 +127,43 @@ export function buildFourSeasonSchedule(anchorWorkDate, timezone) {
   mk('ans-maria', day(wk(4), 5), '09:00', '13:00', 'cancelled');   // cancelled, week +4
 
   return { [FOUR_SEASON_TENANT.tenantId]: shifts };
+}
+
+// ---- 5 -> 40 SCALE PROOF SET (second-increment design 2H) ---------------------------------
+// OFF by default; activated only by the local preview toggle (?scale=40). Adds ~35 SYNTHETIC
+// employees ("Demo NN" — deliberately not realistic names, no team/group/department metadata)
+// plus generated planned shifts, purely to prove the management Week/Month grids stay usable
+// around 40 rows. Same ten frozen projection fields, deterministic for a given anchor/timezone,
+// demo planning compensation only (every third demo person deliberately stays UNKNOWN).
+export function buildFourSeasonScaleSet(anchorWorkDate, timezone) {
+  const schedule = buildFourSeasonSchedule(anchorWorkDate, timezone);
+  const tenant = schedule[FOUR_SEASON_TENANT.tenantId];
+  const monday = isoWeekMonday(anchorWorkDate);
+  const createdAt = tenantLocalHMToUtcMs(addDays(monday, -14), '09:00', timezone);
+  const people = FOUR_SEASON_PEOPLE.slice();
+  for (let i = 1; i <= 35; i++) {
+    const nn = String(i).padStart(2, '0');
+    const ansattId = 'ans-demo-' + nn;
+    const person = { uid: 'uid-demo-' + nn, ansattId, name: 'Demo ' + nn, roleKey: 'butikkmedarbeider' };
+    if (i % 3 !== 0) {
+      person.compensation = (i % 2 === 1)
+        ? { model: 'timelonn', plannedHourlyRate: 200 + i }
+        : { model: 'fastlonn', plannedMonthlySalary: 40000 + i * 100 };
+    }
+    people.push(person);
+    for (const w of [-2, -1, 0, 1, 2]) {
+      for (const k of [0, 3]) {
+        const workDate = addDays(monday, w * 7 + (((i + w + k) % 7) + 7) % 7);
+        const id = 'fs-' + workDate + '-' + ansattId;
+        if (Object.prototype.hasOwnProperty.call(tenant, id)) continue;
+        tenant[id] = {
+          ansattId, plannedStartAt: tenantLocalHMToUtcMs(workDate, '08:00', timezone),
+          plannedEndAt: tenantLocalHMToUtcMs(workDate, '16:00', timezone), workDate,
+          roleKey: 'butikkmedarbeider', status: 'assigned', revision: 1,
+          createdByUid: 'uid-herish', createdAt, updatedAt: createdAt,
+        };
+      }
+    }
+  }
+  return { people, schedule };
 }

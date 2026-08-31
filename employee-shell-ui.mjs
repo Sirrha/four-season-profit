@@ -15,9 +15,11 @@ import {
   startBreak, endBreak, declareBreak, reasonRequiredForBreak,
   daySummaryFor, primaryActionFor,
 } from './employee-shell-core.mjs';
-import { buildFourSeasonSchedule, FOUR_SEASON_TENANT, FOUR_SEASON_PEOPLE, FOUR_SEASON_MEMBERSHIPS, ROLE_LABELS } from './employee-schedule-fixture.mjs';
+import { buildFourSeasonSchedule, buildFourSeasonScaleSet, FOUR_SEASON_TENANT, FOUR_SEASON_PEOPLE, FOUR_SEASON_MEMBERSHIPS, FOUR_SEASON_MANAGER_ACTOR, ROLE_LABELS } from './employee-schedule-fixture.mjs';
 import { ownShiftsForMembership, todayShiftOf, nextUpcomingShift, isOvernight, heroShiftFor, weekFor } from './employee-schedule-week.mjs';
 import { renderScheduleView } from './employee-schedule-view.mjs';
+import { renderManagementView } from './management-schedule-view.mjs';
+import { canOpenVaktplan, openShiftsOf, isEligible, applyScheduleOperation, shiftsForEmployee } from './management-schedule-core.mjs';
 
 const POLICY = ETR2A_POLICY;
 
@@ -48,16 +50,33 @@ const REASON_LABELS = {
   PERSONAL_REASON: 'Personlig årsak',
 };
 
-// ---- Single shared schedule truth (Today AND Min plan read the same projections) ---------
-// B8: workDate and planned instants are derived from the tenant policy timezone via the pure
-// core helpers, NOT from host Date getters. The three-week demo schedule is rebuilt from the
-// tenant-local "today" anchor on every read (pure + deterministic => identical shiftIds on every
-// visit, so attendance keys never drift). Tenant is fixed by the membership BEFORE any ansattId
-// filtering (ownShiftsForMembership); the frozen projection carries no tenantId/shiftId field.
+// ---- ONE shared schedule store (management Vaktplan AND employee views project the SAME object) ----
+// B8: workDate and planned instants derive from the tenant policy timezone via the pure core
+// helpers, NOT from host Date getters. The store is seeded ONCE per page/mount lifecycle from the
+// pure deterministic builder with the same tenant-local anchor conventions, so the seeded
+// shiftIds are byte-identical to the previous per-read rebuild and attendance keys never drift.
+// Manager create/edit/cancel mutate THIS object through the single operation boundary
+// (management-schedule-core.mjs); employee Today/Uke/Måned project it via ownShiftsForMembership
+// (tenant fixed by the membership BEFORE any ansattId filtering). No persistence claim: a page
+// refresh re-seeds the local fixture store.
 const TZ = POLICY.timezone;
+// ?scale=40 is a LOCAL, non-production fixture toggle (design 2H): it swaps in the synthetic
+// ~40-person scale-proof set for the Vaktplan grids. OFF by default; the normal five-person
+// review is untouched without the parameter.
+const SCALE40 = typeof location !== 'undefined' && new URLSearchParams(location.search).get('scale') === '40';
+let SCHEDULE_STORE = null;
+let VAKTPLAN_PEOPLE = FOUR_SEASON_PEOPLE;
+function scheduleStore() {
+  if (!SCHEDULE_STORE) {
+    const wd = tenantWorkDate(Date.now(), TZ);
+    if (SCALE40) { const s = buildFourSeasonScaleSet(wd, TZ); SCHEDULE_STORE = s.schedule; VAKTPLAN_PEOPLE = s.people; }
+    else SCHEDULE_STORE = buildFourSeasonSchedule(wd, TZ);
+  }
+  return SCHEDULE_STORE;
+}
 function ownScheduleFor(membership) {
   const wd = tenantWorkDate(Date.now(), TZ);
-  return { workDate: wd, shifts: ownShiftsForMembership(buildFourSeasonSchedule(wd, TZ), membership) };
+  return { workDate: wd, shifts: ownShiftsForMembership(scheduleStore(), membership) };
 }
 // Clock-path packaging (unchanged contract): clockIn inspects shift.shiftId for equality with
 // scope.shiftId only; the projection itself stays the frozen ten fields.
@@ -102,6 +121,12 @@ export function mountEmployeeShell(root) {
       const b = el('button', { cls: 'btn secondary', text: u.label, attrs: { type: 'button' }, style: 'text-align:left;padding:14px 16px' });
       b.addEventListener('click', () => route(u.uid));
       wrap.appendChild(b);
+    }
+    if (canOpenVaktplan(FOUR_SEASON_MANAGER_ACTOR)) {   // capability-shaped routing, not "clicked Ledelse"-shaped
+      wrap.appendChild(el('div', { text: 'Ledelse', style: 'color:#5f6b62;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin:14px 0 6px' }));
+      const mv = el('button', { cls: 'btn secondary', text: 'Vaktplan – ledelse', attrs: { type: 'button' }, style: 'text-align:left;padding:14px 16px' });
+      mv.addEventListener('click', goVaktplan);
+      wrap.appendChild(mv);
     }
     root.appendChild(wrap);
   }
@@ -729,11 +754,105 @@ export function mountEmployeeShell(root) {
   // ---- MIN PLAN (read-only week view; same membership, same schedule truth, clock state untouched) ----
   function goSchedule(membership) {
     current = membership; setChrome(membership, 'plan');
+    clear(root);
+    // Two sibling roots: the protected schedule view owns (and clears) only planRoot, so the
+    // Ledige vakter surface below survives the view's internal Uke/Måned redraws.
+    const planRoot = el('div'); const ledigeRoot = el('div');
+    root.appendChild(planRoot); root.appendChild(ledigeRoot);
     const { shifts } = ownScheduleFor(membership);
-    renderScheduleView(root, {
+    renderScheduleView(planRoot, {
       membership, tenantLabel: tenantLabel(membership.tenantId), shifts,
       nowMs: Date.now(), timezone: TZ, roleLabels: ROLE_LABELS,
       onBack: () => goToday(membership),
+    });
+    // ---- LEDIGE VAKTER: eligible open shifts from the SAME shared store; "Ta vakten" goes
+    // through the single claim operation boundary and fails closed if the shift is taken. ----
+    const store = scheduleStore();
+    const person = FOUR_SEASON_PEOPLE.find((p) => p.ansattId === membership.ansattId) || { ansattId: membership.ansattId, name: '' };
+    const open = openShiftsOf(store, membership.tenantId).filter((s) => isEligible(person, s.projection, membership.tenantId));
+    const card = el('div', { cls: 'card', style: 'margin-top:14px' });
+    card.appendChild(el('div', { cls: 'kicker' + (open.length ? '' : ' neutral'), text: 'Ledige vakter (' + open.length + ')' }));
+    const errBox = el('div', { style: 'color:#a33;font-size:13px;min-height:0' });
+    if (!open.length) card.appendChild(el('div', { style: 'color:#8a948c;font-size:14px', text: 'Ingen ledige vakter akkurat nå.' }));
+    for (const s of open) {
+      const p = s.projection;
+      const row = el('div', { cls: 'shift' });
+      row.appendChild(el('div', { cls: 't', text: fmtDayShort(p.workDate).replace(/^./, (c) => c.toUpperCase()) + ' · ' + fmtHM(p.plannedStartAt) + '–' + fmtHM(p.plannedEndAt) + (isOvernight(p, TZ) ? ' (til neste dag)' : '') }));
+      row.appendChild(el('div', { cls: 'm', text: tenantLabel(membership.tenantId) }));
+      const take = btn('Ta vakten', 'secondary', () => {
+        const res = applyScheduleOperation({
+          store, tenantId: membership.tenantId, actor: null,
+          op: { kind: 'claim', shiftId: s.shiftId, ansattId: membership.ansattId },
+          now: Date.now(), policy: POLICY,
+          deps: {
+            resolveAssignee: (a) => (FOUR_SEASON_PEOPLE.some((x) => x.ansattId === a) || VAKTPLAN_PEOPLE.some((x) => x.ansattId === a))
+              ? { status: 'FOUND', tenantId: membership.tenantId, ansattId: a } : { status: 'NOT_FOUND' },
+          },
+        });
+        if (res.ok) { goSchedule(membership); }   // claimed shift now renders in normal Uke/Måned from the same store
+        else {
+          errBox.textContent = res.code === 'SHIFT_TAKEN' ? 'Vakten er allerede tatt.'
+            : res.code === 'SHIFT_CANCELLED' ? 'Vakten er avlyst og ikke lenger tilgjengelig.'
+            : 'Vakten er ikke tilgjengelig (' + res.code + ').';
+        }
+      });
+      take.style.marginTop = '8px';
+      row.appendChild(take);
+      card.appendChild(row);
+    }
+    card.appendChild(errBox);
+    ledigeRoot.appendChild(card);
+  }
+
+  // ---- VAKTPLAN (ledelse): manager Uke/Måned planner over the SAME schedule store ------------
+  // Capability-gated (canOpenVaktplan on the fixture manager actor — not "clicked Ledelse"
+  // shaped). "Se som ansatt" is a MANAGER PROJECTION: the manager remains the actor and
+  // viewingAsAnsattId is only a projection target (admin-shaped read) — never an identity
+  // switch. The attendance dep exposes an EXISTENCE boolean only (frozen cancel invariant).
+  function managerChrome(nmText) {
+    const idb = document.getElementById('emp-identity');
+    if (idb) {
+      idb.hidden = false; idb.onclick = goChooser;
+      const av = idb.querySelector('.av'), nm = idb.querySelector('.nm');
+      if (av) av.textContent = 'L';
+      if (nm) nm.textContent = nmText;
+      idb.setAttribute('aria-label', 'Bytt visning');
+    }
+    const nav = document.getElementById('emp-nav');
+    if (nav) nav.hidden = true;                      // the manager surface has no employee tab bar
+  }
+  function goVaktplan() {
+    if (!canOpenVaktplan(FOUR_SEASON_MANAGER_ACTOR)) return goChooser();   // capability routing, fail closed
+    clear(root);
+    managerChrome('Ledelse');
+    renderManagementView(root, {
+      store: scheduleStore(), tenantId: FOUR_SEASON_TENANT.tenantId,
+      tenantLabel: tenantLabel(FOUR_SEASON_TENANT.tenantId),
+      people: VAKTPLAN_PEOPLE, roleLabels: ROLE_LABELS,
+      actor: FOUR_SEASON_MANAGER_ACTOR, policy: POLICY,
+      deps: {
+        resolveAssignee: (ansattId) => VAKTPLAN_PEOPLE.some((p) => p.ansattId === ansattId)
+          ? { status: 'FOUND', tenantId: FOUR_SEASON_TENANT.tenantId, ansattId }
+          : { status: 'NOT_FOUND' },
+        attendanceExistsFor: (shiftId, ansattId) => attendanceStore.has(attendanceIdFor(shiftId, ansattId)),
+      },
+      nowMs: Date.now(), timezone: TZ,
+      onViewAs: (ansattId) => goVaktplanViewAs(ansattId),
+    });
+  }
+  function goVaktplanViewAs(ansattId) {
+    if (!canOpenVaktplan(FOUR_SEASON_MANAGER_ACTOR)) return goChooser();
+    clear(root);
+    const person = VAKTPLAN_PEOPLE.find((p) => p.ansattId === ansattId);
+    managerChrome('Ledelse · ser som ' + (person ? person.name : ansattId));
+    // Manager-shaped read of the target employee's shifts from the SAME store; the membership
+    // object handed to the read-only schedule view is only the projection target descriptor.
+    const shifts = shiftsForEmployee(scheduleStore(), FOUR_SEASON_TENANT.tenantId, ansattId, FOUR_SEASON_MANAGER_ACTOR);
+    renderScheduleView(root, {
+      membership: { tenantId: FOUR_SEASON_TENANT.tenantId, ansattId },
+      tenantLabel: tenantLabel(FOUR_SEASON_TENANT.tenantId), shifts,
+      nowMs: Date.now(), timezone: TZ, roleLabels: ROLE_LABELS,
+      onBack: () => goVaktplan(),
     });
   }
 
