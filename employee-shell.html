@@ -241,6 +241,31 @@
     .vp-det .db { margin-bottom:10px; }
     .vp-det .db .nm { font-weight:800; font-size:13px; }
     .vp-note { font-size:11.5px; color:var(--faint); margin:2px 0 8px; }
+    /* ---- employee 360 / ansattside ---- */
+    .emp-row { display:block; width:100%; text-align:left; border:1px solid var(--line); border-radius:14px; background:#fff; padding:12px 14px; margin-bottom:8px; cursor:pointer; font-family:inherit; }
+    .emp-row:hover { border-color:var(--green-line); background:var(--green-tint); }
+    .emp-row .top { display:flex; align-items:center; gap:10px; justify-content:space-between; }
+    .emp-row .nm { font-weight:800; font-size:16px; }
+    .emp-row .sub { color:var(--muted); font-size:13px; margin-top:2px; }
+    .emp-row .st { font-size:11px; font-weight:800; border-radius:999px; padding:3px 9px; border:1px solid var(--line); color:var(--muted); background:#fafaf8; }
+    .emp-row .st.on { color:var(--green-deep); border-color:var(--green-line); background:var(--green-pale); }
+    .emp-miss { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+    .emp-miss .mtag { font-size:11px; font-weight:700; color:var(--amber); background:var(--amber-pale); border:1px solid var(--amber-line); border-radius:999px; padding:2px 9px; }
+    .emp-seg { flex-wrap:wrap; }
+    .emp-seg button { padding:8px 14px; font-size:13px; }
+    .emp-fact { display:grid; grid-template-columns:minmax(120px,190px) 1fr; gap:10px; padding:8px 0; border-top:1px solid #eef0ec; font-size:14px; align-items:baseline; }
+    .emp-fact .k { color:var(--muted); font-size:13px; font-weight:600; }
+    .emp-fact .v { font-weight:700; }
+    .emp-period { border-top:1px solid #eef0ec; padding:9px 0; }
+    .emp-period .rg { font-weight:800; font-size:13px; }
+    .emp-period .bits { color:var(--muted); font-size:13px; margin-top:2px; }
+    .emp-doc { display:flex; justify-content:space-between; align-items:center; gap:10px; border-top:1px solid #eef0ec; padding:9px 0; }
+    .emp-doc .nm { font-weight:700; font-size:14px; }
+    .emp-doc .meta { color:var(--muted); font-size:12px; margin-top:2px; }
+    .emp-doc .btn { width:auto; min-height:36px; padding:6px 10px; }
+    .emp-form label { margin-top:6px; }
+    .emp-form .btn { margin-top:8px; }
+    @media (max-width:520px) { .emp-fact { grid-template-columns:1fr; gap:2px; } }
     /* ---- chooser / dialogs / secondary surfaces (light alignment via shared styles) ---- */
     #emp-root h2 { font-size:22px; font-weight:800; margin-bottom:6px; }
     #emp-root select, #emp-root input[type="text"], #emp-root input[type="number"], #emp-root input[type="time"], #emp-root input[type="date"] { width:100%; max-width:420px; padding:12px 14px; font-size:15px; font-family:inherit; border:1px solid var(--line-2); border-radius:12px; background:#fff; color:var(--text); margin-bottom:10px; }

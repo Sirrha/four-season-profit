@@ -39,7 +39,7 @@ const WD_SHORT = ['Man', 'Tir', 'Ons', 'Tor', 'Fre', 'Lør', 'Søn'];
 const WD_MIN = ['M', 'T', 'O', 'T', 'F', 'L', 'S'];
 const MONTH_NAMES = ['januar', 'februar', 'mars', 'april', 'mai', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'desember'];
 
-export function renderManagementView(root, { store, tenantId, tenantLabel, people, roleLabels, actor, policy, deps, nowMs, timezone, onViewAs }) {
+export function renderManagementView(root, { store, tenantId, tenantLabel, people, roleLabels, actor, policy, deps, nowMs, timezone, onViewAs, initialQuery }) {
   if (!root) return;
   const todayWd = tenantWorkDate(nowMs, timezone);
   const baseMonday = isoWeekMonday(todayWd);
@@ -50,7 +50,8 @@ export function renderManagementView(root, { store, tenantId, tenantLabel, peopl
   let offset = 0;
   let mCursor = { year: todayY, month: todayM };
   let dayWd = todayWd;                 // narrow one-day cursor (navigates freely by date)
-  let query = '';
+  let query = typeof initialQuery === 'string' ? initialQuery : '';   // e.g. opened from an Ansattkort
+
   let sel = null;                      // {mode:'create', ansattId|null, workDate, dateEditable?} | {mode:'edit', shiftId}
   let errMsg = '';
   let showDetails = false;

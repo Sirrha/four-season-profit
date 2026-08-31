@@ -12,12 +12,15 @@ import { isoWeekMonday, addDays } from './employee-schedule-week.mjs';
 
 export const FOUR_SEASON_TENANT = Object.freeze({ tenantId: 'four-season', label: 'Four Season' });
 export const ROLE_LABELS = Object.freeze({ 'daglig-leder': 'Daglig leder', 'butikksjef': 'Butikksjef', 'butikkmedarbeider': 'Butikkmedarbeider' });
-// PLANNING COMPENSATION — DEMO/EKSEMPELTALL ONLY (truth-layer-A estimate INPUT for the local
-// Vaktplan preview). These are NOT payroll truth, NOT the payable ansatte.timelonn in
-// index.html, and are never written to vakter or any payable record. model 'timelonn' carries
-// plannedHourlyRate (kr/t); model 'fastlonn' carries plannedMonthlySalary (kr/mnd). A missing or
-// invalid object DERIVES the honest UNKNOWN state (Yussef below, deliberately) — an explicit
-// "unknown" is never stored and a missing basis is never silently treated as zero.
+// PLANNING COMPENSATION — DEMO/EKSEMPELTALL, SEED INPUT ONLY (truth-layer-A). NOT payroll truth,
+// NOT the payable ansatte.timelonn in index.html, never written to vakter or any payable record.
+// EMPLOYEE-360 REWIRE: at RUNTIME these values are consumed exactly once by
+// seedFourSeasonEmployees() into the FIRST employment-terms period; compensation then lives in
+// employment terms ONLY, and the Vaktplan surface receives a DERIVED projection of the current
+// terms (vaktplanPeopleFrom) — this constant is never read as a live second compensation truth.
+// model 'timelonn' seeds hourlyRate; model 'fastlonn' seeds monthlySalary. A missing or invalid
+// object DERIVES the honest UNKNOWN state (Yussef below, deliberately) — an explicit "unknown"
+// is never stored and a missing basis is never silently treated as zero.
 export const FOUR_SEASON_PEOPLE = Object.freeze([
   { uid: 'uid-maria',  ansattId: 'ans-maria',  name: 'Maria',  roleKey: 'butikkmedarbeider', compensation: { model: 'timelonn', plannedHourlyRate: 250 } }, // default review identity
   { uid: 'uid-aboud',  ansattId: 'ans-aboud',  name: 'Aboud',  roleKey: 'butikkmedarbeider', compensation: { model: 'timelonn', plannedHourlyRate: 220 } },
@@ -37,6 +40,8 @@ export const FOUR_SEASON_MANAGER_ACTOR = Object.freeze({
   uid: 'uid-herish', accessRole: 'admin', ansattId: 'ans-herish', accessEnabled: true,
   tenantId: FOUR_SEASON_TENANT.tenantId,
   canManageSchedule: true, canViewOwnSchedule: true,   // capability-shaped routing (local fixture, not production auth)
+  // Employee 360 capability SHAPE (production-compatible shape only; UI hiding is not authorization).
+  canViewEmployeeCore: true, canViewEmployeeCompensation: true, canEditEmployment: true,
 });
 
 // Build the tenant-keyed container { 'four-season': { [shiftId]: projection } }. Pure & deterministic

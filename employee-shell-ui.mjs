@@ -20,6 +20,8 @@ import { ownShiftsForMembership, todayShiftOf, nextUpcomingShift, isOvernight, h
 import { renderScheduleView } from './employee-schedule-view.mjs';
 import { renderManagementView } from './management-schedule-view.mjs';
 import { canOpenVaktplan, openShiftsOf, isEligible, applyScheduleOperation, shiftsForEmployee } from './management-schedule-core.mjs';
+import { seedFourSeasonEmployees, vaktplanPeopleFrom, canViewEmployees } from './management-employees-core.mjs';
+import { renderEmployeesView } from './management-employees-view.mjs';
 
 const POLICY = ETR2A_POLICY;
 
@@ -74,6 +76,20 @@ function scheduleStore() {
   }
   return SCHEDULE_STORE;
 }
+// ---- ONE employee (Employee 360) store, seeded once per mount from the same fixture people.
+// Compensation lives ONLY in employment terms here; the Vaktplan surface receives a DERIVED
+// projection of the CURRENT terms (vaktplanPeopleFrom) — there is no second stored copy.
+// Under ?scale=40 the synthetic people are used directly for the grid scale proof (they are not
+// employment records); the normal five-person product always projects from employment terms.
+let EMPLOYEE_STORE = null;
+function employeeStore() {
+  if (!EMPLOYEE_STORE) EMPLOYEE_STORE = seedFourSeasonEmployees(VAKTPLAN_PEOPLE === FOUR_SEASON_PEOPLE ? FOUR_SEASON_PEOPLE : VAKTPLAN_PEOPLE, FOUR_SEASON_TENANT.tenantId);
+  return EMPLOYEE_STORE;
+}
+function vaktplanPeople() {
+  scheduleStore();                       // ensure the scale toggle has resolved first
+  return vaktplanPeopleFrom(employeeStore(), FOUR_SEASON_TENANT.tenantId, tenantWorkDate(Date.now(), TZ));
+}
 function ownScheduleFor(membership) {
   const wd = tenantWorkDate(Date.now(), TZ);
   return { workDate: wd, shifts: ownShiftsForMembership(scheduleStore(), membership) };
@@ -127,6 +143,11 @@ export function mountEmployeeShell(root) {
       const mv = el('button', { cls: 'btn secondary', text: 'Vaktplan – ledelse', attrs: { type: 'button' }, style: 'text-align:left;padding:14px 16px' });
       mv.addEventListener('click', goVaktplan);
       wrap.appendChild(mv);
+    }
+    if (canViewEmployees(FOUR_SEASON_MANAGER_ACTOR)) {   // capability-shaped, same as Vaktplan
+      const av = el('button', { cls: 'btn secondary', text: 'Ansatte – ledelse', attrs: { type: 'button' }, style: 'text-align:left;padding:14px 16px' });
+      av.addEventListener('click', goAnsatte);
+      wrap.appendChild(av);
     }
     root.appendChild(wrap);
   }
@@ -821,23 +842,42 @@ export function mountEmployeeShell(root) {
     const nav = document.getElementById('emp-nav');
     if (nav) nav.hidden = true;                      // the manager surface has no employee tab bar
   }
-  function goVaktplan() {
+  function goVaktplan(prefillName) {
     if (!canOpenVaktplan(FOUR_SEASON_MANAGER_ACTOR)) return goChooser();   // capability routing, fail closed
     clear(root);
     managerChrome('Ledelse');
+    // People (incl. planning compensation) are DERIVED from current employment terms — the
+    // Vaktplan no longer carries its own stored compensation truth. Under ?scale=40 the
+    // synthetic grid set is used instead, unchanged, purely for the render scale proof.
+    const people = SCALE40 ? VAKTPLAN_PEOPLE : vaktplanPeople();
     renderManagementView(root, {
       store: scheduleStore(), tenantId: FOUR_SEASON_TENANT.tenantId,
       tenantLabel: tenantLabel(FOUR_SEASON_TENANT.tenantId),
-      people: VAKTPLAN_PEOPLE, roleLabels: ROLE_LABELS,
+      people, roleLabels: ROLE_LABELS,
       actor: FOUR_SEASON_MANAGER_ACTOR, policy: POLICY,
       deps: {
-        resolveAssignee: (ansattId) => VAKTPLAN_PEOPLE.some((p) => p.ansattId === ansattId)
+        resolveAssignee: (ansattId) => people.some((p) => p.ansattId === ansattId)
           ? { status: 'FOUND', tenantId: FOUR_SEASON_TENANT.tenantId, ansattId }
           : { status: 'NOT_FOUND' },
         attendanceExistsFor: (shiftId, ansattId) => attendanceStore.has(attendanceIdFor(shiftId, ansattId)),
       },
       nowMs: Date.now(), timezone: TZ,
+      initialQuery: typeof prefillName === 'string' ? prefillName : '',
       onViewAs: (ansattId) => goVaktplanViewAs(ansattId),
+    });
+  }
+  // ---- ANSATTE (Employee 360): same schedule truth, employment terms as the single basis ----
+  function goAnsatte() {
+    if (!canViewEmployees(FOUR_SEASON_MANAGER_ACTOR)) return goChooser();
+    clear(root);
+    managerChrome('Ledelse');
+    renderEmployeesView(root, {
+      employeeStore: employeeStore(), scheduleStore: scheduleStore(),
+      tenantId: FOUR_SEASON_TENANT.tenantId, tenantLabel: tenantLabel(FOUR_SEASON_TENANT.tenantId),
+      roleLabels: ROLE_LABELS, actor: FOUR_SEASON_MANAGER_ACTOR,
+      nowMs: Date.now(), timezone: TZ,
+      onOpenVaktplanFor: (name) => goVaktplan(name),
+      onBack: goChooser,
     });
   }
   function goVaktplanViewAs(ansattId) {
