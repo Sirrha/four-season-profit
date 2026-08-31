@@ -1,7 +1,8 @@
 // employee-schedule-fixture.mjs
-// FOUR SEASON three-week DEMO schedule (previous / current / next ISO week around an INJECTED
-// anchor workDate). Demo data for the first real product review — NOT an authoritative employee
-// schedule, NOT an HR record, NOT a persistence contract. Synthetic technical ids, first names and
+// FOUR SEASON ten-week DEMO schedule (ISO weeks -4..+5 around an INJECTED anchor workDate; the
+// previous/current/next core weeks are unchanged, the outer weeks exist so the Måned view and its
+// month navigation always land on realistic content). Demo data for product review — NOT an
+// authoritative employee schedule, NOT an HR record, NOT a persistence contract. Synthetic technical ids, first names and
 // ordinary role labels only: no contact data, real auth UIDs, PINs, personnummer, bank data or
 // capacity/health-style attributes. Every projection carries EXACTLY the ten frozen ETR-2c fields;
 // tenant and shiftId are container/path identity (never fields). No draft/unpublished state exists.
@@ -33,11 +34,12 @@ export function buildFourSeasonSchedule(anchorWorkDate, timezone) {
   const createdAt = tenantLocalHMToUtcMs(addDays(prevMon, -7), '09:00', timezone); // one authoring instant for all
   const shifts = {};
   let openSeq = 0;
-  function mk(ansattId, workDate, fromHM, toHM, status) {
+  function mk(ansattId, workDate, fromHM, toHM, status, suffix) {
     const start = tenantLocalHMToUtcMs(workDate, fromHM, timezone);
     const endDate = toHM < fromHM ? addDays(workDate, 1) : workDate;   // overnight ends on the next local day
     const end = tenantLocalHMToUtcMs(endDate, toHM, timezone);
-    const id = ansattId ? 'fs-' + workDate + '-' + ansattId : 'fs-' + workDate + '-open-' + (++openSeq);
+    // suffix keeps ids unique for a second shift on the same (workDate, ansattId); existing ids unchanged.
+    const id = (ansattId ? 'fs-' + workDate + '-' + ansattId : 'fs-' + workDate + '-open-' + (++openSeq)) + (suffix ? '-' + suffix : '');
     shifts[id] = {
       ansattId: ansattId || null, plannedStartAt: start, plannedEndAt: end, workDate,
       roleKey: ansattId ? ROLE_OF[ansattId] : null, status: status || (ansattId ? 'assigned' : 'open'),
@@ -77,6 +79,37 @@ export function buildFourSeasonSchedule(anchorWorkDate, timezone) {
   for (const mon of [prevMon, monday, nextMon]) { mk('ans-herish', day(mon, 1), '09:00', '17:00'); mk('ans-herish', day(mon, 3), '09:00', '17:00'); }
   // ---- one OPEN (unassigned) shift in the current week: must never render as anyone's own ----
   mk(null, day(monday, 5), '12:00', '16:00');
+
+  // ---- Maria: a second shift on one CURRENT-WEEK date (split day; never the anchor day itself,
+  //      so the Today card and hero selection are untouched) ----
+  mk('ans-maria', rel(4), '17:00', '21:00', null, 'b');
+
+  // ---- MONTH RANGE EXTENSION (Måned view, design §6): ISO weeks -4..-2 and +2..+5.
+  //      Data only — same mk(), same people, same statuses; realistic rotation, not exhaustive. ----
+  const wk = (n) => addDays(monday, n * 7);
+  for (const w of [-4, -3, -2]) {
+    const base = wk(w);
+    for (const i of [0, 1, 3, 4]) mk('ans-maria', day(base, i), '07:00', '15:00');
+    mk('ans-athar', day(base, 0), '08:00', '16:00'); mk('ans-athar', day(base, 2), '08:00', '16:00'); mk('ans-athar', day(base, 4), '08:00', '16:00');
+    mk('ans-herish', day(base, 1), '09:00', '17:00'); mk('ans-herish', day(base, 3), '09:00', '17:00');
+    mk('ans-aboud', day(base, 1), '16:00', '20:00'); mk('ans-aboud', day(base, 5), '10:00', '18:00');
+    mk('ans-yussef', day(base, 2), '16:00', '21:00'); mk('ans-yussef', day(base, 6), '12:00', '18:00');
+  }
+  mk('ans-maria', day(wk(-3), 2), '22:00', '02:00');               // overnight stocktaking, week -3 (Wed off in the base rotation)
+  mk('ans-maria', day(wk(-2), 5), '09:00', '13:00', 'cancelled');  // cancelled, week -2 (Sat off in the base rotation)
+  for (const w of [2, 3, 4, 5]) {
+    const base = wk(w);
+    for (const i of [0, 1, 2]) mk('ans-maria', day(base, i), '12:00', '20:00');
+    mk('ans-maria', day(base, 4), '10:00', '14:00');
+    mk('ans-athar', day(base, 0), '08:00', '16:00'); mk('ans-athar', day(base, 2), '08:00', '16:00'); mk('ans-athar', day(base, 4), '08:00', '16:00');
+    mk('ans-herish', day(base, 1), '09:00', '17:00'); mk('ans-herish', day(base, 3), '09:00', '17:00');
+    mk('ans-aboud', day(base, 3), '16:00', '20:00'); mk('ans-aboud', day(base, 5), '10:00', '18:00');
+    mk('ans-yussef', day(base, 1), '16:00', '21:00'); mk('ans-yussef', day(base, 6), '12:00', '18:00');
+  }
+  mk('ans-maria', day(wk(2), 5), '08:00', '12:00');                // two-shift Saturday, week +2 ...
+  mk('ans-maria', day(wk(2), 5), '16:00', '20:00', null, 'b');     // ... second shift same date (suffix keeps ids unique)
+  mk('ans-maria', day(wk(3), 3), '22:00', '02:00');                // overnight, week +3 (Thu off in the base rotation)
+  mk('ans-maria', day(wk(4), 5), '09:00', '13:00', 'cancelled');   // cancelled, week +4
 
   return { [FOUR_SEASON_TENANT.tenantId]: shifts };
 }
