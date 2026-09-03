@@ -266,6 +266,62 @@
     .emp-form label { margin-top:6px; }
     .emp-form .btn { margin-top:8px; }
     @media (max-width:520px) { .emp-fact { grid-template-columns:1fr; gap:2px; } }
+    /* ---- contract foundation: checkbox, step bar, agreement preview ---- */
+    .emp-check { display:flex; align-items:center; gap:9px; font-size:14px; font-weight:600; color:var(--text); margin:10px 0 4px; }
+    /* security-deferred design fields: visible placement, disabled, non-collecting */
+    .emp-locked label::after { content:" · aktiveres etter sikkerhetsmodul"; font-weight:400; color:var(--faint); }
+    .emp-locked input[disabled] { background:#f4f4f1; color:var(--faint); border-style:dashed; cursor:not-allowed; }
+    .emp-check input { width:auto; margin:0; }
+    .emp-steps { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+    .emp-steps .st { border:1px solid var(--line); background:#fff; border-radius:999px; padding:7px 13px; font-size:12.5px; font-weight:700; color:var(--muted); cursor:pointer; min-height:38px; font-family:inherit; }
+    .emp-steps .st.on { background:var(--green); border-color:var(--green); color:#fff; }
+    .emp-doc-view h2 { font-size:22px; margin-bottom:6px; }
+    .emp-doc-view .note { font-size:12px; color:var(--muted); background:#fafaf8; border:1px solid var(--line); border-radius:8px; padding:7px 10px; margin:8px 0; }
+    .emp-doc-view .note.draft { color:var(--amber); background:var(--amber-pale); border-color:var(--amber-line); font-weight:800; letter-spacing:.04em; }
+    .emp-doc-view .sec { font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--green); margin:16px 0 2px; }
+    .emp-doc-view .cl { font-size:13.5px; line-height:1.5; margin:4px 0 0; color:var(--text); }
+    /* ---- Four Season Ansettelsesavtale v2 — A4 document preview (sealed visual freeze) ---- */
+    .fs-a4 { background:#fff; color:#1d2a26; border:1px solid var(--line); border-radius:6px; box-shadow:0 2px 14px rgba(15,40,32,.10); max-width:794px; margin:0 auto 18px; padding:34px 40px 20px; font-size:13px; line-height:1.45; }
+    .fs-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
+    .fs-logo { height:52px; width:auto; object-fit:contain; }
+    .fs-orgline { font-size:11.5px; color:#5b6a64; text-align:right; }
+    .fs-title { font-size:26px; font-weight:800; letter-spacing:.01em; color:#14463a; margin:2px 0 2px; }
+    .fs-subrow { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:14px; }
+    .fs-sub { font-size:12.5px; color:#4a5a54; }
+    .fs-badge { font-size:11px; font-weight:800; letter-spacing:.05em; color:#14463a; }
+    .fs-cont { font-size:12.5px; font-weight:800; color:#14463a; margin:0 0 12px; }
+    .fs-sec { font-size:14px; font-weight:800; color:#14463a; margin:16px 0 6px; display:flex; gap:8px; }
+    .fs-sec .n { color:#14463a; }
+    .fs-cl { font-size:12.5px; line-height:1.55; margin:2px 0 6px; color:#2a3733; }
+    .fs-ul { margin:2px 0 6px; padding-left:20px; font-size:12.5px; line-height:1.6; color:#2a3733; columns:2; column-gap:28px; }
+    .fs-rows { border:1px solid #d7ddda; margin:4px 0 6px; }
+    .fs-row { display:grid; grid-template-columns:38% 1fr; border-top:1px solid #d7ddda; }
+    .fs-row:first-child { border-top:0; }
+    .fs-row .k { background:#f2f4f3; padding:6px 10px; font-size:12px; color:#4a5a54; }
+    .fs-row .v { padding:6px 10px; font-size:12.5px; font-weight:700; color:#14463a; }
+    .fs-parties { display:grid; grid-template-columns:1fr 1fr; gap:0; border:1px solid #d7ddda; margin:4px 0 6px; }
+    .fs-party { padding:10px 12px; }
+    .fs-party.gray { background:#f2f4f3; border-right:1px solid #d7ddda; }
+    .fs-party .cap { font-size:11.5px; font-weight:800; letter-spacing:.06em; color:#14463a; margin-bottom:6px; }
+    .fs-party .ln { font-size:12.5px; margin:2px 0; }
+    .fs-party .ln .k { color:#4a5a54; }
+    .fs-party .ln .v { font-weight:700; color:#14463a; }
+    .fs-signs { display:grid; grid-template-columns:1fr 1fr; gap:28px; margin:26px 0 10px; }
+    .fs-sign .cap { font-size:11.5px; font-weight:800; letter-spacing:.06em; color:#14463a; margin-bottom:34px; }
+    .fs-sign .nm { font-size:13px; font-weight:800; color:#14463a; }
+    .fs-sign .sig { border-top:1px solid #7d8c86; font-size:11.5px; color:#5b6a64; padding-top:3px; margin-top:2px; }
+    .fs-foot { display:flex; justify-content:center; gap:6px; border-top:1px solid #e2e6e4; margin-top:20px; padding-top:8px; font-size:11px; color:#7d8c86; }
+    @media (max-width:560px) { .fs-a4 { padding:20px 16px 14px; } .fs-parties { grid-template-columns:1fr; } .fs-party.gray { border-right:0; border-bottom:1px solid #d7ddda; } .fs-row { grid-template-columns:1fr; } .fs-row .k { padding-bottom:1px; } .fs-ul { columns:1; } .fs-signs { grid-template-columns:1fr; gap:20px; } }
+    /* Skriv ut / Lagre som PDF: print ONLY the rendered agreement pages — same renderer, same
+       truth; app chrome, navigation and actions never reach paper. */
+    @media print {
+      body * { visibility:hidden; }
+      .fs-a4, .fs-a4 * { visibility:visible; }
+      header.top, .nav, .plan-head, .vp-actions, .vp-note, .emp-doc-view, #emp-root > button { display:none !important; }
+      .fs-a4 { position:relative; box-shadow:none; border:0; border-radius:0; margin:0 auto; max-width:none; width:100%; page-break-after:always; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+      .fs-a4:last-of-type { page-break-after:auto; }
+      @page { size:A4; margin:12mm; }
+    }
     /* ---- chooser / dialogs / secondary surfaces (light alignment via shared styles) ---- */
     #emp-root h2 { font-size:22px; font-weight:800; margin-bottom:6px; }
     #emp-root select, #emp-root input[type="text"], #emp-root input[type="number"], #emp-root input[type="time"], #emp-root input[type="date"] { width:100%; max-width:420px; padding:12px 14px; font-size:15px; font-family:inherit; border:1px solid var(--line-2); border-radius:12px; background:#fff; color:var(--text); margin-bottom:10px; }

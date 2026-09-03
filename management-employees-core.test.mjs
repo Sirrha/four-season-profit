@@ -22,7 +22,9 @@ const TODAY = '2026-08-31';
 const ANCHOR = '2026-08-26';
 const MGR = FOUR_SEASON_MANAGER_ACTOR;
 const seedE = () => seedFourSeasonEmployees(FOUR_SEASON_PEOPLE, T);
-const applyE = (store, op, over) => applyEmployeeOperation(Object.assign({ store, tenantId: T, actor: MGR, op, now: 0 }, over || {}));
+// Tenant-local NOW pinned to TODAY midday Oslo so birth-date boundary proofs are deterministic.
+const NOW = tenantLocalHMToUtcMs(TODAY, '12:00', TZ);
+const applyE = (store, op, over) => applyEmployeeOperation(Object.assign({ store, tenantId: T, actor: MGR, op, now: NOW, timezone: TZ }, over || {}));
 
 t('E1', 'create requires exactly navn + startdato + rolle; succeeds with only those three', () => {
   const store = seedE();
@@ -136,12 +138,20 @@ t('E13', 'direct contact edit does not rewrite terms history', () => {
   const store = seedE();
   const emp = employeeOf(store, T, 'ans-maria');
   const termsRef = emp.terms; const snap = JSON.stringify(emp.terms);
-  const r = applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { email: 'demo@example.test' } });
+  // address + birthDate are owner-approved canonical contact facts since the Identity/Company-
+  // facts refinement; sensitive identifiers remain rejected and are never stored.
+  const r = applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { email: 'demo@example.test', address: { street: 'Testveien 1', postalCode: '2815', city: 'Gjøvik' }, birthDate: '1995-03-15' } });
   assert.equal(r.ok, true, r.code);
   assert.equal(emp.contact.email, 'demo@example.test');
+  assert.deepEqual(emp.contact.address, { street: 'Testveien 1', postalCode: '2815', city: 'Gjøvik' });
+  assert.equal(emp.contact.birthDate, '1995-03-15');
   assert.equal(emp.terms, termsRef);
   assert.equal(JSON.stringify(emp.terms), snap);
-  assert.equal(applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { address: 'x' } }).code, 'CONTACT_FIELD_NOT_ALLOWED:address');
+  assert.equal(applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { birthDate: 'ikke-en-dato' } }).code, 'BIRTHDATE_INVALID');
+  for (const bad of ['nationalIdentityNumber', 'bankAccountNumber', 'fodselsnummer', 'kontonummer']) {
+    assert.equal(applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { [bad]: 'x' } }).code, 'CONTACT_FIELD_NOT_ALLOWED:' + bad);
+  }
+  assert.ok(!JSON.stringify(store).includes('nationalIdentityNumber'));
 });
 t('E14', 'ending preserves record/history; no delete path exists; ended excluded from Vaktplan rows', () => {
   const store = seedE();
@@ -214,6 +224,74 @@ t('E20', 'seeded five: statuses, contract facts and honest missing markers', () 
   assert.ok(missingInfoOf(employeeOf(store, T, 'ans-yussef'), TODAY).includes('mangler lønnsgrunnlag'));
   assert.equal(startDateOf(employeeOf(store, T, 'ans-herish')), '2021-01-01');
   assert.equal(vaktplanPeopleFrom(store, T, TODAY).length, 5);
+});
+
+// ---- PRE-CHECKPOINT CORRECTION — operation-boundary proofs P4-P7 (UI fully bypassed) --------
+const addrOf = (store, id) => employeeOf(store, T, id).contact.address;
+const bdOf = (store, id) => employeeOf(store, T, id).contact.birthDate;
+
+t('P4', 'postalCode is a STRING (leading zero survives); 281 / 28155 / 2815a rejected without mutation', () => {
+  const store = seedE();
+  const ok = applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { address: { street: 'Storgata 20', postalCode: '0150', city: 'Oslo' } } });
+  assert.equal(ok.ok, true, ok.code);
+  assert.equal(typeof addrOf(store, 'ans-maria').postalCode, 'string');
+  assert.equal(addrOf(store, 'ans-maria').postalCode, '0150');            // leading zero intact
+  const before = JSON.stringify(addrOf(store, 'ans-maria'));
+  for (const bad of ['281', '28155', '2815a', '', ' 2815 4', '02']) {
+    const r = applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { address: { street: 'Storgata 20', postalCode: bad, city: 'Oslo' } } });
+    assert.equal(r.ok, false, 'accepted bad postal code: ' + bad);
+    assert.equal(r.code, 'ADDRESS_POSTALCODE_INVALID');
+    assert.equal(JSON.stringify(addrOf(store, 'ans-maria')), before);     // record untouched
+  }
+  const n = applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { address: { street: 'Storgata 20', postalCode: 2815, city: 'Oslo' } } });
+  assert.equal(n.code, 'ADDRESS_POSTALCODE_INVALID');                     // a NUMBER can never become the truth
+  assert.equal(applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { address: { street: '  ', postalCode: '2815', city: 'Gjøvik' } } }).code, 'ADDRESS_STREET_REQUIRED');
+  assert.equal(applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { address: { street: 'Storgata 20', postalCode: '2815', city: '  ' } } }).code, 'ADDRESS_CITY_REQUIRED');
+  assert.equal(JSON.stringify(addrOf(store, 'ans-maria')), before);
+  // trim is the ONLY normalization — no case rewriting, reordering or guessing
+  applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { address: { street: '  storgata 20 ', postalCode: ' 2815 ', city: ' gJØvik ' } } });
+  assert.deepEqual(addrOf(store, 'ans-maria'), { street: 'storgata 20', postalCode: '2815', city: 'gJØvik' });
+});
+t('P5', 'future / year-7919 birthDate rejected at the operation; record unchanged', () => {
+  const store = seedE();
+  applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { birthDate: '1995-03-15' } });
+  assert.equal(bdOf(store, 'ans-maria'), '1995-03-15');
+  for (const bad of ['7919-12-03', '2099-01-01', '2026-12-31']) {
+    const r = applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { birthDate: bad } });
+    assert.equal(r.ok, false); assert.equal(r.code, 'BIRTHDATE_FUTURE', 'wrong code for ' + bad);
+    assert.equal(bdOf(store, 'ans-maria'), '1995-03-15');                 // unchanged
+  }
+  // create is guarded by the SAME validator, not only update
+  const c = applyE(store, { kind: 'createEmployee', name: 'Feil', startDate: '2026-09-01', role: 'butikkmedarbeider', contact: { birthDate: '7919-12-03' } });
+  assert.equal(c.ok, false); assert.equal(c.code, 'BIRTHDATE_FUTURE');
+  assert.equal(employeeOf(store, T, 'ans-feil'), null);                   // nothing created
+});
+t('P6', '31.02 is rejected as an impossible calendar date and NEVER coerced', () => {
+  const store = seedE();
+  applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { birthDate: '1995-03-15' } });
+  for (const bad of ['1995-02-31', '1995-04-31', '1995-13-01', '1995-00-10', '1995-06-00', '15.03.1995', '1995-3-15', 'ikke-en-dato']) {
+    const r = applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { birthDate: bad } });
+    assert.equal(r.ok, false, 'accepted impossible date: ' + bad);
+    assert.equal(r.code, 'BIRTHDATE_INVALID');
+    assert.equal(bdOf(store, 'ans-maria'), '1995-03-15');                 // no coercion to 03.03, no mutation
+  }
+});
+t('P7', 'boundary quartet: 1899-12-31 rejected, 1900-01-01 accepted, today rejected, yesterday accepted', () => {
+  const store = seedE();
+  const yesterday = '2026-08-30';                                          // tenant-local day before TODAY
+  const r1 = applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { birthDate: '1899-12-31' } });
+  assert.equal(r1.ok, false); assert.equal(r1.code, 'BIRTHDATE_BEFORE_1900');
+  assert.equal(bdOf(store, 'ans-maria'), null);
+  const r2 = applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { birthDate: '1900-01-01' } });
+  assert.equal(r2.ok, true, r2.code); assert.equal(bdOf(store, 'ans-maria'), '1900-01-01');
+  const r3 = applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { birthDate: TODAY } });
+  assert.equal(r3.ok, false); assert.equal(r3.code, 'BIRTHDATE_FUTURE');   // strictly before today
+  assert.equal(bdOf(store, 'ans-maria'), '1900-01-01');
+  const r4 = applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { birthDate: yesterday } });
+  assert.equal(r4.ok, true, r4.code); assert.equal(bdOf(store, 'ans-maria'), yesterday);
+  // no age policy: neither a very old nor a very young plausible date is rejected
+  assert.equal(applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { birthDate: '1901-05-05' } }).ok, true);
+  assert.equal(applyE(store, { kind: 'updateContact', ansattId: 'ans-maria', contact: { birthDate: '2020-05-05' } }).ok, true);
 });
 
 console.log(lines.join('\n'));

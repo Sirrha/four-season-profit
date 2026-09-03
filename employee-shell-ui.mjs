@@ -15,7 +15,7 @@ import {
   startBreak, endBreak, declareBreak, reasonRequiredForBreak,
   daySummaryFor, primaryActionFor,
 } from './employee-shell-core.mjs';
-import { buildFourSeasonSchedule, buildFourSeasonScaleSet, FOUR_SEASON_TENANT, FOUR_SEASON_PEOPLE, FOUR_SEASON_MEMBERSHIPS, FOUR_SEASON_MANAGER_ACTOR, ROLE_LABELS } from './employee-schedule-fixture.mjs';
+import { buildFourSeasonSchedule, buildFourSeasonScaleSet, FOUR_SEASON_TENANT, FOUR_SEASON_PEOPLE, FOUR_SEASON_MEMBERSHIPS, FOUR_SEASON_MANAGER_ACTOR, FOUR_SEASON_CONTRACT_PROFILE, ROLE_LABELS } from './employee-schedule-fixture.mjs';
 import { ownShiftsForMembership, todayShiftOf, nextUpcomingShift, isOvernight, heroShiftFor, weekFor } from './employee-schedule-week.mjs';
 import { renderScheduleView } from './employee-schedule-view.mjs';
 import { renderManagementView } from './management-schedule-view.mjs';
@@ -867,6 +867,15 @@ export function mountEmployeeShell(root) {
     });
   }
   // ---- ANSATTE (Employee 360): same schedule truth, employment terms as the single basis ----
+  // The company-contract profile is the ONE runtime truth for shared Four Season agreement
+  // facts (pension / yrkesskadeforsikring / tariffavtale): seeded once from the frozen fixture
+  // config, editable via the management Avtaleoppsett card, reused by every employee's
+  // agreement. Local/demo state only — no production persistence in this release.
+  let companyContractProfile = null;
+  function contractProfile() {
+    if (!companyContractProfile) companyContractProfile = JSON.parse(JSON.stringify(FOUR_SEASON_CONTRACT_PROFILE));
+    return companyContractProfile;
+  }
   function goAnsatte() {
     if (!canViewEmployees(FOUR_SEASON_MANAGER_ACTOR)) return goChooser();
     clear(root);
@@ -875,6 +884,7 @@ export function mountEmployeeShell(root) {
       employeeStore: employeeStore(), scheduleStore: scheduleStore(),
       tenantId: FOUR_SEASON_TENANT.tenantId, tenantLabel: tenantLabel(FOUR_SEASON_TENANT.tenantId),
       roleLabels: ROLE_LABELS, actor: FOUR_SEASON_MANAGER_ACTOR,
+      contractProfile: contractProfile(),   // tenant config, not rendering literals
       nowMs: Date.now(), timezone: TZ,
       onOpenVaktplanFor: (name) => goVaktplan(name),
       onBack: goChooser,

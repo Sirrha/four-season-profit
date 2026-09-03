@@ -33,6 +33,53 @@ export const FOUR_SEASON_MEMBERSHIPS = Object.freeze(FOUR_SEASON_PEOPLE.map((p) 
 })));
 const ROLE_OF = {}; for (const p of FOUR_SEASON_PEOPLE) ROLE_OF[p.ansattId] = p.roleKey;
 
+// TENANT CONTRACT PROFILE — FOUR SEASON ANSETTELSESAVTALE v2 (sealed visual freeze authority).
+// Employer identity, signing representative, clause set and templateVersion live here as TENANT
+// CONFIG, never inside rendering logic — another tenant is another profile, not a code change.
+// Employer identity below is the REAL owner-accepted Four Season AS identity (orgnr stored
+// digit-normalized; the renderer displays readable spacing). companyFacts that Herish has NOT
+// yet confirmed are null = UNCONFIRMED: they count in template-fact readiness, block freeze,
+// and render as honest "Ikke bekreftet" — they are never invented to reach ready/frozen.
+// No sensitive national/financial identifier is modelled anywhere in this profile.
+export const FOUR_SEASON_CONTRACT_PROFILE = Object.freeze({
+  tenantId: FOUR_SEASON_TENANT.tenantId,
+  templateVersion: 'fs-ansettelsesavtale-v2',
+  employer: Object.freeze({
+    name: 'Four Season AS',
+    orgnr: '919430036',
+    address: 'Storgata 20, 2815 Gjøvik',
+    nearestSuperior: 'Butikksjef',
+  }),
+  representative: Object.freeze({ name: 'Herish Hashemi', role: 'Daglig leder' }),
+  signingPlace: 'Gjøvik',
+  // STRUCTURED company-contract facts — ONE Four Season truth, configured once in management,
+  // never re-entered per employee. applies: true/false = owner-confirmed Ja/Nei; null =
+  // unconfirmed. Owner has confirmed pension and yrkesskadeforsikring EXIST (Ja) but has NOT
+  // supplied provider/insurer names in this release — those stay null (never invented) and
+  // block freeze. Tariffavtale = Nei per the established Four Season source agreement.
+  // salaryPaymentArrangement remains unconfirmed from the prior build.
+  companyFacts: Object.freeze({
+    salaryPaymentArrangement: null,
+    pension: Object.freeze({ applies: true, provider: null }),
+    occupationalInjuryInsurance: Object.freeze({ applies: true, insurer: null }),
+    tariffavtale: Object.freeze({ applies: false, agreementName: null, parties: null }),
+  }),
+  clauses: Object.freeze([
+    Object.freeze({ key: 'flyttbarhet', title: 'Ansettelsesforholdet', version: 2, text: 'Når virksomhetens behov gjør det nødvendig, kan arbeidstaker innenfor arbeidsforholdets rammer utføre tilsvarende arbeidsoppgaver eller arbeide i tilsvarende stilling ved arbeidsgivers øvrige avdelinger eller tilsluttede selskaper.' }),
+    Object.freeze({ key: 'oppgaver', title: 'Arbeidsoppgaver', version: 2, text: 'Arbeidstaker utfører oppgaver som naturlig hører til stillingen og den daglige driften. Arbeidet kan blant annet omfatte:', bullets: Object.freeze(['Kassabetjening og kundebehandling', 'Varepåfylling og varehåndtering', 'Rydding og orden i butikk', 'Lettere rengjøring og øvrige driftsoppgaver']) }),
+    Object.freeze({ key: 'arbeidstid', title: 'Arbeidstid og arbeidsplan', version: 2, text: 'Arbeidet organiseres som turnusarbeid og kan omfatte arbeid på dagtid, kveldstid og i helger. Den konkrete plasseringen av arbeidstiden fremgår av den til enhver tid gjeldende arbeidsplanen.' }),
+    Object.freeze({ key: 'provetid', title: 'Prøvetid', version: 2, text: 'Dersom prøvetid er avtalt, regnes den fra tiltredelsesdato. Ved fravær som skyldes arbeidstaker, kan prøvetiden forlenges tilsvarende fraværets lengde når vilkårene for slik forlengelse er oppfylt.' }),
+    Object.freeze({ key: 'lonn', title: 'Lønn og godtgjørelser', version: 2, text: 'Lønn utbetales til den kontoen arbeidstaker har oppgitt til arbeidsgiver. Eventuelle tillegg for arbeid utover avtalt arbeidstid, overtid, kveld, natt, helg eller andre forhold følger de ordningene som gjelder for arbeidsforholdet og gjeldende regler.' }),
+    Object.freeze({ key: 'ferie', title: 'Ferie og feriepenger', version: 2, text: 'Arbeidstakers rett til ferie, feriefritid og feriepenger, samt fastsettelse av tidspunktet for ferie, følger den til enhver tid gjeldende ferielovgivningen og eventuell tariffavtale som gjelder for arbeidsforholdet.' }),
+    Object.freeze({ key: 'oppsigelse', title: 'Oppsigelse', version: 2, text: 'Ved oppsigelse fra arbeidsgiver gjelder kravene til fremgangsmåte og form etter gjeldende regler. Lengre lovbestemt eller bindende oppsigelsesfrist går foran denne avtalen.' }),
+    Object.freeze({ key: 'opplaering', title: 'Opplæring og kompetanseutvikling', version: 2, text: 'Arbeidstaker gis nødvendig opplæring for å kunne utføre arbeidsoppgavene som følger av stillingen. Eventuelle øvrige ordninger for kompetanseutvikling følger virksomhetens til enhver tid gjeldende ordninger.' }),
+    Object.freeze({ key: 'pensjon', title: 'Pensjon, forsikringer og andre sosiale ytelser', version: 2, text: 'Arbeidstaker omfattes av de pensjons-, forsikrings- og øvrige sosiale ordningene som gjelder for ansatte i Four Season AS.' }),
+    Object.freeze({ key: 'taushet', title: 'Taushetsplikt', version: 2, text: 'Arbeidstaker plikter både under og etter arbeidsforholdets opphør å bevare taushet om forretnings- og driftshemmeligheter og andre opplysninger av konfidensiell karakter som arbeidstaker får kjennskap til gjennom sitt arbeid i Four Season AS. Taushetsplikten omfatter blant annet opplysninger om virksomhetens drift, interne forhold, planer, prosjekter, beregninger, beskrivelser, oppskrifter, kontrakter, korrespondanse og annen informasjon som etter sin art ikke er ment for uvedkommende. Opplysninger kan deles internt når mottakeren har et saklig behov for dem i sitt arbeid. Arbeidstaker skal ikke uberettiget bruke, kopiere eller videreformidle slike opplysninger. Brudd på taushetsplikten kan medføre reaksjoner og ansvar etter gjeldende regler.' }),
+    Object.freeze({ key: 'dokumenter', title: 'Avtalens dokumenter og endringer', version: 2, text: 'Denne arbeidsavtalen regulerer hovedvilkårene for arbeidsforholdet. Der avtalen viser til arbeidsplan, personalhåndbok eller andre virksomhetsinterne ordninger, gjelder disse innenfor rammene av arbeidsavtalen og gjeldende regler. Endringer som skal fremgå av arbeidsavtalen dokumenteres skriftlig når dette er påkrevd.' }),
+    Object.freeze({ key: 'godkjenning', title: 'Godkjenning og underskrift', version: 2, text: 'Partene bekrefter med sine underskrifter at de har gjennomgått og akseptert arbeidsavtalen.' }),
+  ]),
+});
+
 // Fixture-level MANAGER context for the local Vaktplan (design: manager context and the
 // "as employee" selection are both fixture-level; no production auth semantics invented).
 // The frozen planned-schedule engine requires accessRole 'admin' for schedule writes.
