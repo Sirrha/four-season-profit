@@ -322,6 +322,82 @@
       .fs-a4:last-of-type { page-break-after:auto; }
       @page { size:A4; margin:12mm; }
     }
+    /* ---- Ledelse one-page workspace (Increment 3A): persistent tab frame ---- */
+    .lede-frame { margin-bottom:10px; }
+    .lede-tabs { display:flex; gap:6px; overflow-x:auto; padding:2px 0 10px; -webkit-overflow-scrolling:touch; }
+    .lede-tab { flex:0 0 auto; border:1px solid var(--line); background:#fff; border-radius:999px; padding:9px 15px; font-size:13.5px; font-weight:700; color:var(--muted); cursor:pointer; min-height:40px; font-family:inherit; white-space:nowrap; }
+    .lede-tab.on { background:var(--green); border-color:var(--green); color:#fff; }
+    .lede-content { display:block; }
+    .lede-ovcard { display:block; width:100%; text-align:left; cursor:pointer; font-family:inherit; }
+    .lede-ovvalue { font-size:19px; font-weight:800; color:var(--text); margin:2px 0 2px; }
+    /* Lønnsgrunnlag: inline expandable employee rows + three-level status chip */
+    .lg-row { border-bottom:1px solid var(--line); }
+    .lg-row:last-child { border-bottom:0; }
+    .lg-chip { font-size:11.5px; font-weight:800; letter-spacing:.02em; border-radius:999px; padding:3px 10px; }
+    .lg-chip.ok { background:var(--green-pale,#e8f2ec); color:var(--green); }
+    .lg-chip.warn { background:var(--amber-pale); color:var(--amber); }
+    .lg-chip.hard { background:#fbeaea; color:#a3282b; }
+    .lg-rollup { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:6px; }
+    .lg-rollup-counts { font-size:13px; color:var(--muted); font-weight:600; }
+    .lg-detail { border-top:1px dashed var(--line); padding:10px 0 4px; }
+    .emp-miss .mtag.hard { background:#fbeaea; color:#a3282b; border-color:#f0cfd0; }
+    /* 3B-UI: management-entered time. INFO is deliberately NEUTRAL — never amber, never red, so it
+       cannot read as a finding or compete with the Klar / Se over / Må rettes chip. */
+    .mt-info { font-size:11px; font-weight:700; color:var(--faint); background:var(--wash); border:1px solid var(--line); border-radius:999px; padding:2px 9px; }
+    .emp-miss .mtag.mt-info { color:var(--faint); background:var(--wash); border-color:var(--line); }
+    .mt-info-row { margin-top:6px; }
+    /* P1 — period first, scannable rows, DAGER I PERIODEN */
+    .lg-period { display:flex; align-items:center; justify-content:flex-start; gap:8px; flex-wrap:wrap; margin:-6px 0 14px; }
+    .lg-period .lg-step { width:auto; min-height:0; padding:7px 14px; font-weight:800; font-size:14px; }
+    .lg-period .lg-step.on { color:var(--green-deep); border-color:var(--green-line); background:var(--green-pale); }
+    .emp-row .lg-basis { font-size:12.5px; color:var(--faint); }
+    .lg-facts { display:flex; flex-wrap:wrap; gap:6px 18px; margin-top:6px; }
+    .lg-stat { display:inline-flex; align-items:baseline; gap:6px; font-size:13px; white-space:nowrap; }
+    .lg-stat .k { color:var(--muted); font-weight:600; }
+    .lg-stat .v { font-weight:800; font-size:15px; }
+    .lg-stat .d { font-size:12px; font-weight:700; color:var(--amber); }
+    .lg-days { display:block; margin-top:4px; }
+    .lg-day { display:grid; grid-template-columns:1.1fr 1fr 1.5fr .9fr 1fr 1.2fr; gap:10px; padding:8px 0; border-bottom:1px solid var(--line); font-size:13px; align-items:start; }
+    .lg-day:last-child { border-bottom:0; }
+    .lg-day.head { color:var(--faint); font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; }
+    .lg-day .c::before { display:none; }
+    .lg-day .lg-src, .lg-day .lg-nr { display:block; color:var(--faint); font-size:12px; }
+    .lg-day .lg-chip { display:inline-block; margin:0 4px 4px 0; }
+    .lg-chip.neutral { background:var(--wash); color:var(--faint); }
+    .lg-day .mt-fix { margin:0 4px 4px 0; }
+    .lg-cross { border-left:3px solid var(--amber); padding-left:8px; }
+    /* P1 correction — schedule notice + in-app calendar */
+    .mt-notice { border-radius:10px; padding:10px 12px; font-size:13.5px; font-weight:700; margin:4px 0 8px; }
+    .mt-notice.ok { background:var(--green-pale); color:var(--green-deep); border:1px solid var(--green-line); }
+    .mt-notice.warn { background:var(--amber-pale); color:var(--amber); border:1px solid var(--amber-line); }
+    .mt-notice.neutral { background:var(--wash); color:var(--muted); border:1px solid var(--line); }
+    .mt-daterow { display:flex; gap:6px; align-items:stretch; }
+    .mt-daterow input { flex:1; min-width:0; }
+    .mt-calbtn { width:auto; min-height:0; padding:0 12px; white-space:nowrap; }
+    .mt-cal { grid-column:1 / -1; background:#fff; border:1px solid var(--line); border-radius:12px; padding:10px; margin:-2px 0 10px; max-width:340px; }
+    .mt-calnav { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+    .mt-callabel { font-weight:800; font-size:14px; text-transform:capitalize; }
+    .mt-calstep { width:auto; min-height:0; padding:2px 10px; font-size:16px; }
+    .mt-calgrid { display:grid; grid-template-columns:repeat(7,1fr); gap:2px; }
+    .mt-calhd { font-size:11px; font-weight:800; color:var(--faint); text-align:center; padding:2px 0; text-transform:uppercase; }
+    .mt-calcell { border:1px solid transparent; background:transparent; border-radius:8px; padding:7px 0; font:inherit; font-size:13px; font-weight:700; cursor:pointer; text-align:center; }
+    .mt-calcell:hover { background:var(--green-tint); }
+    .mt-calcell.today { border-color:var(--green-line); }
+    .mt-calcell.sel { background:var(--green); color:#fff; }
+    .mt-calcell.empty { cursor:default; }
+    @media (max-width:640px) {
+      .lg-day { grid-template-columns:1fr; gap:4px; border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:8px; }
+      .lg-day.head { display:none; }
+      .lg-day .c::before { display:inline; content:attr(data-k) ': '; color:var(--faint); font-weight:700; font-size:12px; }
+      .lg-stat { white-space:normal; }
+    }
+    .mt-bar { margin-top:10px; }
+    .mt-fix { width:auto; min-height:0; padding:2px 10px; font-size:12px; margin-top:4px; }
+    .mt-panel { background:var(--wash); border:1px solid var(--line); border-radius:10px; padding:12px; margin-top:8px; }
+    .mt-field { display:flex; flex-direction:column; gap:4px; margin-bottom:8px; }
+    .mt-field label { font-size:12px; font-weight:700; color:var(--faint); }
+    .mt-field input, .mt-field select { width:100%; box-sizing:border-box; padding:8px 10px; font:inherit; border:1px solid var(--line); border-radius:8px; background:#fff; }
+    @media (min-width:560px) { .mt-panel { display:grid; grid-template-columns:1fr 1fr; gap:0 12px; } .mt-panel > .kicker, .mt-panel > .cue-line, .mt-panel > .vp-note, .mt-panel > .vp-err, .mt-panel > .vp-actions { grid-column:1 / -1; } }
     /* ---- chooser / dialogs / secondary surfaces (light alignment via shared styles) ---- */
     #emp-root h2 { font-size:22px; font-weight:800; margin-bottom:6px; }
     #emp-root select, #emp-root input[type="text"], #emp-root input[type="number"], #emp-root input[type="time"], #emp-root input[type="date"] { width:100%; max-width:420px; padding:12px 14px; font-size:15px; font-family:inherit; border:1px solid var(--line-2); border-radius:12px; background:#fff; color:var(--text); margin-bottom:10px; }

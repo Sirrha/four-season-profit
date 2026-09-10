@@ -1053,14 +1053,28 @@ t('BRK-chron endBreak now === openBreakStartedAt ALLOW (zero-minute segment)', (
   assert.equal(r.attendance.breakCount, 1);
 });
 
-// ---- Admin-only approved break total (counterpart of BRK-B17) ----
-t('BRK-approved admin may set approvedBreakMinutesTotal; employee cannot', () => {
+// ---- Approved break total: one field, one writer (counterpart of BRK-B17) ----
+// AMENDED by 3B-FOUNDATION §4 (predeclared in RF1, not a silent rewrite). Before the amendment
+// a manager correction could write approvedBreakMinutesTotal — a field daySummaryFor never reads,
+// so manager break corrections were silently ineffective. The manager now writes the DECLARED
+// total (the real derivation input) and approve() alone writes the approved one. The employee-side
+// half of this test is an OLD invariant and is preserved verbatim.
+t('BRK-approved manager writes DECLARED break; approve() alone writes approved; employee neither', () => {
   const a = clockedOut();
-  const ok1 = managerCorrection({ actor: admin(), existing: a, patch: { approvedBreakMinutesTotal: 30 }, reasonCode: 'MANAGEMENT_DECISION', scope: SCOPE }, D(21), POL);
+  // AMENDED expectation: approvedBreakMinutesTotal is no longer manager-correctable.
+  const gone = managerCorrection({ actor: admin(), existing: a, patch: { approvedBreakMinutesTotal: 30 }, reasonCode: 'MANAGEMENT_DECISION', scope: SCOPE }, D(21), POL);
+  assert.equal(gone.ok, false); assert.ok(gone.code.startsWith('FIELD_NOT_CORRECTABLE'));
+  // NEW capability: the manager writes the field the derivation actually reads.
+  const ok1 = managerCorrection({ actor: admin(), existing: a, patch: { declaredBreakMinutesTotal: 30 }, reasonCode: 'MANAGEMENT_DECISION', scope: SCOPE }, D(21), POL);
   assert.ok(ok1.ok, ok1.code);
-  assert.equal(ok1.attendance.approvedBreakMinutesTotal, 30);
-  const badVal = managerCorrection({ actor: admin(), existing: a, patch: { approvedBreakMinutesTotal: -5 }, reasonCode: 'MANAGEMENT_DECISION', scope: SCOPE }, D(21), POL);
-  assert.equal(badVal.ok, false); assert.equal(badVal.code, 'APPROVED_BREAK_INVALID');
+  assert.equal(ok1.attendance.declaredBreakMinutesTotal, 30);
+  const badVal = managerCorrection({ actor: admin(), existing: a, patch: { declaredBreakMinutesTotal: -5 }, reasonCode: 'MANAGEMENT_DECISION', scope: SCOPE }, D(21), POL);
+  assert.equal(badVal.ok, false); assert.equal(badVal.code, 'DECLARED_BREAK_INVALID');
+  // approve() is the only writer of the approved break, and it endorses what was deducted.
+  const ap = approve({ actor: admin(), existing: ok1.attendance, approvedStartAt: D(12), approvedEndAt: D(20), scope: SCOPE }, D(21), POL);
+  assert.ok(ap.ok, ap.code);
+  assert.equal(ap.attendance.approvedBreakMinutesTotal, 30);
+  // OLD invariant, preserved verbatim: the employee can never write the approved break.
   const empTry = employeeEdit({ actor: emp('ans-a1'), existing: a, patch: { approvedBreakMinutesTotal: 30 }, scope: SCOPE }, D(21), POL);
   assert.equal(empTry.ok, false); assert.ok(empTry.code.startsWith('FIELD_NOT_EDITABLE'));
 });
@@ -1273,6 +1287,259 @@ t('PA-T15 permitted secondary action stays available independent of green emphas
   const out = clockOut({ actor: emp('ans-a1'), existing: att, declaredEndAt: D(15), reasonCode: 'LEFT_EARLY', scope: SCOPE }, D(15), POL);
   assert.ok(out.ok, '...but clock-out remains permitted by the EXISTING rules at the same instant: ' + (out.ok ? 'ok' : out.code));
   assert.equal(out.attendance.status, 'clocked_out');
+});
+
+// =====================================================================
+// 3B-FOUNDATION — management-attested actual time (truth model only, NO UI).
+// Governing: SOREN-SIRRHA-LONNSGRUNNLAG-3B-TRUTH-MODEL-AMENDED-DESIGN-001 +
+// SIRRHA-CCODE-LONNSGRUNNLAG-INCREMENT-3B-FOUNDATION-TRUTH-MODEL-BUILD-RELEASE-001.
+// =====================================================================
+import { manualAttendanceIdFor, managerManualEntry } from './employee-shell-core.mjs';
+// PT10 requires disjointness proved against the REAL id generators, not by inspection, so the
+// live manager-shift generator is imported here. Read-only: no schedule module is modified.
+import { newShiftIdFor } from './management-schedule-core.mjs';
+
+const EMPL = { startDate: '2026-01-01', endDate: null };
+const mEntry = (over) => managerManualEntry(Object.assign({
+  actor: admin(), existing: null, shift: null, ansattId: 'ans-a1', workDate: WD,
+  declaredStartAt: D(12), declaredEndAt: D(20), declaredBreakMinutesTotal: 30,
+  employment: EMPL, reasonCode: 'RETROACTIVE_ENTRY', reasonNote: null, scope: SCOPE,
+}, over || {}), D(21), POL);
+
+// ---- PT1 GOLDEN REGRESSION: the amendment may only ADD case 4, never move existing truth ----
+t('PT1 legacy cases 1-3 + open session: daySummaryFor outputs byte-identical to pre-amendment', () => {
+  // Golden values captured from the pre-amendment module (see the 3B result artifact).
+  const case1 = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '12:00'), observedClockOutAt: DSAT(DSD, '20:00') }) });
+  assert.deepEqual(case1.start, { at: DSAT(DSD, '12:00'), source: 'observed', observedAt: DSAT(DSD, '12:00') });
+  assert.equal(case1.total.minutes, 480); assert.equal(case1.total.label, 'Registrert arbeidstid');
+  assert.equal(case1.anyDeclared, false);
+  // case 2: declared equals observed -> observed effective, no declaration provenance claimed
+  const case2 = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '12:00'), declaredStartAt: DSAT(DSD, '12:00'), observedClockOutAt: DSAT(DSD, '20:00'), declaredEndAt: DSAT(DSD, '20:00') }) });
+  assert.equal(case2.start.source, 'observed'); assert.equal(case2.end.source, 'observed');
+  assert.equal(case2.anyDeclared, false); assert.equal(case2.total.minutes, 480);
+  assert.equal(case2.total.label, 'Registrert arbeidstid');
+  // case 3: materially different declaration supersedes observed
+  const case3 = daySummaryFor({ attendance: dsAtt({ observedClockInAt: DSAT(DSD, '12:10'), declaredStartAt: DSAT(DSD, '12:00'), observedClockOutAt: DSAT(DSD, '20:00'), declaredEndAt: DSAT(DSD, '20:00') }) });
+  assert.equal(case3.start.source, 'declared'); assert.equal(case3.start.at, DSAT(DSD, '12:00'));
+  assert.equal(case3.start.observedAt, DSAT(DSD, '12:10'));     // receipt retained as audit
+  assert.equal(case3.total.minutes, 480); assert.equal(case3.total.label, 'Oppgitt arbeidstid');
+  // open session (case 6): no total, unchanged
+  const open = daySummaryFor({ attendance: dsAtt({ status: 'clocked_in', observedClockInAt: DSAT(DSD, '12:00'), breakState: 'on_break', openBreakStartedAt: DSAT(DSD, '15:00') }) });
+  assert.equal(open.total, null); assert.equal(open.onBreak, true); assert.equal(open.breakRow.kind, 'open');
+});
+t('PT1b the employee path CANNOT reach the manager amendment', () => {
+  // A complete declared pair with no observed and NO manager source stays unresolved (case 5).
+  const s = daySummaryFor({ attendance: dsAtt({ declaredStartAt: DSAT(DSD, '12:00'), declaredEndAt: DSAT(DSD, '20:00'), declaredBreakMinutesTotal: 30 }) });
+  assert.equal(s.total, null, 'employee-declared standalone must NOT produce a total');
+  const emp2 = daySummaryFor({ attendance: dsAtt({ declarationSource: 'employee', declaredStartAt: DSAT(DSD, '12:00'), declaredEndAt: DSAT(DSD, '20:00') }) });
+  assert.equal(emp2.total, null);
+  // and employeeEdit can never stamp the manager marker
+  const a = clockedIn();
+  const r = employeeEdit({ actor: emp('ans-a1'), existing: a, patch: { declarationSource: 'manager' }, scope: SCOPE }, D(13), POL);
+  assert.equal(r.ok, false); assert.ok(r.code.startsWith('FIELD_NOT_EDITABLE'));
+});
+
+// ---- PT2 CASE M1: a planned shift exists, nobody clocked ----
+t('PT2 M1 manager entry against a planned shift -> attested, correct duration/source/break', () => {
+  const shift = mkShift('ans-a1');
+  const r = mEntry({ shift });
+  assert.ok(r.ok, r.code);
+  const a = r.attendance;
+  assert.equal(a.status, 'attested');
+  assert.equal(a.declarationSource, 'manager');
+  assert.equal(a.attendanceId, attendanceIdFor('shift-1', 'ans-a1'));
+  assert.deepEqual(a.plannedSnapshot, { startAt: D(12), endAt: D(20) });   // M1 keeps its plan
+  assert.equal(a.observedClockInAt, null); assert.equal(a.observedClockOutAt, null);
+  const s = daySummaryFor({ attendance: a });
+  assert.equal(s.start.at, D(12)); assert.equal(s.start.source, 'declared');
+  assert.equal(s.end.at, D(20)); assert.equal(s.end.source, 'declared');
+  assert.equal(s.total.minutes, 8 * 60 - 30);            // 30-min declared break deducted once
+  assert.equal(s.total.deductionMinutes, 30);
+  assert.equal(r.event.type, 'manager_manual_entry');
+});
+
+// ---- PT3 CASE M2: no shift at all ----
+t('PT3 M2 no-shift manual record: manual key, attested, correct duration and workDate placement', () => {
+  const r = mEntry();
+  assert.ok(r.ok, r.code);
+  const a = r.attendance;
+  assert.equal(a.attendanceId, 'manual-2026-08-24-ans-a1');
+  assert.equal(a.shiftId, null);
+  assert.equal(a.plannedSnapshot, null);
+  assert.equal(a.status, 'attested');
+  assert.equal(a.workDate, WD);
+  assert.equal(daySummaryFor({ attendance: a }).total.minutes, 450);
+});
+t('PT3b overnight manual entry belongs WHOLE to its workDate (frozen placement rule)', () => {
+  const pol = Object.assign({}, POL, { graceHours: 6 });     // tenant grace, not a new rule
+  const r = managerManualEntry({
+    actor: admin(), existing: null, shift: null, ansattId: 'ans-a1', workDate: WD,
+    declaredStartAt: D(20), declaredEndAt: NEXT(1), declaredBreakMinutesTotal: 0,
+    employment: EMPL, reasonCode: 'RETROACTIVE_ENTRY', scope: SCOPE,
+  }, D(21), pol);
+  assert.ok(r.ok, r.code);
+  assert.equal(r.attendance.workDate, WD, 'the whole overnight span stays on its own workDate');
+  assert.equal(daySummaryFor({ attendance: r.attendance }).total.minutes, 300); // 5h, not split
+});
+
+// ---- PT4 incomplete stays unresolved; the operation refuses partial input atomically ----
+t('PT4 partial/incomplete declaration never becomes payroll-grade truth', () => {
+  const half = daySummaryFor({ attendance: dsAtt({ declarationSource: 'manager', declaredStartAt: DSAT(DSD, '12:00') }) });
+  assert.equal(half.total, null, 'one endpoint is not an answer');
+  assert.equal(mEntry({ declaredEndAt: null }).code, 'DECLARED_NOT_FINITE');
+  assert.equal(mEntry({ declaredStartAt: null }).code, 'DECLARED_NOT_FINITE');
+  assert.equal(mEntry({ declaredBreakMinutesTotal: null }).code, 'DECLARED_BREAK_INVALID');
+  assert.equal(mEntry({ declaredEndAt: D(12) }).code, 'END_BEFORE_START');
+});
+
+// ---- PT5 break tri-prong ----
+t('PT5 manager declared break supersedes observed and is never added; approve() owns approved break', () => {
+  const a = Object.assign({}, mEntry().attendance, { observedBreakMinutesTotal: 45, breakCount: 2 });
+  const s = daySummaryFor({ attendance: a });
+  assert.equal(s.total.deductionMinutes, 30, 'declared supersedes observed');
+  assert.notEqual(s.total.deductionMinutes, 75, 'the two are NEVER added');
+  const zero = mEntry({ declaredBreakMinutesTotal: 0 });
+  assert.ok(zero.ok, zero.code);
+  assert.equal(daySummaryFor({ attendance: zero.attendance }).total.minutes, 480); // explicit 0 valid
+  assert.equal(mEntry({ declaredBreakMinutesTotal: 480 }).code, 'BREAK_EXCEEDS_SPAN');
+  assert.equal(mEntry({ declaredBreakMinutesTotal: 2.5 }).code, 'DECLARED_BREAK_INVALID');
+});
+
+// ---- PT6 observed receipts immutable through every management operation ----
+t('PT6 observed* byte-unchanged through K correction, post-approval correction, and M1/M2 entry', () => {
+  const a = clockedOut();
+  const before = { i: a.observedClockInAt, o: a.observedClockOutAt, b: a.observedBreakMinutesTotal };
+  const k = managerCorrection({ actor: admin(), existing: a, patch: { declaredStartAt: D(11) }, reasonCode: 'MANAGEMENT_DECISION', scope: SCOPE }, D(21), POL);
+  assert.ok(k.ok, k.code);
+  assert.equal(k.attendance.observedClockInAt, before.i);
+  assert.equal(k.attendance.observedClockOutAt, before.o);
+  assert.equal(k.attendance.observedBreakMinutesTotal, before.b);
+  assert.ok(assertObservedImmutable(a, k.attendance).ok);
+  const ap = approve({ actor: admin(), existing: a, approvedStartAt: D(12), approvedEndAt: D(20), scope: SCOPE }, D(21), POL).attendance;
+  const post = managerCorrection({ actor: admin(), existing: ap, patch: { declaredEndAt: D(19) }, reasonCode: 'MANAGEMENT_DECISION', scope: SCOPE }, D(22), POL);
+  assert.ok(post.ok, post.code);
+  assert.ok(assertObservedImmutable(ap, post.attendance).ok);
+  assert.equal(mEntry().attendance.observedClockInAt, null, 'no receipt is ever fabricated');
+});
+
+// ---- PT7 the clock-origin approval chain is untouched, and unreachable from attested ----
+t('PT7 clocked_out chain unchanged; attested admission unreachable for clock-origin records', () => {
+  const ci = clockedIn();
+  assert.equal(approve({ actor: admin(), existing: ci, approvedStartAt: D(12), approvedEndAt: D(20), scope: SCOPE }, D(21), POL).code, 'NOT_CLOCKED_OUT');
+  const broken = Object.assign({}, clockedOut(), { observedClockOutAt: null });
+  assert.ok(approve({ actor: admin(), existing: broken, approvedStartAt: D(12), approvedEndAt: D(20), scope: SCOPE }, D(21), POL).code.startsWith('INCOMPLETE_ATTENDANCE'));
+  // a clock-origin record cannot be pushed into the attested chain by any patch
+  const r = managerCorrection({ actor: admin(), existing: clockedOut(), patch: { status: 'attested' }, reasonCode: 'MANAGEMENT_DECISION', scope: SCOPE }, D(21), POL);
+  assert.equal(r.ok, false); assert.ok(r.code.startsWith('FIELD_NOT_CORRECTABLE'));
+  // an attested record still cannot be clocked into by an employee
+  const att = mEntry({ shift: mkShift('ans-a1') }).attendance;
+  const ci2 = clockIn({ actor: emp('ans-a1'), shift: mkShift('ans-a1'), existing: att, declaredStartAt: D(12), scope: SCOPE }, D(12), POL);
+  assert.equal(ci2.ok, false); assert.equal(ci2.code, 'ATTESTERT_AV_LEDELSE');
+});
+
+// ---- PT8 attested approval, revision binding, approval reset, re-approval ----
+t('PT8 attested approval: admitted when complete, named refusals otherwise', () => {
+  const att = mEntry().attendance;                       // M2, plannedSnapshot null
+  const ap = approve({ actor: admin(), existing: att, approvedStartAt: D(12), approvedEndAt: D(20), scope: SCOPE }, D(21), POL);
+  assert.ok(ap.ok, ap.code);
+  assert.equal(ap.attendance.status, 'approved');
+  assert.equal(ap.attendance.approvedBreakMinutesTotal, 30);
+  assert.equal(ap.attendance.revision, att.revision + 1, 'approval binds to the revision it approved');
+  // no manager source -> refused by name
+  const notMgr = approve({ actor: admin(), existing: Object.assign({}, att, { declarationSource: 'employee' }), approvedStartAt: D(12), approvedEndAt: D(20), scope: SCOPE }, D(21), POL);
+  assert.equal(notMgr.ok, false); assert.equal(notMgr.code, 'NOT_MANAGER_DECLARED');
+  // no-plan sanity envelope anchors to the workDate
+  assert.equal(approve({ actor: admin(), existing: att, approvedStartAt: D(12), approvedEndAt: NEXT(12), scope: SCOPE }, D(21), POL).code, 'APPROVED_OUT_OF_BOUND');
+});
+t('PT8b correcting an approved record resets approval; re-approval succeeds', () => {
+  const ap = approve({ actor: admin(), existing: mEntry().attendance, approvedStartAt: D(12), approvedEndAt: D(20), scope: SCOPE }, D(21), POL).attendance;
+  const corr = managerCorrection({ actor: admin(), existing: ap, patch: { declaredEndAt: D(19) }, reasonCode: 'MANAGEMENT_DECISION', scope: SCOPE }, D(22), POL);
+  assert.ok(corr.ok, corr.code);
+  assert.equal(corr.attendance.status, 'attested', 'returns to attested, never a fabricated clocked_out');
+  assert.equal(corr.attendance.approvedStartAt, null);
+  assert.equal(corr.attendance.approvedEndAt, null);
+  assert.equal(corr.attendance.approvedByUid, null);
+  assert.equal(corr.attendance.approvedAt, null);
+  assert.equal(corr.attendance.revision, ap.revision + 1);
+  const again = approve({ actor: admin(), existing: corr.attendance, approvedStartAt: D(12), approvedEndAt: D(19), scope: SCOPE }, D(23), POL);
+  assert.ok(again.ok, again.code);
+  // a corrected clock-origin record returns to clocked_out, not to attested
+  const apK = approve({ actor: admin(), existing: clockedOut(), approvedStartAt: D(12), approvedEndAt: D(20), scope: SCOPE }, D(21), POL).attendance;
+  const corrK = managerCorrection({ actor: admin(), existing: apK, patch: { declaredEndAt: D(19) }, reasonCode: 'MANAGEMENT_DECISION', scope: SCOPE }, D(22), POL);
+  assert.equal(corrK.attendance.status, 'clocked_out');
+});
+
+// ---- PT9 plannedSnapshot null is a value with meaning, and it is immutable ----
+t('PT9 null plannedSnapshot preserved across revisions; ownership refuses null<->value', () => {
+  const att = mEntry().attendance;
+  const corr = managerCorrection({ actor: admin(), existing: att, patch: { declaredEndAt: D(19) }, reasonCode: 'MANAGEMENT_DECISION', scope: SCOPE }, D(22), POL).attendance;
+  assert.equal(corr.plannedSnapshot, null, 'a no-plan record stays a no-plan record');
+  assert.ok(assertOwnershipImmutable(att, corr).ok, 'null == null is valid equality');
+  assert.equal(assertOwnershipImmutable(att, Object.assign({}, att, { plannedSnapshot: { startAt: D(12), endAt: D(20) } })).ok, false);
+  const planned = clockedOut();
+  assert.equal(assertOwnershipImmutable(planned, Object.assign({}, planned, { plannedSnapshot: null })).ok, false);
+  assert.equal(assertOwnershipImmutable(planned, Object.assign({}, planned, { plannedSnapshot: { startAt: 0, endAt: 0 } })).ok, false);
+});
+
+// ---- PT10 manual keying: deterministic, fail-closed, disjoint from the live generators ----
+t('PT10 manualAttendanceIdFor deterministic, fail-closed, disjoint; second entry is a correction', () => {
+  assert.equal(manualAttendanceIdFor(WD, 'ans-a1'), 'manual-2026-08-24-ans-a1');
+  assert.equal(manualAttendanceIdFor(WD, 'ans-a1'), manualAttendanceIdFor(WD, 'ans-a1'), 'deterministic');
+  for (const bad of [[null, 'ans-a1'], ['', 'ans-a1'], ['24.08.2026', 'ans-a1'], [WD, ''], [WD, null]]) {
+    assert.equal(manualAttendanceIdFor(bad[0], bad[1]), null, 'fail closed on ' + JSON.stringify(bad));
+  }
+  // disjoint from BOTH live id namespaces (tested against the real generators, not by eye)
+  assert.notEqual(manualAttendanceIdFor(WD, 'ans-a1'), attendanceIdFor('shift-1', 'ans-a1'));
+  assert.ok(!attendanceIdFor('shift-1', 'ans-a1').startsWith('manual-'));
+  assert.ok(!newShiftIdFor({}, WD, 'ans-a1').startsWith('manual-'));
+  assert.ok(!manualAttendanceIdFor(WD, 'ans-a1').includes('_'), 'shift keys use "_" as the separator');
+  // a second entry for the same employee-day does NOT create a duplicate record
+  const first = mEntry().attendance;
+  const second = mEntry({ existing: first });
+  assert.equal(second.ok, false); assert.equal(second.code, 'ATTENDANCE_EXISTS');
+  const live = mEntry({ existing: Object.assign({}, first, { status: 'clocked_in' }) });
+  assert.equal(live.code, 'OEKT_PAAGAAR', 'management never overwrites a live receipt stream');
+});
+
+// ---- PT13/PT14 boundaries: no plan writes, honest provenance, validation at the operation ----
+t('PT13 manual entry creates no planned values and touches no schedule store', () => {
+  const m2 = mEntry().attendance;
+  assert.equal(m2.plannedSnapshot, null);
+  assert.equal(m2.plannedShiftRevision, null);
+  const m1 = mEntry({ shift: mkShift('ans-a1') }).attendance;
+  assert.deepEqual(m1.plannedSnapshot, { startAt: D(12), endAt: D(20) }, 'reads the plan, never writes one');
+  const shiftBefore = mkShift('ans-a1');
+  const copy = JSON.parse(JSON.stringify(shiftBefore));
+  mEntry({ shift: shiftBefore });
+  assert.deepEqual(shiftBefore, copy, 'the shift object is not mutated by a manual entry');
+});
+t('PT14 provenance is honest: typed event, required reason, no auth claim', () => {
+  const r = mEntry();
+  assert.equal(r.event.type, 'manager_manual_entry');
+  assert.equal(r.event.actorUid, 'auth-admin');
+  assert.equal(r.event.actorRole, 'admin');
+  assert.equal(r.event.reasonCode, 'RETROACTIVE_ENTRY');
+  assert.ok(eventIdMatchesRevision(r.event));
+  assert.equal(mEntry({ reasonCode: null }).code, 'REASON_REQUIRED');
+  assert.equal(mEntry({ reasonCode: 'FORGOT_CLOCK_IN' }).code, 'REASON_REQUIRED'); // wrong appliesTo
+  // no verified-identity claim is stored on the record
+  assert.equal('byName' in r.attendance, false);
+  assert.equal('verified' in r.attendance, false);
+});
+t('PT-VAL operation-boundary validation: named refusals, no coercion, non-admin refused', () => {
+  assert.equal(mEntry({ actor: emp('ans-a1') }).code, 'NOT_ADMIN');
+  assert.equal(mEntry({ scope: undefined }).code, 'MISSING_SCOPE');
+  assert.equal(mEntry({ scope: { tenantId: 'tenant-beta' } }).code, 'CROSS_TENANT');
+  assert.equal(mEntry({ ansattId: '' }).code, 'ANSATT_REQUIRED');
+  assert.equal(mEntry({ workDate: '24.08.2026' }).code, 'WORKDATE_INVALID');
+  assert.equal(mEntry({ employment: null }).code, 'EMPLOYMENT_REQUIRED');
+  assert.equal(mEntry({ declaredEndAt: NEXT(12) }).code, 'DECLARED_OUTSIDE_WORKDATE');
+});
+t('PT-EMPL employment range enforced without mutation', () => {
+  assert.equal(mEntry({ employment: { startDate: '2026-09-01', endDate: null } }).code, 'BEFORE_EMPLOYMENT_START');
+  assert.equal(mEntry({ employment: { startDate: '2026-01-01', endDate: '2026-08-01' } }).code, 'AFTER_EMPLOYMENT_END');
+  const okr = mEntry({ employment: { startDate: '2026-08-24', endDate: '2026-08-24' } });
+  assert.ok(okr.ok, okr.code);                        // inclusive on both boundaries
 });
 
 console.log(lines.join('\n'));

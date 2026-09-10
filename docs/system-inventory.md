@@ -1,6 +1,105 @@
 # System-inventar — Four Season AS
 
-## MÅLT SJEKKPUNKT — 2026-08-27 (gjeldende tilstand, les først)
+## MÅLT SJEKKPUNKT — 2026-09-10 (gjeldende tilstand, les først)
+
+<!--
+  Denne seksjonen OVERSTYRER «MÅLT SJEKKPUNKT 2026-08-27» under der de er i
+  konflikt (HEAD-anker, committet pakke, testtilstand). 2026-08-27-seksjonen
+  beholdes som historikk. Faktabasis: eier-aksepterte og Sirrha-lukkede resultater
+  for Contract-sjekkpunkt (8549975), Lønnsgrunnlag Increment 2, 3A, 3B-foundation,
+  3B-UI, Stage R (lukket 2026-09-10 08:28) og P1 (lukket 2026-09-10 12:34), samt
+  sjekkpunkt-commit-release-002. Ingen kildekode endret av denne oppdateringen.
+-->
+
+### A. COMMITTED REPOSITORY BASELINE (per 2026-09-10, før sjekkpunkt-commit)
+
+- **Feature-branch**: `feature/employee-time-registration`. **HEAD** =
+  `8549975e4fcb59f976f461aa0e53f25bd428bcc4`, subject
+  `feat(management): add employment contract workflow` (parent `46f0cd19…`).
+  Siste etablerte upstream-anker er fortsatt `c40fa0404bd4d14e01d8f4053b8235b8d0a13703`;
+  ingen push, PR, merge eller deploy siden. Under release-002 opprettes **én lokal
+  sjekkpunkt-commit** med subject `checkpoint: accept lonnsgrunnlag through P1`
+  (hash måles etter commit og føres inn i et senere sjekkpunkt — ikke antatt her).
+- **Sjekkpunkt-pakke = nøyaktig 13 stier** (12 aksepterte kildefiler + denne
+  inventar-oppdateringen). Identiteter målt 2026-09-10 (SHA-256 / bytes):
+  1. `employee-shell-core.mjs` — 67277 B — `965e1a42c0c610b1dbf6a721818267b5c6cd5e50ceba1ceddddab10fd4f77c6a` (3B-foundation: attested/manual-entry sannhetsmodell)
+  2. `employee-shell-core.test.mjs` — 103144 B — `48b67c78831b2e592710532e8e03da950f3950c9f4c40dcc7b6d4038ea230a69`
+  3. `employee-shell-ui.mjs` — 82211 B — `11905142ca27656f18aff176e7d3388633a578427979db3e9a2ad3e08e5ba621` (Ledelse-arbeidsflate, manuell-tid-søm, P1 read-only plan-projeksjon)
+  4. `employee-shell.html` — 40516 B — `21a786495d0174ea880d53baa8868a4d8289378112f28f11f2ef96d004a3daac` (CSS for 3B-panel, P1-rader/dagtabell, kalender)
+  5. `management-employees-view.mjs` — 56057 B — `e1889494d95526986586e8b7cce7cebf1085db3b7c316c493ea0a1719b9d61be`
+  6. `management-schedule-view.mjs` — 28905 B — `0c72ad3c755b1f4ece594ff4b8199a1214f0ccb02bbb8daed9fb4c44454edb5b`
+  7. `management-manualtime-ui.test.mjs` — 13244 B — `8242aec942084f170f1b0ee9c6c9e4f63fdd3a1f73fab6844b45775a377cd414` (NY)
+  8. `management-payroll-core.mjs` — 26155 B — `8877a61dfa1216f796a138e73bd95c204e3377f40116567d42956000ca6e8f0b` (NY — månedlig lønnsgrunnlags-INNDATA-pakke)
+  9. `management-payroll-core.test.mjs` — 34298 B — `09ab6bdbb614b7620bebb105b73933f4a9b5f5c34831ed25b692f757364fbc8a` (NY)
+  10. `management-payroll-view.mjs` — 49094 B — `798ef7d4d66b7686be91ce807a6d25e4dbf35c0df56089f9d10940f5f114f221` (NY — Lønnsgrunnlag-flate: periode først, faktastripe, DAGER I PERIODEN, manuell tid med dd.mm.åååå + intern kalender)
+  11. `management-presentation-3a.test.mjs` — 11710 B — `9117bdded8caf5120cb0219efea54f64a099d386fcadc75fd42303e4a9435069` (NY)
+  12. `management-presentation-p1.test.mjs` — 14266 B — `38974ffc115d92a13bd9baddcfc79163e6b26b9cb45596e9f804e97c189d687d` (NY)
+  13. `docs/system-inventory.md` — denne oppdateringen.
+  `RouteA/` er **IKKE** i pakken (utracket, uinspisert). **ESTABLISHED.**
+
+### B. HVA SJEKKPUNKTET REPRESENTERER (Lønnsgrunnlag gjennom P1, fikstur-kun)
+
+Alt under er **fikstur/lokal demo** i `employee-shell.html` — ingen Firestore-,
+nettverks- eller Firebase-tilgang; `index.html` (live-appen) er uendret.
+
+- **Increment 2 — lønnsgrunnlag-pakke** (`management-payroll-core.mjs`): månedlig
+  INNDATA-pakke til regnskapsfører. Faktisk tid utelukkende via `daySummaryFor`;
+  planlagt tid er sammenlikning (`comparison`) og finnes aldri i `payload`
+  (PT13b). Ingen lønns-/skatteberegning. Versjoner: utkast → godkjent (frossen
+  verdikopi) → sendt (manuell overlevering) → korrigert versjon.
+- **3A — ett Ledelse-arbeidsområde**: faner Oversikt / Vaktplan / Ansatte /
+  Lønn & økonomi (`goLedelse`), én åpen ansattrad om gangen, status-chip
+  Klar / Se over / Må rettes over eksisterende hard/warn-funn.
+- **3B-foundation** (`employee-shell-core.mjs`): `managerManualEntry` (M1 mot reell
+  vakt / M2 manuell nøkkel `manualAttendanceIdFor`), status `attested`,
+  `declarationSource`, `declaredBreakMinutesTotal`, to godkjenningskjeder,
+  godkjenning nullstilles ved korreksjon. Observerte stempler er immutable.
+- **3B-UI** (`management-payroll-view.mjs` + søm i `employee-shell-ui.mjs`):
+  «Legg til / korriger arbeidstid» inline; ren resolver `manualTargetFor`
+  (correct / live / m1 / choose / choose_record / m2); aldri stille valg, aldri
+  M2-fallback; frossen periode → handling fraværende.
+- **Stage R (lukket)**: datofeltet er et Sormena-eid tekstfelt `dd.mm.åååå` over
+  én kanonisk ISO-verdi (`nbDateFromIso` / `isoFromNbDate`); ingen nativ
+  `<input type="date">`; ufullstendig dato gir ingen verdikt; ugyldig dato avvises.
+- **P1 (lukket)**: periode først (‹ Forrige · Denne måneden · Neste ›), rader med
+  faktastripe Planlagt / Faktisk (±avvik) / Godkjent, **DAGER I PERIODEN** =
+  presentasjons-union av planlagte dager (kanonisk vaktplan-projeksjon via
+  `plannedShiftsFor`) og registrert tid (fire radsemantikker), kontekstuelle
+  handlinger som gjenbruker samme panel/resolver, kryssperiode-setning før
+  lagring, vaktvarsel «Planlagt vakt funnet …» / «Flere planlagte vakter …» /
+  «Ingen planlagt vakt …», og intern norsk kalender (`calendarMonthGrid`).
+  Planlagt tid blir aldri faktisk tid.
+- **Utsatt (ikke P1-blokker)**: senere overlegg i Vaktplan som viser at faktisk
+  arbeid finnes/avviker uten å endre planlagt sannhet. **P2 (planøkonomi, Soren
+  Q7–Q8) er IKKE påbegynt.**
+
+### C. MÅLT TESTTILSTAND (per 2026-09-10)
+
+- `employee-shell-core.test.mjs` **200/0** · `management-payroll-core.test.mjs`
+  **19/0** · `management-manualtime-ui.test.mjs` **15/0** ·
+  `management-presentation-3a.test.mjs` **5/0** ·
+  `management-presentation-p1.test.mjs` **13/0** ·
+  `management-contract-core.test.mjs` **52/0** ·
+  `management-employees-core.test.mjs` **24/0** ·
+  `management-schedule-core.test.mjs` **49/0** · `employee-schedule-week.test.mjs`
+  **32/0** · `employee-schedule-month.test.mjs` **13/0** · `schedule-core.test.mjs`
+  **129/0 + ORDER 16/0 + PREDICATE 5/0**. `node --check` rent. **ESTABLISHED.**
+
+### D. WORKING TREE / LIVE-FLATE (per 2026-09-10)
+
+- Forventet etter sjekkpunkt-commit: staging tom, `RouteA/` eneste utrackede sti.
+- **Live-appen er uendret**: `index.html` SHA-256 `a6dc92885fa5a2a24c8036a4…`.
+  Lokal forhåndsvisning: node-loopback 127.0.0.1:8765 (skript utenfor repoet),
+  `Cache-Control: no-store`, `RouteA/` serveres som 403.
+
+### E. ÅPNE PUNKTER (egne gates)
+
+- **Push** av sjekkpunktet til origin: **OPEN**. Ingen PR/merge/deploy.
+- **P2 planøkonomi**: **NOT BEGUN** — krever egen release.
+- Kjent kjerne-detalj utenfor P1: funn-badgen «Stort avvik plan/faktisk» skriver
+  råtall med punktum (f.eks. `-36.08 t`); faktastripen viser `−36,08 t`.
+
+## MÅLT SJEKKPUNKT — 2026-08-27 (historisk — supersedert 2026-09-10, se seksjonen over)
 
 <!--
   Denne seksjonen OVERSTYRER «MÅLT SJEKKPUNKT 2026-08-23» under der de er i

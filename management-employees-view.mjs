@@ -23,6 +23,7 @@ import {
   contractVersionsOf, draftVersionOf, contractStateOf, applyContractOperation,
   applyCompanyContractOperation,
 } from './management-contract-core.mjs';
+import { payrollProjectionForEmployee } from './management-payroll-core.mjs';
 
 function el(tag, opts) {
   const node = document.createElement(tag);
@@ -53,7 +54,7 @@ const SECTIONS = [
   { key: 'tid', label: 'Tid & vaktplan' },
 ];
 
-export function renderEmployeesView(root, { employeeStore, scheduleStore, tenantId, tenantLabel, roleLabels, actor, contractProfile, nowMs, timezone, onOpenVaktplanFor, onBack }) {
+export function renderEmployeesView(root, { employeeStore, scheduleStore, tenantId, tenantLabel, roleLabels, actor, contractProfile, payrollStore, nowMs, timezone, onOpenVaktplanFor, onBack }) {
   if (!root) return;
   const todayWd = tenantWorkDate(nowMs, timezone);
   let page = 'list';           // 'list' | 'new' | 'card' | 'contract' | 'preview'
@@ -821,6 +822,28 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     }
     card.appendChild(el('div', { cls: 'vp-note', text: 'Dette er lønnsgrunnlaget i arbeidsforholdet – ikke lønnshistorikk, ikke utbetalt lønn og ikke ferdig lønnsoppgjør. Feriepenger, overtid og tillegg beregnes ikke i denne versjonen. Vaktplanen henter samme grunnlag herfra.' }));
     root.appendChild(card);
+
+    // ---- MONTHLY PACKAGE PROJECTION — the SAME package truth as the Lønnsgrunnlag surface,
+    // filtered to this employee. Employee 360 recomputes nothing: every number below is read
+    // out of the frozen package snapshot.
+    if (payrollStore) {
+      const pc = el('div', { cls: 'card' });
+      pc.appendChild(el('div', { cls: 'kicker neutral', text: 'Lønnsgrunnlag (månedspakke)' }));
+      const periodId = todayWd.slice(0, 7);
+      const proj = payrollProjectionForEmployee(payrollStore, tenantId, e.ansattId, periodId)
+        || payrollProjectionForEmployee(payrollStore, tenantId, e.ansattId, null);
+      if (!proj) {
+        pc.appendChild(el('div', { style: 'color:var(--faint);font-size:14px', text: 'Ingen godkjent månedspakke ennå.' }));
+      } else {
+        pc.appendChild(factRow('Periode', proj.periodLabel + ' · v' + proj.version));
+        pc.appendChild(factRow('Status', proj.status));
+        pc.appendChild(factRow('Godkjente timer', fmtH(proj.approvedHours)));
+        pc.appendChild(factRow('Faktisk (oppgitt) tid', fmtH(proj.actualHours)));
+        if (proj.sentAt) pc.appendChild(factRow('Markert sendt', new Date(proj.sentAt).toLocaleDateString('nb-NO') + ' · ' + proj.sentChannel));
+      }
+      pc.appendChild(el('div', { cls: 'vp-note', text: 'Hentet fra den felles månedspakken – ingen egen beregning her.' }));
+      root.appendChild(pc);
+    }
   }
 
   function drawTid(e) {

@@ -158,6 +158,17 @@ export function attendanceIdFor(shiftId, ansattId) {
 export function eventIdFor(attendanceId, revision) {
   return attendanceId + '-rev-' + String(revision).padStart(6, '0');
 }
+// 3B-FOUNDATION §6: the manual (no-shift) namespace gets its OWN constructor; attendanceIdFor
+// above is NOT weakened — its "shiftId required" contract is correct for shift-keyed attendance
+// and stays frozen. Deterministic: the same employee-day always resolves to the same id, so a
+// second manual entry for that day becomes a correction (revision+1), never a duplicate record.
+// The 'manual-' prefix is disjoint from '<shiftId>_<ansattId>' and from the minted
+// 'mg-<workDate>-<ansattId>' shift ids (proved against the live generators, not by inspection).
+export function manualAttendanceIdFor(workDate, ansattId) {
+  if (typeof workDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(workDate)) return null; // fail closed
+  if (typeof ansattId !== 'string' || ansattId.length === 0) return null;
+  return 'manual-' + workDate + '-' + ansattId;
+}
 
 // ---- Tenant-local day math (pure: uses the INJECTED timezone, not host) ------
 // Uses Intl with an explicit timeZone; deterministic for a given instant/zone,
@@ -402,6 +413,10 @@ export function clockIn({ actor, shift, existing, declaredStartAt, reasonCode, r
   if (shift.shiftId !== scope.shiftId) return err('SHIFT_SCOPE_MISMATCH');                           // T126
   if (shift.status !== 'assigned') return err('SHIFT_NOT_ASSIGNED');                                 // C8 cancelled / open (T118/T120)
   if (shift.ansattId !== actor.ansattId) return err('NOT_OWN_SHIFT');                                // C2 (after tenant scope)
+  // 3B-FOUNDATION §5: once management has ATTESTED a day, an employee clock event on that record
+  // would interleave receipts with assertions. The resolution path is a manager correction, not a
+  // competing stream. Checked before the generic duplicate refusal so the reason is named.
+  if (existing && existing.status === 'attested') return err('ATTESTERT_AV_LEDELSE');
   if (existing) return err('DUPLICATE_ATTENDANCE');                                                  // C4 deterministic id exists
   if (plannedShiftRevision != null && plannedShiftRevision !== shift.revision) return err('SHIFT_REVISION_MISMATCH'); // S5
 
@@ -541,9 +556,16 @@ export function employeeEdit({ actor, existing, patch, reasonCode, reasonNote, s
 // fields are correctable. Observed times, ownership, stable identity, shift linkage/
 // snapshot, counters, revision, event history, approval provenance, status and any
 // arbitrary field are never caller-mutable through the generic correction patch.
-// ETR-2b: approvedBreakMinutesTotal is an admin-only APPROVED fact; adding it here (and
-// NOT to EMPLOYEE_EDITABLE) lets an admin establish/correct it while employees cannot.
-const MANAGER_CORRECTABLE = ['declaredStartAt', 'declaredEndAt', 'note', 'approvedBreakMinutesTotal'];
+// 3B-FOUNDATION §4 amends this allowlist in BOTH directions:
+//   ADD    declaredBreakMinutesTotal — the field daySummaryFor actually reads. As built, a
+//          manager "break correction" wrote approvedBreakMinutesTotal, which the derivation
+//          never consults, so manager break corrections were silently ineffective. This repairs
+//          that latent defect as well as enabling the new capability.
+//   REMOVE approvedBreakMinutesTotal — approval values are written by approve() ONLY. A
+//          correction ASSERTS truth; an approval ENDORSES it. One field, one writer.
+// Observed times, ownership, stable identity, shift linkage/snapshot, counters, revision, event
+// history, approval provenance, status and any arbitrary field remain never caller-mutable.
+const MANAGER_CORRECTABLE = ['declaredStartAt', 'declaredEndAt', 'note', 'declaredBreakMinutesTotal'];
 export function managerCorrection({ actor, existing, patch, reasonCode, reasonNote, scope }, now, policy) {
   if (!existing) return err('NO_ATTENDANCE');
   if (!isFiniteInstant(now)) return err('NOW_NOT_FINITE');                           // P2-4
@@ -565,14 +587,38 @@ export function managerCorrection({ actor, existing, patch, reasonCode, reasonNo
     }
   }
   if (proposed.declaredEndAt != null && proposed.declaredStartAt != null && proposed.declaredEndAt < proposed.declaredStartAt) return err('END_BEFORE_START');
-  // ETR-2b: approvedBreakMinutesTotal (admin-only) must be a finite non-negative integer.
-  if ('approvedBreakMinutesTotal' in changed) {
-    const v = proposed.approvedBreakMinutesTotal;
-    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) return err('APPROVED_BREAK_INVALID');
+  // 3B-FOUNDATION §4: the manager's break write is the DECLARED total (the derivation input).
+  // Integer, non-negative, and strictly less than the effective worked span — an explicit 0 is
+  // valid and settles the break; a deduction that swallows the span is refused here rather than
+  // being left for daySummaryFor's fail-closed branch to silently absorb.
+  if ('declaredBreakMinutesTotal' in changed) {
+    const v = proposed.declaredBreakMinutesTotal;
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) return err('DECLARED_BREAK_INVALID');
+    const spanErr = breakWithinSpan(v, proposed.declaredStartAt, proposed.declaredEndAt);
+    if (spanErr) return err(spanErr);
+    // Mirrors declareBreak's own rule: a total cannot be declared while a break is still open.
+    // Scoped to this NEW field only — the frozen correction behavior for declared times on a
+    // live record is deliberately left exactly as built (C28/C29).
+    if (existing.breakState === 'on_break') return err('BREAK_OPEN');
   }
   if (policy.managerCorrectionRequiresReason && !isReasonValid('manager', reasonCode, reasonNote, policy)) return err('REASON_REQUIRED'); // C28
   // provenance derived from authorized actor/time; revision monotonic
-  const attendance = Object.assign({}, existing, changedValues(changed), { revision: existing.revision + 1, updatedAt: now });
+  // declarationSource marks WHO asserted the declared facts now standing on this record; it is
+  // the semantic switch daySummaryFor consults (the event still carries who/why). Stamping it on
+  // a clock-origin correction changes no derivation: CASE 4 additionally requires that no
+  // observed receipt exists, so cases 1-3 keep their existing behavior exactly.
+  const attendance = Object.assign({}, existing, changedValues(changed), { declarationSource: 'manager', revision: existing.revision + 1, updatedAt: now });
+  // 3B-FOUNDATION §8 (revision binding): approval attaches to the revision it approved and
+  // NEVER floats onto a later correction. Correcting an approved record clears the approval
+  // fields into the new revision and returns the day to its legitimate pre-approval state —
+  // management-attested truth to 'attested', completed clock truth to 'clocked_out'. No clock
+  // fact is fabricated to do this, and the prior approval EVENT is retained as history.
+  if (existing.status === 'approved') {
+    attendance.approvedStartAt = null; attendance.approvedEndAt = null;
+    attendance.approvedByUid = null; attendance.approvedAt = null;
+    attendance.approvedBreakMinutesTotal = null;
+    attendance.status = existing.declarationSource === 'manager' && existing.observedClockInAt == null ? 'attested' : 'clocked_out';
+  }
   const event = mkEvent('manager_correction', attendance, actor, now, reasonCode, reasonNote, changed);
   return ok({ attendance, event });
 }
@@ -580,6 +626,99 @@ function changedValues(changed) {
   const out = {};
   for (const k of Object.keys(changed)) out[k] = changed[k].after;
   return out;
+}
+// Break must be an integer, non-negative and STRICTLY less than the worked span; an explicit 0
+// is valid and settles the break. Returns an error code string, or null when acceptable.
+function breakWithinSpan(minutes, startAt, endAt) {
+  if (!isFiniteInstant(startAt) || !isFiniteInstant(endAt)) return null;   // span unknown here
+  if (minutes * MINUTE_MS >= (endAt - startAt)) return 'BREAK_EXCEEDS_SPAN';
+  return null;
+}
+
+// ---- MANAGER MANUAL ENTRY (3B-FOUNDATION §§1/5/6/8) --------------------------
+// The admin-scoped assertion that a day WAS worked when no clock receipt exists. It writes
+// DECLARED facts only and stamps declarationSource='manager', which is the single mechanical
+// carrier of the authorization boundary that lets daySummaryFor's CASE 4 stand alone.
+//
+// SOURCE-REALITY NOTE (recorded, not worked around): the built model has NO 'assigned'
+// ATTENDANCE record — 'assigned' is a SHIFT status (createShift), and a planned shift with no
+// clock-in has no attendance row at all. CASE M1 is therefore "a shift exists, no attendance
+// does": pass the shift and the record is shift-keyed and carries its plannedSnapshot. CASE M2
+// passes no shift and is manual-keyed with plannedSnapshot null. Both are born 'attested'.
+// Correcting an existing record is NOT this operation — that is managerCorrection.
+//
+// ATOMIC: both endpoints and an explicit break, or the whole entry is refused by name. Nothing
+// is mutated on rejection (every path here is pure and returns a fresh object only on success).
+export function managerManualEntry({ actor, existing, shift, ansattId, workDate, declaredStartAt, declaredEndAt, declaredBreakMinutesTotal, employment, reasonCode, reasonNote, scope }, now, policy) {
+  if (!isFiniteInstant(now)) return err('NOW_NOT_FINITE');
+  if (!policy || typeof policy !== 'object') return err('POLICY_REQUIRED');
+  // admin scope, via the SAME contract every later transition uses (B7 + P2-2).
+  const se = laterScopeError(actor, existing || null, ['admin'], false, scope);
+  if (se) return err(se);
+  if (typeof ansattId !== 'string' || !ansattId) return err('ANSATT_REQUIRED');
+  if (typeof workDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(workDate)) return err('WORKDATE_INVALID');
+  // 3B-FOUNDATION §2 CASE 6 / §8: never overwrite a live receipt stream, and never silently
+  // convert an existing record — a second entry for the same employee-day is a CORRECTION.
+  if (existing) {
+    if (existing.status === 'clocked_in' || existing.breakState === 'on_break') return err('OEKT_PAAGAAR');
+    return err('ATTENDANCE_EXISTS');       // caller routes to managerCorrection (revision+1)
+  }
+  // employment range. The facts are INJECTED (same discipline as policy/scope) so this module
+  // keeps its zero-import property and no parallel employee source is created here.
+  if (!employment || typeof employment !== 'object') return err('EMPLOYMENT_REQUIRED');
+  if (typeof employment.startDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(employment.startDate)) return err('EMPLOYMENT_REQUIRED');
+  if (workDate < employment.startDate) return err('BEFORE_EMPLOYMENT_START');
+  if (typeof employment.endDate === 'string' && employment.endDate && workDate > employment.endDate) return err('AFTER_EMPLOYMENT_END');
+  // declared pair: complete, finite, ordered, and placed on the workDate by the frozen rule
+  // (an overnight entry belongs WHOLE to its workDate; nothing is split across days/months).
+  if (!isFiniteInstant(declaredStartAt) || !isFiniteInstant(declaredEndAt)) return err('DECLARED_NOT_FINITE');
+  if (declaredEndAt <= declaredStartAt) return err('END_BEFORE_START');
+  for (const v of [declaredStartAt, declaredEndAt]) {
+    if (!withinTenantWorkDay(v, workDate, policy)) return err('DECLARED_OUTSIDE_WORKDATE');
+  }
+  if (typeof declaredBreakMinutesTotal !== 'number' || !Number.isInteger(declaredBreakMinutesTotal) || declaredBreakMinutesTotal < 0) return err('DECLARED_BREAK_INVALID');
+  const spanErr = breakWithinSpan(declaredBreakMinutesTotal, declaredStartAt, declaredEndAt);
+  if (spanErr) return err(spanErr);
+  // reason discipline: the same 'manager' reason contract managerCorrection already enforces.
+  if (policy.managerCorrectionRequiresReason && !isReasonValid('manager', reasonCode, reasonNote, policy)) return err('REASON_REQUIRED');
+
+  let attendanceId, shiftId, plannedSnapshot, plannedShiftRevision;
+  if (shift) {                                    // CASE M1 — a planned shift exists
+    if (typeof shift.shiftId !== 'string' || !shift.shiftId) return err('NO_SHIFT');
+    if (shift.ansattId !== ansattId) return err('NOT_OWN_SHIFT');
+    if (shift.workDate !== workDate) return err('SHIFT_WORKDATE_MISMATCH');
+    attendanceId = attendanceIdFor(shift.shiftId, ansattId);
+    if (!attendanceId) return err('NO_SHIFT');
+    shiftId = shift.shiftId;
+    plannedSnapshot = { startAt: shift.plannedStartAt, endAt: shift.plannedEndAt };
+    plannedShiftRevision = shift.revision;
+  } else {                                        // CASE M2 — no shift that day at all
+    attendanceId = manualAttendanceIdFor(workDate, ansattId);
+    if (!attendanceId) return err('WORKDATE_INVALID');
+    shiftId = null; plannedSnapshot = null; plannedShiftRevision = null;
+  }
+  const attendance = {
+    attendanceId, shiftId, ansattId, createdByUid: actor.uid,
+    workDate,
+    plannedSnapshot, plannedShiftRevision,
+    observedClockInAt: null, observedClockOutAt: null,   // NEVER fabricated: no receipt exists
+    declaredStartAt, declaredEndAt,
+    approvedStartAt: null, approvedEndAt: null, approvedByUid: null, approvedAt: null,
+    status: 'attested',                                  // never 'clocked_out' — nobody clocked out
+    employeeEditCount: 0, employeeEditDeadline: editDeadlineFor(now, workDate, policy),
+    breakState: 'working', openBreakStartedAt: null,
+    observedBreakMinutesTotal: 0, declaredBreakMinutesTotal,
+    approvedBreakMinutesTotal: null, breakCount: 0,
+    declarationSource: 'manager',                        // the authorization carrier (§1)
+    revision: 1, createdAt: now, updatedAt: now,
+  };
+  const event = mkEvent('manager_manual_entry', attendance, actor, now, reasonCode, reasonNote, {
+    declaredStartAt: { before: null, after: declaredStartAt },
+    declaredEndAt: { before: null, after: declaredEndAt },
+    declaredBreakMinutesTotal: { before: null, after: declaredBreakMinutesTotal },
+    status: { before: null, after: 'attested' },
+  });
+  return ok({ attendance, event });
 }
 
 // ---- APPROVAL (admin only; sets approved* + approvedBy/At) -------------------
@@ -590,25 +729,54 @@ export function approve({ actor, existing, approvedStartAt, approvedEndAt, scope
   if (se) return err(se);
   if (!isFiniteInstant(approvedStartAt) || !isFiniteInstant(approvedEndAt)) return err('APPROVED_TIMES_REQUIRED');
   if (approvedEndAt < approvedStartAt) return err('END_BEFORE_START');
-  // sane bound around the planned snapshot (C37)
-  const lo = existing.plannedSnapshot.startAt - 24 * HOUR_MS;
-  const hi = existing.plannedSnapshot.endAt + 24 * HOUR_MS;
-  if (approvedStartAt < lo || approvedEndAt > hi) return err('APPROVED_OUT_OF_BOUND');
-  // B6: cannot approve an incomplete attendance — clock-out must have happened.
-  if (existing.status !== 'clocked_out') return err('NOT_CLOCKED_OUT');
-  // P2-1: status alone is not trusted. The completion facts must be structurally present,
-  // finite, correctly ordered and within the workDate bounds; a malformed projection is
-  // never approvable.
-  for (const f of ['observedClockInAt', 'observedClockOutAt', 'declaredStartAt', 'declaredEndAt']) {
-    if (!isFiniteInstant(existing[f])) return err('INCOMPLETE_ATTENDANCE:' + f);
+  // sane bound around the planned snapshot (C37). 3B-FOUNDATION §7: the envelope is anchored to
+  // the PLAN when a plan existed, and to the record's own workDate when plannedSnapshot is null
+  // (a no-plan manual record). Approval always has an envelope; no synthetic plan is invented.
+  if (existing.plannedSnapshot) {
+    const lo = existing.plannedSnapshot.startAt - 24 * HOUR_MS;
+    const hi = existing.plannedSnapshot.endAt + 24 * HOUR_MS;
+    if (approvedStartAt < lo || approvedEndAt > hi) return err('APPROVED_OUT_OF_BOUND');
+  } else if (!withinTenantWorkDay(approvedStartAt, existing.workDate, policy) || !withinTenantWorkDay(approvedEndAt, existing.workDate, policy)) {
+    return err('APPROVED_OUT_OF_BOUND');
   }
-  if (existing.observedClockOutAt < existing.observedClockInAt) return err('MALFORMED_OBSERVED_INTERVAL');
-  if (existing.declaredEndAt < existing.declaredStartAt) return err('MALFORMED_DECLARED_INTERVAL');
-  for (const f of ['declaredStartAt', 'declaredEndAt']) {
-    if (!withinTenantWorkDay(existing[f], existing.workDate, policy)) return err('DECLARED_OUTSIDE_WORKDATE');
+  // 3B-FOUNDATION §8: TWO explicit chains keyed on STATUS — no bypass flag. 'attested' is
+  // reachable only through admin-scoped management operations, so a clock-origin record can
+  // never enter the attested chain; the separation is carried by the state machine, not by a
+  // field an operation could set. The clocked_out chain below is semantically unchanged.
+  if (existing.status === 'clocked_out') {
+    // B6/P2-1: status alone is not trusted. The completion facts must be structurally present,
+    // finite, correctly ordered and within the workDate bounds; a malformed projection is
+    // never approvable.
+    for (const f of ['observedClockInAt', 'observedClockOutAt', 'declaredStartAt', 'declaredEndAt']) {
+      if (!isFiniteInstant(existing[f])) return err('INCOMPLETE_ATTENDANCE:' + f);
+    }
+    if (existing.observedClockOutAt < existing.observedClockInAt) return err('MALFORMED_OBSERVED_INTERVAL');
+    if (existing.declaredEndAt < existing.declaredStartAt) return err('MALFORMED_DECLARED_INTERVAL');
+    for (const f of ['declaredStartAt', 'declaredEndAt']) {
+      if (!withinTenantWorkDay(existing[f], existing.workDate, policy)) return err('DECLARED_OUTSIDE_WORKDATE');
+    }
+  } else if (existing.status === 'attested') {
+    // The admission chain: admin scope (already applied), manager-asserted source, a complete
+    // finite ordered declared pair inside the workDate, and an explicit break total.
+    if (existing.declarationSource !== 'manager') return err('NOT_MANAGER_DECLARED');
+    for (const f of ['declaredStartAt', 'declaredEndAt']) {
+      if (!isFiniteInstant(existing[f])) return err('INCOMPLETE_ATTENDANCE:' + f);
+      if (!withinTenantWorkDay(existing[f], existing.workDate, policy)) return err('DECLARED_OUTSIDE_WORKDATE');
+    }
+    if (existing.declaredEndAt < existing.declaredStartAt) return err('MALFORMED_DECLARED_INTERVAL');
+    if (!Number.isInteger(existing.declaredBreakMinutesTotal) || existing.declaredBreakMinutesTotal < 0) return err('INCOMPLETE_ATTENDANCE:declaredBreakMinutesTotal');
+  } else {
+    return err('NOT_CLOCKED_OUT');   // every other status refuses exactly as before
   }
+  // 3B-FOUNDATION §4: approve() is now the ONLY writer of approvedBreakMinutesTotal — it ENDORSES
+  // the break that was actually deducted (declared supersedes observed, never added). This is a
+  // record of what approval endorsed; it is never a derivation input.
+  const endorsedBreak = Number.isInteger(existing.declaredBreakMinutesTotal) && existing.declaredBreakMinutesTotal >= 0
+    ? existing.declaredBreakMinutesTotal
+    : (typeof existing.observedBreakMinutesTotal === 'number' && existing.observedBreakMinutesTotal > 0 ? existing.observedBreakMinutesTotal : 0);
   const attendance = Object.assign({}, existing, {
     approvedStartAt, approvedEndAt, approvedByUid: actor.uid, approvedAt: now,
+    approvedBreakMinutesTotal: endorsedBreak,
     status: 'approved', revision: existing.revision + 1, updatedAt: now,
   });
   const event = mkEvent('approval', attendance, actor, now, null, null, {
@@ -733,10 +901,18 @@ export function daySummaryFor({ attendance }) {
   const obsOut = isFiniteInstant(a.observedClockOutAt) ? a.observedClockOutAt : null;
   const decIn = isFiniteInstant(a.declaredStartAt) ? a.declaredStartAt : null;
   const decOut = isFiniteInstant(a.declaredEndAt) ? a.declaredEndAt : null;
-  const startDeclared = obsIn != null && decIn != null && decIn !== obsIn;
-  const endDeclared = obsOut != null && decOut != null && decOut !== obsOut;
-  const start = obsIn == null ? null : (startDeclared ? decIn : obsIn);
-  const end = obsOut == null ? null : (endDeclared ? decOut : obsOut);
+  // 3B-FOUNDATION CASE 4 (the ONLY amendment to this selection): a complete declared pair with
+  // NO observed receipt at all stands on its own IFF the record was stamped by an admin-scoped
+  // management assertion (declarationSource === 'manager'). Employee declarations never stand
+  // alone — the employee path cannot set this marker — so a forgotten registration still reads
+  // as "no answer" until management acts. Cases 1-3 and the open-session case are untouched
+  // below: a legacy record has no declarationSource, so `attested` is false and the original
+  // expressions apply verbatim.
+  const attested = a.declarationSource === 'manager' && obsIn == null && obsOut == null && decIn != null && decOut != null;
+  const startDeclared = attested || (obsIn != null && decIn != null && decIn !== obsIn);
+  const endDeclared = attested || (obsOut != null && decOut != null && decOut !== obsOut);
+  const start = attested ? decIn : (obsIn == null ? null : (startDeclared ? decIn : obsIn));
+  const end = attested ? decOut : (obsOut == null ? null : (endDeclared ? decOut : obsOut));
   const onBreak = a.breakState === 'on_break';
   const declaredBreak = (Number.isInteger(a.declaredBreakMinutesTotal) && a.declaredBreakMinutesTotal >= 0) ? a.declaredBreakMinutesTotal : null;
   const observedBreak = (typeof a.observedBreakMinutesTotal === 'number' && Number.isFinite(a.observedBreakMinutesTotal) && a.observedBreakMinutesTotal > 0) ? a.observedBreakMinutesTotal : 0;
@@ -821,8 +997,16 @@ export function assertOwnershipImmutable(existing, proposed) {
   for (const k of ['ansattId', 'shiftId', 'workDate', 'attendanceId', 'plannedShiftRevision']) {
     if (proposed[k] !== existing[k]) return err('OWNERSHIP_IMMUTABLE:' + k);
   }
+  // 3B-FOUNDATION §7: plannedSnapshot === null is a VALUE with meaning ("no planned source
+  // existed"), not malformation. The invariant's meaning is preserved and extended: whatever the
+  // planned provenance was at birth — including "none" — is immutable. null==null passes;
+  // null->value, value->null and unequal non-null snapshots all still refuse.
   const a = existing.plannedSnapshot, b = proposed.plannedSnapshot;
-  if (!a || !b || a.startAt !== b.startAt || a.endAt !== b.endAt) return err('OWNERSHIP_IMMUTABLE:plannedSnapshot');
+  if (a === null || b === null) {
+    if (a !== b) return err('OWNERSHIP_IMMUTABLE:plannedSnapshot');
+  } else if (!a || !b || a.startAt !== b.startAt || a.endAt !== b.endAt) {
+    return err('OWNERSHIP_IMMUTABLE:plannedSnapshot');
+  }
   return ok({});
 }
 export function assertRevisionMonotonic(existing, proposed) {

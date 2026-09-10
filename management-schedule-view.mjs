@@ -39,7 +39,7 @@ const WD_SHORT = ['Man', 'Tir', 'Ons', 'Tor', 'Fre', 'Lør', 'Søn'];
 const WD_MIN = ['M', 'T', 'O', 'T', 'F', 'L', 'S'];
 const MONTH_NAMES = ['januar', 'februar', 'mars', 'april', 'mai', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'desember'];
 
-export function renderManagementView(root, { store, tenantId, tenantLabel, people, roleLabels, actor, policy, deps, nowMs, timezone, onViewAs, initialQuery }) {
+export function renderManagementView(root, { store, tenantId, tenantLabel, people, roleLabels, actor, policy, deps, nowMs, timezone, onViewAs, initialQuery, initialOffset, onOffsetChange }) {
   if (!root) return;
   const todayWd = tenantWorkDate(nowMs, timezone);
   const baseMonday = isoWeekMonday(todayWd);
@@ -47,7 +47,10 @@ export function renderManagementView(root, { store, tenantId, tenantLabel, peopl
   // Separate cursors per view (2A): Week remembers its week, Month remembers its month; a fresh
   // entry into Vaktplan starts at now. The search query is a people selection shared by both.
   let mode = 'week';
-  let offset = 0;
+  // Week offset is presentation state. It may be seeded by the Ledelse workspace frame and
+  // reported back so switching tabs does not lose the week the manager was looking at.
+  let offset = Number.isInteger(initialOffset) ? initialOffset : 0;
+  const reportOffset = () => { if (typeof onOffsetChange === 'function') onOffsetChange(offset); };
   let mCursor = { year: todayY, month: todayM };
   let dayWd = todayWd;                 // narrow one-day cursor (navigates freely by date)
   let query = typeof initialQuery === 'string' ? initialQuery : '';   // e.g. opened from an Ansattkort
@@ -168,12 +171,12 @@ export function renderManagementView(root, { store, tenantId, tenantLabel, peopl
     const nav = el('div', { cls: 'wknav' });
     const prev = el('button', { text: '‹ Forrige uke', attrs: { type: 'button', 'aria-label': 'Forrige uke' } });
     const next = el('button', { text: 'Neste uke ›', attrs: { type: 'button', 'aria-label': 'Neste uke' } });
-    prev.addEventListener('click', () => { offset -= 1; sel = null; errMsg = ''; draw(); });
-    next.addEventListener('click', () => { offset += 1; sel = null; errMsg = ''; draw(); });
+    prev.addEventListener('click', () => { offset -= 1; sel = null; errMsg = ''; reportOffset(); draw(); });
+    next.addEventListener('click', () => { offset += 1; sel = null; errMsg = ''; reportOffset(); draw(); });
     const mid = el('div', { cls: 'mid' });
     mid.appendChild(el('div', { cls: 'wk', text: 'Uke ' + week.weekNumber }));
     mid.appendChild(el('div', { cls: 'rng', text: shortDate(week.monday) + ' – ' + shortDate(week.sunday) }));
-    if (offset !== 0) mid.appendChild(chipNav('Til denne uken', () => { offset = 0; sel = null; errMsg = ''; draw(); }));
+    if (offset !== 0) mid.appendChild(chipNav('Til denne uken', () => { offset = 0; sel = null; errMsg = ''; reportOffset(); draw(); }));
     nav.appendChild(prev); nav.appendChild(mid); nav.appendChild(next);
     return nav;
   }
