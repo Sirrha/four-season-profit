@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { dagerIPerioden, fmtDagRad, fmtAvvik, nbDateFromIso, isoFromNbDate, calendarMonthGrid, NB_WEEKDAYS_SHORT, manualTargetFor } from './management-payroll-view.mjs';
+import { dagerIPerioden, fmtDagRad, fmtAvvik, nbDateFromIso, isoFromNbDate, calendarMonthGrid, NB_WEEKDAYS_SHORT, manualTargetFor, tidligerePlanlagteUtenRegistrering, packageRollupOf } from './management-payroll-view.mjs';
 import { buildPayrollPackage, accountantPayloadOf } from './management-payroll-core.mjs';
 import { seedFourSeasonEmployees } from './management-employees-core.mjs';
 import { applyScheduleOperation, shiftsForEmployee, durationHoursOf } from './management-schedule-core.mjs';
@@ -97,7 +97,79 @@ t('P1-2', 'signed variance formatting is presentation only', () => {
   assert.equal(fmtAvvik(null), '');
   assert.ok(viewSrc.includes("stat('Planlagt', fmtH(row.comparison.plannedHours))"));
   assert.ok(viewSrc.includes("stat('Godkjent', fmtH(row.payload.approvedHours))"));
-  assert.ok(!/kr\s*\d|kostnad|estimat/i.test(viewSrc.replace(/\/\/.*$/gm, '')), 'no planning-economy money in P1 view code');
+  // P2 money placement: kroner appear ONLY in the month cards and the expanded header — never on
+  // the collapsed employee row (drawList up to the inline detail hand-off).
+  const collapsed = viewSrc.slice(viewSrc.indexOf('function drawList('), viewSrc.indexOf('if (isOpen) drawEmployeeDetail(pkg, row, wrap);'));
+  assert.ok(collapsed.length > 200);
+  assert.ok(!/fmtKr|estimat|kostnad|kr\s*\d/i.test(collapsed), 'no kroner on collapsed rows');
+});
+
+// ---- P2 presentation: five cards + person-header estimate, composed at view level -----------
+t('P2-6', 'five month cards render from their proper projections; estimate is labelled; person header carries the estimate', () => {
+  for (const s of ["card('Planlagte timer'", "card('Estimert planlagt kostnad'", "card('Faktiske timer'", "card('Godkjente timer'", "card('Krever handling'"]) assert.ok(viewSrc.includes(s), 'missing card: ' + s);
+  assert.ok(viewSrc.includes("p ? fmtH(p.plannedHoursTotal) : '–'"), 'planned hours come from the planning projection (canonical derivation)');
+  assert.ok(viewSrc.includes("fmtKr(p.estimate.kr) : '–') + ' ' + p.estimate.label"), 'estimate is always labelled');
+  assert.ok(viewSrc.includes('p.estimate.coverageLine'), 'coverage named');
+  assert.ok(viewSrc.includes("r.payload.actualHours") && viewSrc.includes("r.payload.approvedHours"), 'actual/approved from the payroll projection');
+  assert.ok(viewSrc.includes("factRow('Estimert planlagt kostnad ' + planningNow.estimate.label, pe.included ? fmtKr(pe.estimateKr) + ' ' + planningNow.estimate.label : pe.note)"));
+  assert.ok(viewSrc.includes("planningNow = typeof planningFor === 'function' ? planningFor(periodId) : null;"), 'projection recomputed per draw, never stored');
+  // the view still imports exactly the two modules (planning arrives via the shell projection)
+  const from = (viewSrc.match(/from '\.\/[^']+'/g) || []).map((s) => s.slice(6).replace(/'/g, '')).sort();
+  assert.deepEqual(from, ['./employee-shell-core.mjs', './management-payroll-core.mjs']);
+  assert.ok(shellSrc.includes("import { planningEconomyFor } from './management-planning-economy.mjs';"));
+  assert.ok(shellSrc.includes('planningFor: planningEconomyForPeriod'));
+  // no charts / trends / on-costs / actual cost
+  assert.ok(!/chart|trend|canvas|svg|arbeidsgiveravgift|faktisk kostnad/i.test(viewSrc.replace(/\/\/.*$/gm, '')));
+});
+
+// ---- P2-7 owner correction: KREVER HANDLING counts only PAST planned days without registration ----
+t('P2-7a', 'past planned_only days count; today and future do not; both/actual_only never count; no today -> 0', () => {
+  const today = '2026-09-11';
+  const rows = dagerIPerioden({
+    plannedShifts: [shift('s1', '2026-09-02', '08:00', '12:00'), shift('s2', '2026-09-10', '08:00', '12:00'), shift('s3', '2026-09-11', '08:00', '12:00'), shift('s4', '2026-09-12', '08:00', '12:00'), shift('s5', '2026-09-25', '08:00', '12:00'), shift('s6', '2026-09-03', '08:00', '12:00')],
+    days: [day('2026-09-03'), day('2026-09-05')], periodId: '2026-09',
+  });
+  // D: the union itself still renders today's and future planned days normally
+  assert.deepEqual(rows.map((r) => r.workDate + ':' + r.kind), ['2026-09-02:planned_only', '2026-09-03:both', '2026-09-05:actual_only', '2026-09-10:planned_only', '2026-09-11:planned_only', '2026-09-12:planned_only', '2026-09-25:planned_only']);
+  assert.equal(rows.filter((r) => r.kind === 'planned_only').length, 5);
+  // A: only 09-02 and 09-10 are actionable on 09-11
+  assert.equal(tidligerePlanlagteUtenRegistrering(rows, today), 2);
+  assert.equal(tidligerePlanlagteUtenRegistrering(rows, '2026-09-12'), 3);   // today's row becomes past tomorrow
+  assert.equal(tidligerePlanlagteUtenRegistrering(rows, '2026-09-01'), 0);
+  assert.equal(tidligerePlanlagteUtenRegistrering(rows, '2026-10-01'), 5);
+  assert.equal(tidligerePlanlagteUtenRegistrering(rows, undefined), 0);       // fail-closed, never inflate
+  assert.equal(tidligerePlanlagteUtenRegistrering([], today), 0);
+});
+t('P2-7b', 'the KREVER HANDLING card composes the past-only count with business-local today; wording says tidligere; hard/warn untouched', () => {
+  const cards = viewSrc.slice(viewSrc.indexOf('function drawMonthCards('), viewSrc.indexOf('function drawCalendar('));
+  assert.ok(cards.includes("tidligerePlanlagteUtenRegistrering(dagerIPerioden({ plannedShifts: plannedFor(r.ansattId), days: r.payload.days, periodId }), todayWorkDate)"));
+  assert.ok(!cards.includes(".filter((u) => u.kind === 'planned_only').length"), 'the unfiltered union count no longer feeds the card');
+  assert.ok(cards.includes("' tidligere planlagt dag uten registrering'") && cards.includes("' tidligere planlagte dager uten registrering'"));
+  assert.ok(cards.includes('const rollup = packageRollupOf(rows);') && cards.includes('rollup.hardCount + rollup.warnCount + plannedDays'), 'hard/warn findings still come from the unchanged rollup');
+  // today is the SAME business-local convention the shell already passes (tenantWorkDate), never a new store
+  assert.ok(shellSrc.includes('nowMs: Date.now(), timezone: TZ, todayWorkDate: today,'));
+  assert.ok(!/new Date\(\)\.toISOString|localStorage|sessionStorage/.test(cards));
+  // E: the pure planning module is untouched by this correction — no attendance import, no date filter
+  const planSrc = fs.readFileSync(new URL('./management-planning-economy.mjs', import.meta.url), 'utf8');
+  assert.ok(!/employee-shell-core|attendance|todayWorkDate/i.test(planSrc.replace(/\/\/.*$/gm, '')), 'planning module has no attendance/date coupling');
+  assert.ok(planSrc.includes('export function planningEconomyFor({ employeeStore, scheduleStore, tenantId, periodId })'));
+  assert.ok(viewSrc.includes("p ? fmtH(p.plannedHoursTotal) : '–'") && viewSrc.includes("fmtKr(p.estimate.kr) : '–') + ' ' + p.estimate.label"), 'planned hours / estimate cards still full-period');
+});
+t('P2-7c', 'fixture: hard/warn counts and full-period planning are independent of today; only the missing-registration component narrows', () => {
+  const store = buildFourSeasonSchedule('2026-09-11', TZ);
+  const emps = seedFourSeasonEmployees(FOUR_SEASON_PEOPLE, FOUR_SEASON_TENANT.tenantId);
+  const T = FOUR_SEASON_TENANT.tenantId, periodId = '2026-09';
+  const plannedFor = (id) => shiftsForEmployee(store, T, id, FOUR_SEASON_MANAGER_ACTOR).map((s) => ({ shiftId: s.shiftId, projection: s.projection, hours: durationHoursOf(s.projection) }));
+  const build = (today) => buildPayrollPackage({ employeeStore: emps, scheduleStore: store, attendanceStore: new Map(), tenantId: T, periodId, generatedAt: 0, todayWorkDate: today });
+  const countFor = (pkg, today) => pkg.rows.reduce((n, r) => n + tidligerePlanlagteUtenRegistrering(dagerIPerioden({ plannedShifts: plannedFor(r.ansattId), days: r.payload.days, periodId }), today), 0);
+  const allPlannedOnly = (pkg) => pkg.rows.reduce((n, r) => n + dagerIPerioden({ plannedShifts: plannedFor(r.ansattId), days: r.payload.days, periodId }).filter((u) => u.kind === 'planned_only').length, 0);
+  const early = build('2026-09-01'), mid = build('2026-09-11'), late = build('2026-10-01');
+  // B: findings unchanged by the date
+  assert.deepEqual([packageRollupOf(early.rows).hardCount, packageRollupOf(early.rows).warnCount], [packageRollupOf(mid.rows).hardCount, packageRollupOf(mid.rows).warnCount]);
+  // A on the fixture: monotone in today, zero on day 1, equal to the full union count once the month is over
+  assert.equal(countFor(early, '2026-09-01'), 0);
+  assert.ok(countFor(mid, '2026-09-11') > 0 && countFor(mid, '2026-09-11') < allPlannedOnly(mid));
+  assert.equal(countFor(late, '2026-10-01'), allPlannedOnly(late));
 });
 
 // ---- P1-6: payload firewall (PT13b class) ----------------------------------------------------------

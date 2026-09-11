@@ -24,6 +24,7 @@ import { canOpenVaktplan, openShiftsOf, isEligible, applyScheduleOperation, shif
 import { seedFourSeasonEmployees, vaktplanPeopleFrom, canViewEmployees, employeesOf, employeeOf, startDateOf, missingInfoOf } from './management-employees-core.mjs';
 import { renderEmployeesView } from './management-employees-view.mjs';
 import { renderPayrollView, packageRollupOf, manualTargetFor } from './management-payroll-view.mjs';
+import { planningEconomyFor } from './management-planning-economy.mjs';   // P2: pure planning projection (never stored)
 import { createPayrollStore, buildPayrollPackage, versionsOf, periodLabel } from './management-payroll-core.mjs';
 
 const POLICY = ETR2A_POLICY;
@@ -1051,7 +1052,13 @@ export function mountEmployeeShell(root) {
       manualContext: manualTimeContext,
       onManualTime: submitManualTime,
       plannedShiftsFor: plannedShiftsForPayroll,   // P1: read-only planned projection for DAGER I PERIODEN
+      planningFor: planningEconomyForPeriod,       // P2: labelled planning estimates, view-only
     });
+  }
+  // P2: the pure planning-economy projection over the SAME canonical stores (schedule + employment
+  // terms). Recomputed on every render, never stored, never part of the payroll package.
+  function planningEconomyForPeriod(periodId) {
+    return planningEconomyFor({ employeeStore: employeeStore(), scheduleStore: scheduleStore(), tenantId: FOUR_SEASON_TENANT.tenantId, periodId });
   }
   // P1: the SAME canonical schedule read the manual-time resolver uses (shiftsForEmployee over
   // the one store), plus the core's own planned-hours arithmetic per shift. Read-only; nothing is
@@ -1183,6 +1190,7 @@ export function mountEmployeeShell(root) {
       initialPeriodId: today.slice(0, 7),
       onBack: goChooser,
       plannedShiftsFor: plannedShiftsForPayroll,
+      planningFor: planningEconomyForPeriod,
     });
   }
   function goVaktplanViewAs(ansattId) {

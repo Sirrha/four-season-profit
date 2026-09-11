@@ -366,6 +366,12 @@
     .lg-chip.neutral { background:var(--wash); color:var(--faint); }
     .lg-day .mt-fix { margin:0 4px 4px 0; }
     .lg-cross { border-left:3px solid var(--amber); padding-left:8px; }
+    /* P2 — month overview cards */
+    .lg-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin:0 0 14px; }
+    .lg-card { background:#fff; border:1px solid var(--line); border-radius:14px; padding:12px 14px; min-width:0; }
+    .lg-card .k { font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); }
+    .lg-card .v { font-size:20px; font-weight:800; margin:4px 0 2px; overflow-wrap:anywhere; }
+    .lg-card .s { font-size:12px; color:var(--muted); margin-top:2px; }
     /* P1 correction — schedule notice + in-app calendar */
     .mt-notice { border-radius:10px; padding:10px 12px; font-size:13.5px; font-weight:700; margin:4px 0 8px; }
     .mt-notice.ok { background:var(--green-pale); color:var(--green-deep); border:1px solid var(--green-line); }

@@ -1,6 +1,100 @@
 # System-inventar — Four Season AS
 
-## MÅLT SJEKKPUNKT — 2026-09-10 (gjeldende tilstand, les først)
+## MÅLT SJEKKPUNKT — 2026-09-11 (gjeldende tilstand, les først)
+
+<!--
+  Denne seksjonen OVERSTYRER «MÅLT SJEKKPUNKT 2026-09-10» under der de er i
+  konflikt (HEAD-anker, P2-status, testtelling). 2026-09-10-seksjonen beholdes som
+  historikk. Faktabasis: eier-akseptert og Sirrha-lukket P2 (FINAL-CLOSURE-001,
+  2026-09-11) inkl. eier-korreksjonen for KREVER HANDLING, samt
+  P2-ACCEPTED-STATE-CHECKPOINT-COMMIT-RELEASE-001. Ingen kildekode endret av denne
+  oppdateringen.
+-->
+
+### A. COMMITTED REPOSITORY BASELINE (per 2026-09-11, før sjekkpunkt-commit)
+
+- **Feature-branch**: `feature/employee-time-registration`. **HEAD** =
+  `22a854d154cab04069947d5c9a9420fef269b9e1`, subject
+  `checkpoint: accept lonnsgrunnlag through P1` (parent `8549975e…`). Upstream-anker
+  er fortsatt `c40fa0404bd4d14e01d8f4053b8235b8d0a13703` (branch 7 foran); ingen
+  push, PR, merge eller deploy siden. Under denne releasen opprettes **én lokal
+  sjekkpunkt-commit** med subject `checkpoint: accept lonnsgrunnlag through P2`
+  (hash måles etter commit og føres inn i et senere sjekkpunkt — ikke antatt her).
+- **Sjekkpunkt-pakke = nøyaktig 7 stier** (6 aksepterte P2-filer + denne
+  inventar-oppdateringen). Identiteter målt 2026-09-11 (SHA-256 / bytes):
+  1. `employee-shell-ui.mjs` — 82864 B — `95c1ce72e88120276a277568eb0e0bfd87fc5331da7c5f5debb54100d3a04499` (P2-søm: `planningFor: planningEconomyForPeriod` inn i Lønnsgrunnlag-visningen)
+  2. `employee-shell.html` — 41075 B — `e06b85818f16e3953b949be8563166b84ce31abc463026893eb11c0397073c25` (CSS `.lg-cards` / `.lg-card` for månedskortene)
+  3. `management-payroll-view.mjs` — 54014 B — `9a1d7b4282e82d197448215f0a93bd8ef6069d093e3b38a42e8bf703bbd21a5b` (fem månedskort `drawMonthCards`, estimat i utvidet ansatt-header, ny ren `tidligerePlanlagteUtenRegistrering`)
+  4. `management-presentation-p1.test.mjs` — 21859 B — `4b07fc4d1f1d71ca7b20de1d9ea5b4ee5b2bf80f9dd03976f80453e61c7e4c28` (+P2-6, P2-7a/b/c)
+  5. `management-planning-economy.mjs` — 5722 B — `7685b4c35574c62a8fa53b4e2efbf12aa230bcf24917ad6ba577bea995117928` (NY — ren planøkonomi-projeksjon)
+  6. `management-planning-economy.test.mjs` — 10261 B — `684a5c8cb703a3f800a390f9c8389a7c14432111ee0db1f570c5c3a18c17cd44` (NY)
+  7. `docs/system-inventory.md` — denne oppdateringen.
+  `RouteA/` er **IKKE** i pakken (utracket, uinspisert). **ESTABLISHED.**
+
+### B. HVA SJEKKPUNKTET LEGGER TIL (Lønnsgrunnlag P2 — planøkonomi, fikstur-kun)
+
+Fortsatt **fikstur/lokal demo** i `employee-shell.html`; `index.html` (live-appen)
+er uendret.
+
+- **P2 ren modul** `management-planning-economy.mjs`: `planningEconomyFor({employeeStore,
+  scheduleStore, tenantId, periodId})` → `plannedHoursTotal`, `estimate` {kr, label
+  «(estimat)», coveredCount, totalCount, coverageLine, exclusions}, `employees[]`.
+  Importerer KUN `management-schedule-core` (tenantShiftsOf, durationHoursOf,
+  scopeDaysOf) og `management-employees-core` (employeesOf, currentTermsOf,
+  plannedHoursForEmployee). Timesats = satsen i kraft på hver vakts `workDate`
+  (`hourlyRateOn`); fastlønn og manglende lønnsbasis ekskluderes og navngis
+  (`FIXED_SALARY_NOTE` / `MISSING_BASIS_NOTE`). Ingen faktisk-kostnad-aritmetikk;
+  ingenting lagres; når aldri payload/pakke/snapshot/godkjenning/frys/levering.
+- **Fem månedskort** under periodelinjen i Lønn & økonomi (`drawMonthCards` i
+  `management-payroll-view.mjs`): PLANLAGTE TIMER og ESTIMERT PLANLAGT KOSTNAD
+  (hele perioden, alltid merket «(estimat)», dekning/eksklusjoner navngitt) fra
+  P2-projeksjonen; FAKTISKE TIMER og GODKJENTE TIMER som presentasjonssum av
+  lønnsgrunnlagsradene; KREVER HANDLING = eksisterende hard/warn-funn + tidligere
+  planlagte dager uten registrering. Estimatet vises også i utvidet
+  ansatt-header (timelønnede); sammenslåtte rader bærer ingen kroner. Projeksjonen
+  beregnes på nytt per tegning (`planningNow`), også når frossen versjon vises.
+- **Eier-korreksjon (produktlov, 2026-09-11)**: en planlagt dag uten registrering
+  teller i KREVER HANDLING **kun når workDate < forretningslokal i dag**
+  (`tidligerePlanlagteUtenRegistrering`, samme `todayWorkDate`-konvensjon som
+  Vaktplan). I dag og fremtid teller ikke; de vises fortsatt i DAGER I PERIODEN
+  og inngår i hele-periode-kortene. Fikstur 2026-09-11 (september): 442 t,
+  kr 51 440 (estimat), 2 av 5 dekket; KREVER HANDLING 27 = 5 se over + 22
+  tidligere (før korreksjon 68, der 63 planlagte dager var 22 forbi + 3 i dag +
+  38 fremtid).
+- **Utsatt (ikke P2)**: Oversikt V1 eier-cockpit (rekognosert read-only
+  2026-09-11, ikke påbegynt); Vaktplan-overlegg for faktisk finnes/avviker;
+  faktisk lønnskostnad, fastlønn per måned, arbeidsgiveravgift, feriepenger,
+  overtid/tillegg, trender/diagrammer.
+
+### C. MÅLT TESTTILSTAND (per 2026-09-11)
+
+- `management-planning-economy.test.mjs` **7/0** (NY) ·
+  `management-presentation-p1.test.mjs` **17/0** (var 13/0) ·
+  `employee-shell-core.test.mjs` **200/0** · `management-payroll-core.test.mjs`
+  **19/0** · `management-manualtime-ui.test.mjs` **15/0** ·
+  `management-presentation-3a.test.mjs` **5/0** ·
+  `management-contract-core.test.mjs` **52/0** ·
+  `management-employees-core.test.mjs` **24/0** ·
+  `management-schedule-core.test.mjs` **49/0** · `employee-schedule-week.test.mjs`
+  **32/0** · `employee-schedule-month.test.mjs` **13/0** · `schedule-core.test.mjs`
+  **129/0 + ORDER 16/0 + PREDICATE 5/0**. `node --check` rent. **ESTABLISHED.**
+
+### D. WORKING TREE / LIVE-FLATE (per 2026-09-11)
+
+- Forventet etter sjekkpunkt-commit: staging tom, `RouteA/` eneste utrackede sti.
+- **Live-appen er uendret**: `index.html` SHA-256 `a6dc92885fa5a2a24c8036a4…`.
+  Lokal forhåndsvisning: node-loopback 127.0.0.1:8765 (skript utenfor repoet),
+  `Cache-Control: no-store`, `RouteA/` serveres som 403.
+
+### E. ÅPNE PUNKTER (egne gates)
+
+- **Push** av sjekkpunktene til origin: **OPEN**. Ingen PR/merge/deploy.
+- **Oversikt V1**: **NOT BEGUN** — krever egen release på committet P2-basis
+  (ren implementasjon overlapper `drawMonthCards` i `management-payroll-view.mjs`).
+- Kjent kjerne-detalj utenfor P2: Godkjente timer står på 0 t inntil per-dag-
+  godkjenning tas i bruk (pakke-godkjenning ≠ dag-godkjenning).
+
+## MÅLT SJEKKPUNKT — 2026-09-10 (historisk — supersedert 2026-09-11, se seksjonen over)
 
 <!--
   Denne seksjonen OVERSTYRER «MÅLT SJEKKPUNKT 2026-08-27» under der de er i

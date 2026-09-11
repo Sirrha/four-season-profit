@@ -81,6 +81,17 @@ export function dagerIPerioden({ plannedShifts, days, periodId }) {
   }
   return rows;
 }
+// P2 owner correction (Herish ruling): a planned day without registration is ACTIONABLE in the
+// month-level KREVER HANDLING count only once its workDate is strictly in the past. Business-local
+// today (the same tenantWorkDate convention Vaktplan uses) belongs to the live "I dag" surface, and
+// future days have not happened yet. Presentation/actionability only: the union rows themselves are
+// untouched and still list today's and future planned days. No today -> nothing counts (never
+// inflate). Pure and exported for the battery.
+export function tidligerePlanlagteUtenRegistrering(unionRows, todayWorkDate) {
+  const today = typeof todayWorkDate === 'string' ? todayWorkDate : '';
+  if (!today) return 0;
+  return (Array.isArray(unionRows) ? unionRows : []).filter((u) => u && u.kind === 'planned_only' && typeof u.workDate === 'string' && u.workDate < today).length;
+}
 // Day-row date: "man. 4. aug." — Norwegian, never MM/DD.
 export function fmtDagRad(wd) {
   if (!ISO_WORKDATE.test(wd || '')) return '–';
@@ -204,7 +215,7 @@ export function manualErrorText(code) {
   return 'Kunne ikke lagre (' + c + ').';
 }
 
-export function renderPayrollView(root, { employeeStore, scheduleStore, attendanceStore, payrollStore, tenantId, actor, operatorName, nowMs, timezone, todayWorkDate, initialPeriodId, initialOpenEmployee, onStateChange, onBack, onOpenEmployee, manualContext, onManualTime, plannedShiftsFor }) {
+export function renderPayrollView(root, { employeeStore, scheduleStore, attendanceStore, payrollStore, tenantId, actor, operatorName, nowMs, timezone, todayWorkDate, initialPeriodId, initialOpenEmployee, onStateChange, onBack, onOpenEmployee, manualContext, onManualTime, plannedShiftsFor, planningFor }) {
   if (!root) return;
   let periodId = initialPeriodId;
   let openEmployee = initialOpenEmployee || null;   // shell-owned across tab switches
@@ -216,6 +227,11 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
   const reportState = () => { if (typeof onStateChange === 'function') onStateChange({ periodId, openEmployee }); };
   // P1: planned shifts for the day union — the shell's canonical read-only projection, or nothing.
   const plannedFor = (ansattId) => (typeof plannedShiftsFor === 'function' ? (plannedShiftsFor(ansattId) || []) : []);
+  // P2: the pure planning-economy projection for the viewed period — recomputed per draw, LIVE even
+  // when a frozen payroll version is on screen (estimates are never frozen), never stored here.
+  let planningNow = null;
+  const fmtKr = (v) => 'kr ' + Math.round(v).toLocaleString('nb-NO');
+  const r2 = (v) => Math.round(v * 100) / 100;
   const isFrozenPeriod = (pid) => versionsOf(payrollStore, tenantId, pid).some((v) => v.status === PACKAGE_STATUS.APPROVED || v.status === PACKAGE_STATUS.SENT);
   const FROZEN_NOTE = 'Perioden er godkjent og frosset. Bruk «Lag korrigert versjon» før ny tid kan tas inn i lønnsgrunnlaget.';
 
@@ -282,6 +298,51 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
     bar.appendChild(now);
     bar.appendChild(btn('Neste ›', 'btn tertiary lg-step', () => goPeriod(addMonths(periodId, 1))));
     return bar;
+  }
+
+  // ---- P2 §7: the month-level overview — ONE row of derived cards under the period header.
+  // Every figure comes from an EXISTING canonical derivation or the P2 planning projection.
+  // Cards 1–2 read the planning projection; cards 3–5 compose the payroll projection and the P1
+  // union facts. Two projections share the screen; they never share a number or a storage fate.
+  function drawMonthCards(shown) {
+    const rows = shown.rows || [];
+    const wrap = el('div', { cls: 'lg-cards', attrs: { 'aria-label': 'Månedsoversikt' } });
+    const card = (title, value, subs) => {
+      const c = el('div', { cls: 'lg-card' });
+      c.appendChild(el('div', { cls: 'k', text: title }));
+      c.appendChild(el('div', { cls: 'v', text: value }));
+      for (const s of (subs || [])) if (s) c.appendChild(el('div', { cls: 's', text: s }));
+      wrap.appendChild(c);
+    };
+    const p = planningNow;
+    card('Planlagte timer', p ? fmtH(p.plannedHoursTotal) : '–', ['planlagt bemanning fra Vaktplan']);
+    if (p) {
+      const fixed = p.estimate.exclusions.filter((x) => x.reason === 'fastlonn');
+      const missing = p.estimate.exclusions.filter((x) => x.reason !== 'fastlonn');
+      card('Estimert planlagt kostnad', (p.estimate.coveredCount ? fmtKr(p.estimate.kr) : '–') + ' ' + p.estimate.label, [
+        p.estimate.coverageLine,
+        fixed.length ? fixed.map((x) => x.name).join(', ') + ': ' + fixed[0].label : null,
+        missing.length ? missing.map((x) => x.name).join(', ') + ': ' + missing[0].label : null,
+      ]);
+    } else {
+      card('Estimert planlagt kostnad', '– (estimat)', ['ingen planprojeksjon tilgjengelig']);
+    }
+    // 3–4: the payroll projection's own per-row facts, composed for the month (presentation sum only).
+    const actual = r2(rows.reduce((s, r) => s + (r.payload.actualHours || 0), 0));
+    const approved = r2(rows.reduce((s, r) => s + (r.payload.approvedHours || 0), 0));
+    card('Faktiske timer', fmtH(actual) + ' registrert', [frozen ? 'fra frosset versjon' : 'fra registrert tid']);
+    card('Godkjente timer', fmtH(approved) + ' godkjent', null);
+    // 5: existing findings + the P1 union fact, narrowed to PAST planned days without registration
+    // (owner ruling: today and future never inflate this historical action number).
+    const rollup = packageRollupOf(rows);
+    let plannedDays = 0;
+    for (const r of rows) plannedDays += tidligerePlanlagteUtenRegistrering(dagerIPerioden({ plannedShifts: plannedFor(r.ansattId), days: r.payload.days, periodId }), todayWorkDate);
+    const parts = [];
+    if (rollup.hardCount) parts.push(rollup.hardCount + ' må rettes');
+    if (rollup.warnCount) parts.push(rollup.warnCount + ' se over');
+    if (plannedDays) parts.push(plannedDays + (plannedDays === 1 ? ' tidligere planlagt dag uten registrering' : ' tidligere planlagte dager uten registrering'));
+    card('Krever handling', String(rollup.hardCount + rollup.warnCount + plannedDays), parts.length ? parts : ['ingenting krever handling']);
+    root.appendChild(wrap);
   }
 
   function drawCalendar(pkg) {
@@ -636,6 +697,10 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
     if (row.payload.fixedSalaryNote) c.appendChild(el('div', { cls: 'cue-line', text: row.payload.fixedSalaryNote }));
     if (row.payload.employmentStartedInPeriod) c.appendChild(factRow('Ansatt fra', nbDateFromIso(row.payload.employmentStartedInPeriod)));
     if (row.payload.employmentEndedInPeriod) c.appendChild(factRow('Sluttet', nbDateFromIso(row.payload.employmentEndedInPeriod)));
+    // P2 §4 money placement: the per-employee planning estimate lives HERE (expanded header),
+    // never on collapsed rows. Same pure projection, same per-workDate rate rule as the month card.
+    const pe = planningNow ? planningNow.employees.find((x) => x.ansattId === row.ansattId) : null;
+    if (pe) c.appendChild(factRow('Estimert planlagt kostnad ' + planningNow.estimate.label, pe.included ? fmtKr(pe.estimateKr) + ' ' + planningNow.estimate.label : pe.note));
     c.appendChild(factRow('Godkjent', fmtH(row.payload.approvedHours) + ' · ' + row.payload.approvedDayCount + ' av ' + row.payload.dayCount + (row.payload.dayCount === 1 ? ' dag' : ' dager')));
     host.appendChild(c);
     if (frozen) host.appendChild(el('div', { cls: 'vp-note', text: FROZEN_NOTE }));
@@ -780,6 +845,8 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
     if (frozen) manual = null;
     root.appendChild(head(periodTitle(periodId), approved ? 'Godkjent versjon v' + approved.version + ' · frosset verdikopi' : 'Utkast · oppdateres fra kilden'));
     root.appendChild(periodBar());
+    planningNow = typeof planningFor === 'function' ? planningFor(periodId) : null;   // P2: live projection, never frozen
+    drawMonthCards(shown);
     // NOTE: there is no separate employee-detail route any more. The month list is always the
     // page; a selected employee expands INSIDE its row (drawList → drawEmployeeDetail), so the
     // month context never leaves the screen and only one rendering path exists.
