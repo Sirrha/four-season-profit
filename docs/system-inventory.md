@@ -1,6 +1,121 @@
 # System-inventar — Four Season AS
 
-## MÅLT SJEKKPUNKT — 2026-09-11 (gjeldende tilstand, les først)
+## MÅLT SJEKKPUNKT — 2026-09-12 (gjeldende tilstand, les først)
+
+<!--
+  Denne seksjonen OVERSTYRER «MÅLT SJEKKPUNKT 2026-09-11» under der de er i
+  konflikt (HEAD-anker, ansattside-status, testtelling). 2026-09-11-seksjonen
+  beholdes som historikk. Faktabasis: eier-akseptert Ansattside V1 (desktop-
+  gjennomgang PASS etter korreksjoner, dialog-retest PASS WITH NOTES, ekte
+  mobil-smoke PASS 2026-09-12) og den isolerte sjekkpunkt-committen
+  EMPLOYEE-PAGE-V1-OWNER-ACCEPTED-ISOLATED-CHECKPOINT-COMMIT-RELEASE-001.
+  Ingen kildekode endret av denne oppdateringen.
+-->
+
+### A. COMMITTED REPOSITORY BASELINE (per 2026-09-12)
+
+- **Feature-branch**: `feature/employee-time-registration`. **HEAD** =
+  `1f514331be46ec65b32a30a386426a2ea20df971`, subject
+  `checkpoint: accept employee page v1` (parent `81644944…`, det aksepterte
+  P2-sjekkpunktet). Upstream-anker er fortsatt `c40fa0404bd4d14e01d8f4053b8235b8d0a13703`
+  (branch 9 foran); **ingen push, PR, merge eller deploy** ble utført som del av
+  aksepten. Under denne releasen opprettes **én lokal docs-commit** med subject
+  `docs: record employee page v1 acceptance` (hash måles etter commit og føres inn
+  i et senere sjekkpunkt — ikke antatt her).
+- **Ansattside V1 = OWNER-ACCEPTED / CHECKPOINTED** (akseptdato 2026-09-12).
+  Sjekkpunkt-pakke = nøyaktig 8 stier (3 nye + 5 endrede), committet identitet
+  (SHA-256 / bytes, repo-blob):
+  1. `employee-shell-ui.mjs` — 83977 B — `5bdab1f96cc2bfc4de9cf71bc0b3ee8dc84547c7608fb8e284cce6fc7a84e6d2` (kun ansatt-hunkene: dialogramme, Min ansettelse, Plan-tilbakeknapp, «Vakten er over»-tilstand, ansatt-etikett)
+  2. `employee-shell.html` — 41826 B — `357ac0dcfcc8c83a3d5775147afe6c92642798200862aaff67a7587c7ae7f4db` (kun CSS for dialoger/handlingsrad/statiske faktarader)
+  3. `employee-schedule-view.mjs` — 14069 B — `75bad13bfb99562b4d47a3e976c369abb431cf9c3b7f5ef591a3fcef07e32151` (`visibleMonthCells`, tilbakeknapp kun på forespørsel)
+  4. `employee-schedule-week.mjs` — 8541 B — `0ba6ed1a95b0e8c9ec4674a3eb93aa91d08a3a80445cefd7d1cc3503e8c704f0` (`heroShiftFor` + additivt felt `missingRegistration`)
+  5. `employee-schedule-week.test.mjs` — 20249 B — `f44a51aebf4c23dea7fea8974cd0ea128cc29bf913c749d9a99879d47269cc93` (+H9)
+  6. `employee-myjob.mjs` — 3156 B — `2f9c0a59b8c49238f8e38445d0ad17d0f111dae47295a71731e5b0d2de7242a9` (NY — ren, importfri presentasjon av egne ansettelsesfakta)
+  7. `employee-myjob.test.mjs` — 9125 B — `59ed0468a6501517f640c77623187f1ce995359b9472c8f638f1b42d1793f77d` (NY)
+  8. `employee-page-qa.test.mjs` — 17384 B — `9a5152296b6a6f51f8f1aef0a54bbd84edc4b544b5e8ac4e23724c64d3ea5861` (NY — QA-A..F)
+  De to delte filene (`employee-shell-ui.mjs`, `employee-shell.html`) ble
+  **delvis staget** etter linjeområde: kun ansatt-hunkene gikk inn; Oversikt V1-
+  hunkene står igjen ucommittet (se E). `RouteA/` er **IKKE** i pakken (utracket,
+  uinspisert). **ESTABLISHED.**
+
+### B. HVA SJEKKPUNKTET REPRESENTERER (Ansattside V1, fikstur-kun)
+
+Alt under er **fikstur/lokal demo** i `employee-shell.html` (`?emp=1`); `index.html`
+(live-appen) er uendret. Akseptert ansattflate:
+
+- **Velger** («Hvem er du?») som forhåndsvisningsdør inn til ansattsiden.
+- **I dag / Hjem** med hero og ÉN tilstandsstyrt primærhandling (`primaryActionFor`).
+- **Stemple inn / Stemple ut / Start·Avslutt pause / Registrer pausetid**-dialoger i
+  én produktramme (kort, kicker, merkede rader, primær bekreft + sekundær Avbryt som
+  aldri skriver); ingen «forhåndsvisning»-ordlyd; «Nå: HH:MM».
+- **Dagen din** (`daySummaryFor`), **Neste vakt** og **Denne uken**.
+- **Plan** med Uke + Måned (etterfølgende uke uten månedsdato tegnes ikke;
+  kanonisk rutenett fortsatt 42 celler) og **Ledige vakter / Ta vakten**; én
+  «← Tilbake til i dag» etter alt innhold.
+- **Jobb & økonomi → Min ansettelse**: skrivebeskyttede fakta fra samme
+  ansatt-sannhet (`employeeOf` → `currentTermsOf`/`startDateOf`/`contractStatusOf`):
+  Stilling, Stillingstype, Stillingsprosent, Arbeidssted, Ansatt fra, Forventet
+  timer per uke (kun når faktum finnes), Arbeidsavtale Registrert/Mangler; manglende
+  fakta = «Ikke registrert»; ingen kroner; omfangslinje for lønn/skatt/feriepenger/
+  dokumenter. Faktarader er statiske (ingen hover-affordans).
+- **Avsluttet vakt uten registrering**: sannferdig oppmerksomhetstilstand «Vakten er
+  over» / «Ingen arbeidstid er registrert for denne vakten.» / «Ta kontakt med leder
+  …» — ingen fabrikkert tid, ingen etterdatert innstempling; fullført-tilstanden
+  («Takk for i dag») vises kun med faktisk registrering; aktiv innstempling etter
+  planlagt slutt beholder STEMPLE UT.
+- **Årsak-ordlyd for ansatte**: «Etter avtale med leder» vises for den kanoniske
+  koden `MANAGEMENT_DECISION` (lagret kode uendret; lederflaten beholder «Ledelsens
+  beslutning»).
+- **Mobil/smal skjerm**: smoke akseptert av eier på ekte telefon 2026-09-12.
+
+### C. MÅLT TESTTILSTAND (per 2026-09-12, ved lukking)
+
+- Fra index-øyeblikksbildet av sjekkpunktet (uavhengig av det skitne arbeidstreet):
+  `employee-page-qa.test.mjs` **12/0** (NY) · `employee-myjob.test.mjs` **9/0** (NY) ·
+  `employee-shell-core.test.mjs` **200/0** · `employee-schedule-week.test.mjs`
+  **33/0** (Europe/Oslo, UTC, America/New_York, Asia/Tokyo) ·
+  `employee-schedule-month.test.mjs` **13/0** · `schedule-core.test.mjs`
+  **129/0 + ORDER 16/0 + PREDICATE 5/0** · `management-presentation-p1.test.mjs`
+  **17/0** · `management-manualtime-ui.test.mjs` **15/0** ·
+  `management-planning-economy.test.mjs` **7/0** ·
+  `management-presentation-3a.test.mjs` **5/0** · `management-payroll-core.test.mjs`
+  **19/0** · `management-employees-core.test.mjs` **24/0** ·
+  `management-contract-core.test.mjs` **52/0** · `management-schedule-core.test.mjs`
+  **49/0**. `node --check` og `git diff --check` rent. **ESTABLISHED.**
+- Eier/QA-lukking: desktop-gjennomgang PASS etter korreksjoner; siste visuelle
+  dialog-retest PASS WITH NOTES (kun ikke-blokkerende kosmetisk polish igjen);
+  ekte mobil-smoke PASS — eier likte telefonversjonen eksplisitt.
+
+### D. WORKING TREE / LIVE-FLATE (per 2026-09-12)
+
+- Etter sjekkpunkt-committen: staging tom; skittent arbeidstre = **kun Oversikt V1**
+  (se E) + `RouteA/` utracket.
+- **Live-appen er uendret**: `index.html` SHA-256 `a6dc92885fa5a2a24c8036a4…`.
+  Lokal forhåndsvisning: node-loopback 127.0.0.1:8765 (skript utenfor repoet),
+  `Cache-Control: no-store`, `RouteA/` serveres som 403. Den midlertidige
+  samme-LAN-forhåndsvisningen for mobil-smoken (0.0.0.0:8766) er **stoppet**.
+
+### E. ÅPNE PUNKTER (egne gates)
+
+- **Oversikt V1 (Ledelse-cockpit)**: **IKKE del av Ansattside V1-sjekkpunktet.**
+  Bygget og teknisk PASS, men fortsatt **ucommittet/skittent** og venter på eierens
+  visuelle aksept/korreksjon. Består av Oversikt-hunkene i `employee-shell-ui.mjs`
+  (10 hunker: importer + Ledelse/Oversikt-regionen) og `employee-shell.html`
+  (én CSS-blokk), `management-payroll-view.mjs` (`monthFactsOf`-søm),
+  `management-presentation-p1.test.mjs` (ankerflytting) samt de utrackede
+  `management-oversikt.mjs` og `management-presentation-oversikt.test.mjs`.
+  Identitetene skal være uendret av denne inventar-releasen.
+- **Push** av sjekkpunktene til origin: **OPEN**. Ingen PR/merge/deploy.
+- **Utsatt forhåndsvisnings-/produktgjeld (ikke V1-blokkere)**: ekte
+  autentisering/sikkerhet ikke implementert (velgeren er fortsatt forhåndsvisnings-
+  identitetsvalg); «Ledelse» synlig/ugatet i velgeren; ansattskallet laster fortsatt
+  ledelsesmoduler; bytte av ansatt overlever ikke reload og URL-en er
+  forhåndsvisningsstil; favicon 404 (kosmetisk); liten justering/felthøyde-polish i
+  dialogene kan vente til V1.1.
+- Kjent kjerne-detalj utenfor V1: Godkjente timer står på 0 t inntil per-dag-
+  godkjenning tas i bruk (pakke-godkjenning ≠ dag-godkjenning).
+
+## MÅLT SJEKKPUNKT — 2026-09-11 (historisk — supersedert 2026-09-12, se seksjonen over)
 
 <!--
   Denne seksjonen OVERSTYRER «MÅLT SJEKKPUNKT 2026-09-10» under der de er i
