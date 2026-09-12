@@ -34,6 +34,15 @@ function shortDate(workDate) { const [, m, d] = workDate.split('-').map(Number);
 const MONTH_NAMES = ['januar', 'februar', 'mars', 'april', 'mai', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'desember'];
 const WD_SHORT = ['Man', 'Tir', 'Ons', 'Tor', 'Fre', 'Lør', 'Søn'];
 
+// Presentation only (owner QA-B): drop TRAILING whole weeks that hold no date of the displayed
+// month. The canonical grid (monthGridFor) stays 42 cells; a sixth row is kept whenever it holds
+// at least one month date. Leading rows always hold the 1st, so only trailing rows can go.
+export function visibleMonthCells(cells) {
+  const list = Array.isArray(cells) ? cells.slice() : [];
+  while (list.length >= 7 && list.slice(-7).every((c) => !c || !c.inMonth)) list.length -= 7;
+  return list;
+}
+
 export function renderScheduleView(root, { membership, tenantLabel, shifts, nowMs, timezone, roleLabels, onBack }) {
   if (!root) return;
   const todayWd = tenantWorkDate(nowMs, timezone);
@@ -152,7 +161,7 @@ export function renderScheduleView(root, { membership, tenantLabel, shifts, nowM
     card.appendChild(wd);
 
     const g = el('div', { cls: 'mo-grid' });
-    for (const cell of grid.cells) {
+    for (const cell of visibleMonthCells(grid.cells)) {   // trailing all-outside weeks are not drawn (QA-B)
       const assigned = cell.shifts.filter((s) => s.projection.status === 'assigned');
       const cancelledOnly = cell.shifts.length > 0 && assigned.length === 0;
       let cls = 'mo-cell';
@@ -228,9 +237,13 @@ export function renderScheduleView(root, { membership, tenantLabel, shifts, nowM
     root.appendChild(header());
     root.appendChild(segControl());
     if (mode === 'week') drawWeek(); else drawMonth();
-    const backBtn = el('button', { cls: 'btn tertiary', text: '← Tilbake til i dag', attrs: { type: 'button' }, style: 'margin-top:12px' });
-    backBtn.addEventListener('click', () => onBack());
-    root.appendChild(backBtn);
+    // The back control is drawn only when a host asks for it; the employee shell places ONE terminal
+    // control after all Plan content itself (owner QA-C). Management "Se som ansatt" still passes onBack.
+    if (typeof onBack === 'function') {
+      const backBtn = el('button', { cls: 'btn tertiary', text: '← Tilbake til i dag', attrs: { type: 'button' }, style: 'margin-top:12px' });
+      backBtn.addEventListener('click', () => onBack());
+      root.appendChild(backBtn);
+    }
   }
   draw();
 }

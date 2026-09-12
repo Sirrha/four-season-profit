@@ -200,6 +200,24 @@ t('H8', 'active attendance on today\'s later shift beats the earlier shift\'s wi
   const a = heroShiftFor(split, { nowMs: at(D0, '09:00'), todayWorkDate: D0, lookup: lk }), b = heroShiftFor(split, { nowMs: at(D0, '09:00'), todayWorkDate: D0, lookup: lk });
   assert.equal(a.kind, 'active'); assert.equal(a.entry.shiftId, 'pm'); assert.deepEqual(a, b);
 });
+t('H9', 'missingRegistration: ended planned shift with NO attendance flags true; completed-with-attendance, active-after-end, current, upcoming and free never do', () => {
+  const one = [sh('one', 'x', D0, '07:00', '11:00')];
+  const none = heroShiftFor(one, { nowMs: at(D0, '12:00'), todayWorkDate: D0, lookup: mkLookup({}) });
+  assert.equal(none.kind, 'completed'); assert.equal(none.attendance, null); assert.equal(none.missingRegistration, true);
+  const out = heroShiftFor(one, { nowMs: at(D0, '12:00'), todayWorkDate: D0, lookup: mkLookup({ one: { status: 'clocked_out' } }) });
+  assert.equal(out.kind, 'completed'); assert.equal(out.missingRegistration, false, 'completed WITH attendance is not missing');
+  const still = heroShiftFor(one, { nowMs: at(D0, '12:00'), todayWorkDate: D0, lookup: mkLookup({ one: { status: 'clocked_in', breakState: 'working' } }) });
+  assert.equal(still.kind, 'active'); assert.equal(still.missingRegistration, false, 'active attendance after planned end keeps the active (finishable) state');
+  const cur = heroShiftFor(one, { nowMs: at(D0, '09:00'), todayWorkDate: D0, lookup: mkLookup({}) });
+  assert.equal(cur.kind, 'current'); assert.equal(cur.missingRegistration, false);
+  const up = heroShiftFor(one, { nowMs: at(D0, '06:00'), todayWorkDate: D0, lookup: mkLookup({}) });
+  assert.equal(up.kind, 'upcoming'); assert.equal(up.missingRegistration, false);
+  const free = heroShiftFor([], { nowMs: at(D0, '12:00'), todayWorkDate: D0, lookup: mkLookup({}) });
+  assert.equal(free.kind, 'free'); assert.equal(free.missingRegistration, false);
+  // manager-entered day (attested) on an ended shift counts as registered, not missing
+  const att = heroShiftFor(one, { nowMs: at(D0, '12:00'), todayWorkDate: D0, lookup: mkLookup({ one: { status: 'attested' } }) });
+  assert.equal(att.kind, 'completed'); assert.equal(att.missingRegistration, false);
+});
 
 console.log(lines.join('\n'));
 console.log('SCHEDULE_WEEK_TESTS: ' + passed + ' passed, ' + failed + ' failed');

@@ -409,6 +409,17 @@
     #emp-root select, #emp-root input[type="text"], #emp-root input[type="number"], #emp-root input[type="time"], #emp-root input[type="date"] { width:100%; max-width:420px; padding:12px 14px; font-size:15px; font-family:inherit; border:1px solid var(--line-2); border-radius:12px; background:#fff; color:var(--text); margin-bottom:10px; }
     #emp-root label { display:block; font-size:13px; font-weight:600; color:var(--muted); margin-bottom:6px; }
     #emp-root > button:not(.btn), #emp-root button:not(.btn):not(.nav button) { border-radius:12px; }
+    /* ---- employee time-action dialogs (owner QA-A): product frame, labelled rows, two-button action row ---- */
+    .dlg { max-width:520px; }
+    .dlg .sub { color:var(--muted); font-size:14px; margin-top:2px; }
+    .form-row { margin-top:14px; }
+    .form-row label { margin-bottom:6px; }
+    .form-err { color:var(--red); font-size:13px; min-height:18px; margin-top:10px; }
+    .dlg-actions { display:flex; gap:10px; margin-top:16px; }
+    .dlg-actions .btn { flex:1 1 0; margin:0; min-height:48px; font-size:15px; padding:12px; box-shadow:none; }
+    /* read-only fact rows (Min ansettelse): no clickable affordance (owner QA-D) */
+    .emp-row.static { cursor:default; }
+    .emp-row.static:hover { border-color:var(--line); background:#fff; }
     /* ---- desktop ---- */
     @media (min-width:900px) {
       .wrap { padding:28px 24px 40px; }

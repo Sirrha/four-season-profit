@@ -94,12 +94,15 @@ export function todayShiftsOf(shifts, workDate) {
 // workDate; 2 today's assigned shift whose planned window contains now; 3 earliest today with start > now;
 // 4 most recently completed today (planned end passed or attendance clocked_out), shown as completed;
 // 5 free day (a cancelled-only day is free). Cancelled/open never become the hero.
+// missingRegistration (owner ruling 2026-09-12): TRUE only for step 4 when the ended planned shift has
+// NO attendance record at all — the day must render as an attention state ("Vakten er over · Ingen
+// arbeidstid er registrert"), never as completed. Additive flag; the selection order is unchanged.
 export function heroShiftFor(shifts, { nowMs, todayWorkDate, lookup }) {
   const look = typeof lookup === 'function' ? lookup : () => null;
   const list = (Array.isArray(shifts) ? shifts : []).filter((s) => s && s.projection && s.projection.status === 'assigned');
   const today = todayShiftsOf(list, todayWorkDate);
   const others = (e) => today.filter((t) => t.shiftId !== e.shiftId).length;
-  const out = (kind, entry, attendance) => ({ kind, entry, attendance: attendance || null, ongoingFromPriorDay: !!entry && entry.projection.workDate !== todayWorkDate, othersToday: entry ? others(entry) : today.length });
+  const out = (kind, entry, attendance) => ({ kind, entry, attendance: attendance || null, ongoingFromPriorDay: !!entry && entry.projection.workDate !== todayWorkDate, othersToday: entry ? others(entry) : today.length, missingRegistration: kind === 'completed' && !attendance });
   let active = null;
   for (const s of list) {
     const att = look(s.shiftId);

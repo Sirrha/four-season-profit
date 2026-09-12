@@ -21,7 +21,8 @@ import { ownShiftsForMembership, todayShiftOf, nextUpcomingShift, isOvernight, h
 import { renderScheduleView } from './employee-schedule-view.mjs';
 import { renderManagementView } from './management-schedule-view.mjs';
 import { canOpenVaktplan, openShiftsOf, isEligible, applyScheduleOperation, shiftsForEmployee, managerWeekFor, durationHoursOf } from './management-schedule-core.mjs';
-import { seedFourSeasonEmployees, vaktplanPeopleFrom, canViewEmployees, employeesOf, employeeOf, startDateOf, missingInfoOf } from './management-employees-core.mjs';
+import { seedFourSeasonEmployees, vaktplanPeopleFrom, canViewEmployees, employeesOf, employeeOf, startDateOf, missingInfoOf, currentTermsOf, contractStatusOf } from './management-employees-core.mjs';
+import { minAnsettelseFra, SCOPE_LINE } from './employee-myjob.mjs';   // Employee Page V1: pure, import-free presentation of the employee's own employment facts
 import { renderEmployeesView } from './management-employees-view.mjs';
 import { renderPayrollView, packageRollupOf, manualTargetFor } from './management-payroll-view.mjs';
 import { planningEconomyFor } from './management-planning-economy.mjs';   // P2: pure planning projection (never stored)
@@ -53,7 +54,7 @@ export const FIXTURE_SHIFTS = [
 // Reason labels (fixture only; the KEY is the stored identity, per Freeze 003 §6.2).
 const REASON_LABELS = {
   FORGOT_CLOCK_IN: 'Glemte å stemple inn', LATE_ARRIVAL: 'Kom for sent',
-  MANAGEMENT_DECISION: 'Ledelsesbeslutning', OTHER: 'Annet (krever notat)',
+  MANAGEMENT_DECISION: 'Etter avtale med leder', OTHER: 'Annet (krever notat)',   // employee wording only; the stored code stays MANAGEMENT_DECISION
   FORGOT_CLOCK_OUT: 'Glemte å stemple ut', LEFT_EARLY: 'Gikk tidlig',
   SICK_DEPARTURE: 'Syk – dro hjem', COVERED_FOR_COLLEAGUE: 'Dekket for kollega',
   APP_UNAVAILABLE: 'Appen var utilgjengelig',
@@ -254,33 +255,39 @@ export function mountEmployeeShell(root) {
     const entry = hero.entry; const p = entry ? entry.projection : null; const att = hero.attendance;
     const started = !!p && nowMs >= p.plannedStartAt;
     const ended = !!p && nowMs >= p.plannedEndAt;
-    let mood = 'calm';                                   // calm | attn | work | pause | done | free
+    let mood = 'calm';                                   // calm | attn | work | pause | done | missing | free
     if (hero.kind === 'free') mood = 'free';
     else if (att && att.status === 'clocked_in') mood = att.breakState === 'on_break' ? 'pause' : 'work';
     else if (att && att.status === 'clocked_out') mood = 'done';
+    else if (hero.kind === 'completed' && hero.missingRegistration) mood = 'missing';   // ended, nothing registered -> attention, never "fullført"
     else if (hero.kind === 'completed') mood = 'done';
     else if (started && !ended) mood = 'attn';           // window running, not clocked in => attention, not calm green
-    const card = el('div', { cls: 'card hero ' + mood });
+    const card = el('div', { cls: 'card hero ' + (mood === 'missing' ? 'attn' : mood) });   // missing registration uses the amber attention treatment
     if (mood === 'free') {
       card.appendChild(el('div', { cls: 'kicker neutral', text: 'I dag' }));
       card.appendChild(el('div', { cls: 'title', text: 'Fri i dag' }));
       card.appendChild(el('div', { cls: 'sub', text: 'Ingen planlagt vakt hos ' + tenantLabel(membership.tenantId) + '. Nyt dagen.' }));
       main.appendChild(card);
     } else {
-      card.appendChild(el('div', { cls: 'kicker' + (mood === 'attn' || mood === 'pause' ? ' amber' : mood === 'done' ? ' neutral' : ''), text: hero.ongoingFromPriorDay ? 'Pågående vakt' : mood === 'done' ? 'Dagens vakt · fullført' : 'Dagens vakt' }));
+      card.appendChild(el('div', { cls: 'kicker' + (mood === 'attn' || mood === 'pause' || mood === 'missing' ? ' amber' : mood === 'done' ? ' neutral' : ''), text: hero.ongoingFromPriorDay ? 'Pågående vakt' : mood === 'done' ? 'Dagens vakt · fullført' : 'Dagens vakt' }));
       const hg = el('div', { cls: 'hero-grid' }); const txt = el('div', { cls: 'txt' }); hg.appendChild(txt);
-      txt.appendChild(el('div', { cls: 'title', text: fmtHM(p.plannedStartAt) + '–' + fmtHM(p.plannedEndAt) + (isOvernight(p, TZ) ? ' (til neste dag)' : '') }));
-      txt.appendChild(el('div', { cls: 'sub', text: tenantLabel(membership.tenantId) + (ROLE_LABELS[p.roleKey] ? ' · ' + ROLE_LABELS[p.roleKey] : '') + (hero.ongoingFromPriorDay ? ' · startet ' + fmtDayShort(p.workDate) : '') }));
+      const timeRange = fmtHM(p.plannedStartAt) + '–' + fmtHM(p.plannedEndAt) + (isOvernight(p, TZ) ? ' (til neste dag)' : '');
+      txt.appendChild(el('div', { cls: 'title', text: mood === 'missing' ? 'Vakten er over' : timeRange }));
+      txt.appendChild(el('div', { cls: 'sub', text: (mood === 'missing' ? timeRange + ' · ' : '') + tenantLabel(membership.tenantId) + (ROLE_LABELS[p.roleKey] ? ' · ' + ROLE_LABELS[p.roleKey] : '') + (hero.ongoingFromPriorDay ? ' · startet ' + fmtDayShort(p.workDate) : '') }));
       // human lead line per state
       if (mood === 'calm' && !started) txt.appendChild(el('div', { cls: 'lead', text: 'Vakten starter kl. ' + fmtHM(p.plannedStartAt) + (p.plannedStartAt - nowMs < 12 * 3600000 ? ' · om ' + fmtDur(Math.round((p.plannedStartAt - nowMs) / 60000)) : '') }));
       if (mood === 'attn') { txt.appendChild(el('div', { cls: 'lead', text: 'Vakten startet kl. ' + fmtHM(p.plannedStartAt) })); txt.appendChild(el('div', { cls: 'note', text: 'Ikke stemplet inn ennå.' })); }
       if (mood === 'work' && !ended) txt.appendChild(el('div', { cls: 'lead', text: 'Ca. ' + fmtDur(Math.max(1, Math.round((p.plannedEndAt - nowMs) / 60000))) + ' til planlagt slutt' }));
       if (mood === 'work' && ended) txt.appendChild(el('div', { cls: 'lead', text: 'Planlagt slutt er passert' }));
       if (mood === 'done') txt.appendChild(el('div', { cls: 'lead', text: 'Takk for i dag.' }));
+      // ended planned shift with NO registration (pure flag from heroShiftFor): honest guidance, no action — the
+      // manager registers/corrects the day; an employee clock-in after the shift ended is never offered here.
+      if (mood === 'missing') { txt.appendChild(el('div', { cls: 'lead', text: 'Ingen arbeidstid er registrert for denne vakten.' })); txt.appendChild(el('div', { cls: 'note', text: 'Ta kontakt med leder for å få registrert eller korrigert arbeidstiden.' })); }
       // status pill (authoritative text)
       let stateText = 'Ikke stemplet inn', stateCls = 'status' + (mood === 'attn' ? ' attn' : '');
       if (att && att.status === 'clocked_in') { stateText = 'Stemplet inn kl. ' + fmtHM(att.observedClockInAt); stateCls = 'status on'; }
       else if (att && att.status === 'clocked_out') { stateText = 'Stemplet ut'; }   // Slice003: all start/end meaning lives in Dagen din
+      else if (mood === 'missing') { stateText = 'Ingen arbeidstid registrert'; stateCls = 'status attn'; }
       else if (hero.kind === 'completed') { stateText = 'Planlagt vakt er over'; }
       if (att && att.breakState === 'on_break') { stateText = 'På pause siden kl. ' + fmtHM(att.openBreakStartedAt); stateCls = 'status pause'; }
       const st = el('div', { cls: stateCls }); st.appendChild(el('span', { cls: 'dot' })); st.appendChild(el('span', { text: stateText })); txt.appendChild(st);
@@ -641,45 +648,68 @@ export function mountEmployeeShell(root) {
     return 'Neste vakt: ' + fmtDayShort(p.workDate) + ' ' + fmtHM(p.plannedStartAt) + '–' + fmtHM(p.plannedEndAt) + (isOvernight(p, TZ) ? ' (til neste dag)' : '');
   }
 
-  function openClockDialog(membership, shift, attId, kind) {
+  // ---- Employee time-action dialogs (owner QA-A): ONE product frame — a Sormena card with
+  // kicker / title / context lines, labelled form rows through the shared #emp-root field styles,
+  // and a two-button action row (confirm = primary, Avbryt = secondary and a NO-WRITE path back
+  // to I dag). Only presentation lives here; every operation call below is unchanged.
+  function dialogFrame(kicker, title, subs) {
     clear(root);
-    const previewMs = Date.now();
+    const card = el('div', { cls: 'card dlg' });
+    card.appendChild(el('div', { cls: 'kicker neutral', text: kicker }));
+    card.appendChild(el('h2', { text: title }));
+    for (const line of (subs || [])) if (line) card.appendChild(el('div', { cls: 'sub', text: line }));
+    root.appendChild(card);
+    return card;
+  }
+  function fieldRow(card, labelText, control) {
+    const row = el('div', { cls: 'form-row' });
+    row.appendChild(el('label', { text: labelText }));
+    row.appendChild(control);
+    card.appendChild(row);
+    return control;
+  }
+  function dialogActions(card, confirmLabel, onConfirm, onCancel) {
+    const acts = el('div', { cls: 'dlg-actions' });
+    const ok = el('button', { cls: 'btn primary', text: confirmLabel, attrs: { type: 'button' } });
+    ok.addEventListener('click', onConfirm);
+    const cancel = el('button', { cls: 'btn secondary', text: 'Avbryt', attrs: { type: 'button' } });
+    cancel.addEventListener('click', onCancel);
+    acts.appendChild(ok); acts.appendChild(cancel);
+    card.appendChild(acts);
+    return ok;
+  }
+  // Reason options for an employee dialog kind — read live from the canonical policy taxonomy
+  // (POLICY.reasonCodes[key].appliesTo); nothing is invented or hidden here.
+  function reasonSelectFor(kind) {
+    const sel = el('select');
+    sel.appendChild(el('option', { text: '— Ingen —', attrs: { value: '' } }));
+    for (const key of Object.keys(POLICY.reasonCodes)) {
+      const cfg = POLICY.reasonCodes[key];
+      if (cfg.appliesTo.includes(kind)) sel.appendChild(el('option', { text: REASON_LABELS[key] || key, attrs: { value: key } }));
+    }
+    return sel;
+  }
+
+  function openClockDialog(membership, shift, attId, kind) {
+    const nowShown = Date.now();   // display only (B9): the observed instant is captured on confirm
     const plannedAt = kind === 'in' ? shift.plannedStartAt : shift.plannedEndAt;
-    root.appendChild(el('h2', { text: kind === 'in' ? 'Stemple inn' : 'Stemple ut', style: 'font-size:18px;margin:0 0 4px' }));
-    root.appendChild(el('div', { text: tenantLabel(shift.tenantId) + ' · planlagt ' + fmtHM(plannedAt), style: 'font-size:13px;color:#666;margin-bottom:12px' }));
-
-    // B9: this is a live PREVIEW, not the recorded observed fact. The observed
-    // timestamp is captured from the single injected action instant on confirmation.
-    root.appendChild(el('div', { text: 'Nå (forhåndsvisning): ' + fmtHM(previewMs) + ' — faktisk observert tidspunkt registreres når du bekrefter.', style: 'font-size:12px;color:#888;margin-bottom:8px' }));
-
-    // declared time (defaults to the observed action time; editable if policy permits)
-    root.appendChild(el('label', { text: 'Faktisk ' + (kind === 'in' ? 'start' : 'slutt') + ':', style: 'display:block;font-size:13px;margin-bottom:4px' }));
-    const timeInput = el('input', { attrs: { type: 'time', value: fmtHM(previewMs) }, style: 'padding:8px;font-size:15px;margin-bottom:12px' });
+    const card = dialogFrame('Dagens vakt', kind === 'in' ? 'Stemple inn' : 'Stemple ut', [
+      tenantLabel(shift.tenantId) + ' · planlagt ' + fmtHM(plannedAt),
+      'Nå: ' + fmtHM(nowShown) + ' · tidspunktet registreres når du bekrefter.',
+    ]);
+    // declared time (defaults to the action time; editable only if policy permits)
+    const timeInput = fieldRow(card, 'Faktisk ' + (kind === 'in' ? 'start' : 'slutt'), el('input', { attrs: { type: 'time', value: fmtHM(nowShown) } }));
     if (POLICY.employeeMayAdjustTime !== true) timeInput.disabled = true;
     let declaredEdited = false;
     timeInput.addEventListener('input', () => { declaredEdited = true; });
-    root.appendChild(timeInput);
-
-    // reason select (only codes valid for this kind) + note
     const reasonKind = kind === 'in' ? 'clock_in' : 'clock_out';
-    root.appendChild(el('label', { text: 'Årsak (kreves ved avvik):', style: 'display:block;font-size:13px;margin-bottom:4px' }));
-    const reasonSel = el('select', { style: 'width:100%;max-width:360px;padding:8px;font-size:15px;margin-bottom:8px' });
-    reasonSel.appendChild(el('option', { text: '— Ingen —', attrs: { value: '' } }));
-    for (const key of Object.keys(POLICY.reasonCodes)) {
-      const cfg = POLICY.reasonCodes[key];
-      if (cfg.appliesTo.includes(reasonKind)) reasonSel.appendChild(el('option', { text: REASON_LABELS[key] || key, attrs: { value: key } }));
-    }
-    root.appendChild(reasonSel);
-    const noteInput = el('input', { attrs: { type: 'text', placeholder: 'Notat (kreves ved «Annet»)' }, style: 'width:100%;max-width:360px;padding:8px;font-size:14px;margin-bottom:10px' });
-    root.appendChild(noteInput);
-
-    const errBox = el('div', { style: 'color:#a33;font-size:13px;min-height:18px;margin-bottom:8px' });
-    root.appendChild(errBox);
-
-    const submit = el('button', { text: kind === 'in' ? 'Bekreft innstempling' : 'Bekreft utstempling', style: 'width:100%;max-width:360px;padding:12px;border:0;border-radius:10px;background:#2e7d46;color:#fff;font-size:15px;font-weight:700;cursor:pointer' });
-    submit.addEventListener('click', () => {
+    const reasonSel = fieldRow(card, 'Årsak (kreves ved avvik)', reasonSelectFor(reasonKind));
+    const noteInput = fieldRow(card, 'Notat (kreves ved «Annet»)', el('input', { attrs: { type: 'text', placeholder: 'Skriv kort hva som skjedde' } }));
+    const errBox = el('div', { cls: 'form-err' });
+    card.appendChild(errBox);
+    dialogActions(card, kind === 'in' ? 'Bekreft innstempling' : 'Bekreft utstempling', () => {
       // B9: ONE injected action instant is both the observed fact and (by default) the
-      // declared time. computeClockTimes never treats an earlier preview as observed.
+      // declared time. computeClockTimes never treats an earlier display value as observed.
       const { observedAt, declaredAt } = computeClockTimes({
         nowMs: Date.now(),
         declaredHM: declaredEdited ? timeInput.value : undefined,
@@ -704,24 +734,21 @@ export function mountEmployeeShell(root) {
       } else {
         errBox.textContent = 'Kunne ikke registrere: ' + res.code;
       }
-    });
-    root.appendChild(submit);
-    root.appendChild(backBtn('Avbryt', () => goToday(membership)));
+    }, () => goToday(membership));
   }
 
-  // ETR-2b: minimal START/END BREAK confirm dialog. Observed break time = the single
-  // injected instant on confirm; no reason prompt here (variance lives on declaration).
+  // ETR-2b: START/END BREAK confirm dialog. Observed break time = the single injected instant
+  // on confirm; no reason prompt here (variance lives on declaration).
   function openBreakDialog(membership, shift, attId, kind) {
-    clear(root);
-    const previewMs = Date.now();
+    const nowShown = Date.now();
     const isStart = kind === 'break_start';
-    root.appendChild(el('h2', { text: isStart ? 'Start pause' : 'Avslutt pause', style: 'font-size:18px;margin:0 0 4px' }));
-    root.appendChild(el('div', { text: tenantLabel(shift.tenantId), style: 'font-size:13px;color:#666;margin-bottom:12px' }));
-    root.appendChild(el('div', { text: 'Nå (forhåndsvisning): ' + fmtHM(previewMs) + ' — faktisk observert tidspunkt registreres når du bekrefter.', style: 'font-size:12px;color:#888;margin-bottom:8px' }));
-    const errBox = el('div', { style: 'color:#a33;font-size:13px;min-height:18px;margin-bottom:8px' });
-    root.appendChild(errBox);
-    const submit = el('button', { text: isStart ? 'Bekreft pausestart' : 'Bekreft pauseslutt', style: 'width:100%;max-width:360px;padding:12px;border:0;border-radius:10px;background:#6a5acd;color:#fff;font-size:15px;font-weight:700;cursor:pointer' });
-    submit.addEventListener('click', () => {
+    const card = dialogFrame('Dagens vakt', isStart ? 'Start pause' : 'Avslutt pause', [
+      tenantLabel(shift.tenantId),
+      'Nå: ' + fmtHM(nowShown) + ' · tidspunktet registreres når du bekrefter.',
+    ]);
+    const errBox = el('div', { cls: 'form-err' });
+    card.appendChild(errBox);
+    dialogActions(card, isStart ? 'Bekreft pausestart' : 'Bekreft pauseslutt', () => {
       const now = Date.now();   // single injected action instant = observed break time
       const actor = actorFromMembership(membership);
       const scope = { tenantId: membership.tenantId };
@@ -731,37 +758,24 @@ export function mountEmployeeShell(root) {
         : endBreak({ actor, existing, scope }, now, POLICY);
       if (res.ok) { attendanceStore.set(attId, res.attendance); goToday(membership); return; }
       errBox.textContent = 'Kunne ikke registrere: ' + res.code;
-    });
-    root.appendChild(submit);
-    root.appendChild(backBtn('Avbryt', () => goToday(membership)));
+    }, () => goToday(membership));
   }
 
   // ETR-2b: dedicated employee break DECLARATION. Observed total is shown as reference
   // only; the declared minutes are an explicit employee entry (never auto-filled from
   // observed). Reason prompt follows B13-B16 via the core variance gate.
   function openDeclareBreakDialog(membership, shift, attId) {
-    clear(root);
     const att = attendanceStore.get(attId);
-    root.appendChild(el('h2', { text: 'Registrer pausetid', style: 'font-size:18px;margin:0 0 4px' }));
-    root.appendChild(el('div', { text: tenantLabel(shift.tenantId) + ' · forventet ' + POLICY.expectedBreakMinutes + ' min', style: 'font-size:13px;color:#666;margin-bottom:8px' }));
-    root.appendChild(el('div', { text: 'Observert (kun referanse): ' + (att ? att.observedBreakMinutesTotal : 0) + ' min', style: 'font-size:12px;color:#888;margin-bottom:8px' }));
-    root.appendChild(el('label', { text: 'Din oppgitte totale pausetid (minutter):', style: 'display:block;font-size:13px;margin-bottom:4px' }));
-    const minInput = el('input', { attrs: { type: 'number', min: '0', step: '1', placeholder: 'minutter' }, style: 'width:100%;max-width:360px;padding:8px;font-size:15px;margin-bottom:12px' });
-    root.appendChild(minInput);
-    root.appendChild(el('label', { text: 'Årsak (kreves ved avvik):', style: 'display:block;font-size:13px;margin-bottom:4px' }));
-    const reasonSel = el('select', { style: 'width:100%;max-width:360px;padding:8px;font-size:15px;margin-bottom:8px' });
-    reasonSel.appendChild(el('option', { text: '— Ingen —', attrs: { value: '' } }));
-    for (const key of Object.keys(POLICY.reasonCodes)) {
-      const cfg = POLICY.reasonCodes[key];
-      if (cfg.appliesTo.includes('break')) reasonSel.appendChild(el('option', { text: REASON_LABELS[key] || key, attrs: { value: key } }));
-    }
-    root.appendChild(reasonSel);
-    const noteInput = el('input', { attrs: { type: 'text', placeholder: 'Notat (kreves ved «Annet»)' }, style: 'width:100%;max-width:360px;padding:8px;font-size:14px;margin-bottom:10px' });
-    root.appendChild(noteInput);
-    const errBox = el('div', { style: 'color:#a33;font-size:13px;min-height:18px;margin-bottom:8px' });
-    root.appendChild(errBox);
-    const submit = el('button', { text: 'Bekreft pausetid', style: 'width:100%;max-width:360px;padding:12px;border:0;border-radius:10px;background:#2e7d46;color:#fff;font-size:15px;font-weight:700;cursor:pointer' });
-    submit.addEventListener('click', () => {
+    const card = dialogFrame('Dagens vakt', 'Registrer pausetid', [
+      tenantLabel(shift.tenantId) + ' · forventet ' + POLICY.expectedBreakMinutes + ' min',
+      'Registrert pause så langt: ' + (att ? att.observedBreakMinutesTotal : 0) + ' min (kun til orientering)',
+    ]);
+    const minInput = fieldRow(card, 'Din oppgitte totale pausetid (minutter)', el('input', { attrs: { type: 'number', min: '0', step: '1', placeholder: 'minutter' } }));
+    const reasonSel = fieldRow(card, 'Årsak (kreves ved avvik)', reasonSelectFor('break'));
+    const noteInput = fieldRow(card, 'Notat (kreves ved «Annet»)', el('input', { attrs: { type: 'text', placeholder: 'Skriv kort hva som skjedde' } }));
+    const errBox = el('div', { cls: 'form-err' });
+    card.appendChild(errBox);
+    dialogActions(card, 'Bekreft pausetid', () => {
       const now = Date.now();
       const raw = (minInput.value || '').trim();
       if (raw === '' || !/^\d+$/.test(raw)) { errBox.textContent = 'Oppgi et helt antall minutter (0 eller mer).'; return; }
@@ -778,18 +792,34 @@ export function mountEmployeeShell(root) {
       } else {
         errBox.textContent = 'Kunne ikke registrere: ' + res.code;
       }
-    });
-    root.appendChild(submit);
-    root.appendChild(backBtn('Avbryt', () => goToday(membership)));
+    }, () => goToday(membership));
   }
 
   function goMyWork(membership) {
     current = membership; setChrome(membership, 'work');
     clear(root);
+    const today = tenantWorkDate(Date.now(), TZ);
+    const e = employeeOf(employeeStore(), membership.tenantId, membership.ansattId);
+    const facts = minAnsettelseFra({
+      terms: e ? currentTermsOf(e, today) : null,
+      startDate: e ? startDateOf(e) : null,
+      contractStatus: e ? contractStatusOf(e) : null,
+      roleLabels: ROLE_LABELS,
+    });
     const wrap = el('div', { cls: 'card', style: 'max-width:640px' });
     wrap.appendChild(el('div', { cls: 'kicker neutral', text: 'Jobb & økonomi' }));
-    wrap.appendChild(el('h2', { text: 'Kommer senere' }));
-    wrap.appendChild(el('div', { text: 'Lønn, skatt, feriepenger, dokumenter og økonomitall vises ikke her ennå.', style: 'color:#5f6b62;font-size:14px' }));
+    wrap.appendChild(el('h2', { text: 'Min ansettelse' }));
+    wrap.appendChild(el('div', { text: (e ? e.name + ' · ' : '') + tenantLabel(membership.tenantId), style: 'color:#5f6b62;font-size:14px;margin-bottom:10px' }));
+    for (const r of facts.rows) {
+      // existing employee-row surface (shared styles): label muted, value bold, missing as a neutral pill
+      const row = el('div', { cls: 'emp-row static' });   // read-only: no hover affordance (owner QA-D)
+      const top = el('div', { cls: 'top' });
+      top.appendChild(el('span', { cls: 'sub', text: r.label }));
+      top.appendChild(r.missing ? el('span', { cls: 'st', text: r.value }) : el('span', { cls: 'nm', text: r.value }));
+      row.appendChild(top);
+      wrap.appendChild(row);
+    }
+    wrap.appendChild(el('div', { text: SCOPE_LINE, style: 'color:#5f6b62;font-size:14px;margin-top:10px' }));
     root.appendChild(wrap);
     root.appendChild(backBtn('← Tilbake til i dag', () => goToday(membership)));
   }
@@ -806,8 +836,7 @@ export function mountEmployeeShell(root) {
     renderScheduleView(planRoot, {
       membership, tenantLabel: tenantLabel(membership.tenantId), shifts,
       nowMs: Date.now(), timezone: TZ, roleLabels: ROLE_LABELS,
-      onBack: () => goToday(membership),
-    });
+    });   // no onBack: the single back control is placed by the shell AFTER Ledige vakter (owner QA-C)
     // ---- LEDIGE VAKTER: eligible open shifts from the SAME shared store; "Ta vakten" goes
     // through the single claim operation boundary and fails closed if the shift is taken. ----
     const store = scheduleStore();
@@ -845,6 +874,8 @@ export function mountEmployeeShell(root) {
     }
     card.appendChild(errBox);
     ledigeRoot.appendChild(card);
+    // ONE terminal back control after all Plan content; clock state is untouched on return.
+    root.appendChild(backBtn('← Tilbake til i dag', () => goToday(membership)));
   }
 
   // ---- VAKTPLAN (ledelse): manager Uke/Måned planner over the SAME schedule store ------------
