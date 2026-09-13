@@ -27,7 +27,9 @@ function fmtDate(wd) {
   const [y, m, d] = wd.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d, 12)).toLocaleDateString('nb-NO', { timeZone: 'UTC', day: 'numeric', month: 'short' });
 }
-const fmtH = (h) => (h == null ? '–' : h.toLocaleString('nb-NO', { maximumFractionDigits: 2 }) + ' t');
+export const fmtH = (h) => (h == null ? '–' : h.toLocaleString('nb-NO', { maximumFractionDigits: 2 }) + ' t');
+export const fmtKr = (v) => 'kr ' + Math.round(v).toLocaleString('nb-NO');
+const round2 = (v) => Math.round(v * 100) / 100;
 // Canonical operation-level workDate shape (YYYY-MM-DD). Anything else is an incomplete/foreign
 // value from a native control and is never handed to the resolver.
 const ISO_WORKDATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -91,6 +93,60 @@ export function tidligerePlanlagteUtenRegistrering(unionRows, todayWorkDate) {
   const today = typeof todayWorkDate === 'string' ? todayWorkDate : '';
   if (!today) return 0;
   return (Array.isArray(unionRows) ? unionRows : []).filter((u) => u && u.kind === 'planned_only' && typeof u.workDate === 'string' && u.workDate < today).length;
+}
+// OVERSIKT V1 shared seam — THE month-level composition, lifted unchanged from the P2
+// drawMonthCards so that Lønn & økonomi's five cards and the Ledelse Oversikt cockpit read ONE
+// set of facts. Inputs are exactly what the view already holds: the SHOWN package rows (the live
+// draft, or the frozen approved snapshot — the caller chooses precisely as before), the shell's
+// read-only planned-shift projection, the period, the live P2 planning projection and
+// business-local today. Presentation sums + the owner-corrected past-only rule only; nothing is
+// stored and no truth is re-derived. Pure and exported for both renderers and the battery.
+export function monthFactsOf({ rows, plannedFor = () => [], periodId, planning, todayWorkDate, frozen = false }) {
+  rows = Array.isArray(rows) ? rows : [];
+  const p = planning || null;
+  // 3–4: the payroll projection's own per-row facts, composed for the month (presentation sum only).
+  const actualHours = round2(rows.reduce((s, r) => s + (r.payload.actualHours || 0), 0));
+  const approvedHours = round2(rows.reduce((s, r) => s + (r.payload.approvedHours || 0), 0));
+  // 5: existing findings + the P1 union fact, narrowed to PAST planned days without registration
+  // (owner ruling: today and future never inflate this historical action number).
+  const rollup = packageRollupOf(rows);
+  let plannedDays = 0;
+  const implicated = [];
+  for (const r of rows) {
+    const past = tidligerePlanlagteUtenRegistrering(dagerIPerioden({ plannedShifts: plannedFor(r.ansattId), days: r.payload.days, periodId }), todayWorkDate);
+    plannedDays += past;
+    if (past > 0 || statusChipFor(r.exceptions).key !== 'klar') implicated.push(r.ansattId);
+  }
+  const parts = [];
+  if (rollup.hardCount) parts.push(rollup.hardCount + ' må rettes');
+  if (rollup.warnCount) parts.push(rollup.warnCount + ' se over');
+  if (plannedDays) parts.push(plannedDays + (plannedDays === 1 ? ' tidligere planlagt dag uten registrering' : ' tidligere planlagte dager uten registrering'));
+  // 2: the labelled estimate with its named coverage and exclusions (P2 wording, unchanged).
+  let estimate = null;
+  if (p) {
+    const fixed = p.estimate.exclusions.filter((x) => x.reason === 'fastlonn');
+    const missing = p.estimate.exclusions.filter((x) => x.reason !== 'fastlonn');
+    estimate = {
+      kr: p.estimate.kr, label: p.estimate.label, coveredCount: p.estimate.coveredCount, totalCount: p.estimate.totalCount,
+      coverageLine: p.estimate.coverageLine,
+      subs: [
+        p.estimate.coverageLine,
+        fixed.length ? fixed.map((x) => x.name).join(', ') + ': ' + fixed[0].label : null,
+        missing.length ? missing.map((x) => x.name).join(', ') + ': ' + missing[0].label : null,
+      ].filter(Boolean),
+    };
+  }
+  return {
+    periodId, frozen: !!frozen,
+    plannedHoursTotal: p ? p.plannedHoursTotal : null,
+    estimate,
+    actualHours, approvedHours,
+    chip: rollup.chip, hardCount: rollup.hardCount, warnCount: rollup.warnCount, counts: rollup.counts,
+    pastPlannedDaysWithoutRegistration: plannedDays,
+    actionCount: rollup.hardCount + rollup.warnCount + plannedDays,
+    actionParts: parts,
+    employeesNeedingAction: implicated,
+  };
 }
 // Day-row date: "man. 4. aug." — Norwegian, never MM/DD.
 export function fmtDagRad(wd) {
@@ -230,8 +286,6 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
   // P2: the pure planning-economy projection for the viewed period — recomputed per draw, LIVE even
   // when a frozen payroll version is on screen (estimates are never frozen), never stored here.
   let planningNow = null;
-  const fmtKr = (v) => 'kr ' + Math.round(v).toLocaleString('nb-NO');
-  const r2 = (v) => Math.round(v * 100) / 100;
   const isFrozenPeriod = (pid) => versionsOf(payrollStore, tenantId, pid).some((v) => v.status === PACKAGE_STATUS.APPROVED || v.status === PACKAGE_STATUS.SENT);
   const FROZEN_NOTE = 'Perioden er godkjent og frosset. Bruk «Lag korrigert versjon» før ny tid kan tas inn i lønnsgrunnlaget.';
 
@@ -315,33 +369,16 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
       wrap.appendChild(c);
     };
     const p = planningNow;
+    // Oversikt V1 seam: ONE composition — monthFactsOf — feeds these five cards AND the Ledelse
+    // Oversikt cockpit. Same shown rows (live or frozen snapshot), same planned-shift projection,
+    // same live planning projection, same business-local today; the cards only format.
+    const f = monthFactsOf({ rows, plannedFor, periodId, planning: p, todayWorkDate, frozen });
     card('Planlagte timer', p ? fmtH(p.plannedHoursTotal) : '–', ['planlagt bemanning fra Vaktplan']);
-    if (p) {
-      const fixed = p.estimate.exclusions.filter((x) => x.reason === 'fastlonn');
-      const missing = p.estimate.exclusions.filter((x) => x.reason !== 'fastlonn');
-      card('Estimert planlagt kostnad', (p.estimate.coveredCount ? fmtKr(p.estimate.kr) : '–') + ' ' + p.estimate.label, [
-        p.estimate.coverageLine,
-        fixed.length ? fixed.map((x) => x.name).join(', ') + ': ' + fixed[0].label : null,
-        missing.length ? missing.map((x) => x.name).join(', ') + ': ' + missing[0].label : null,
-      ]);
-    } else {
-      card('Estimert planlagt kostnad', '– (estimat)', ['ingen planprojeksjon tilgjengelig']);
-    }
-    // 3–4: the payroll projection's own per-row facts, composed for the month (presentation sum only).
-    const actual = r2(rows.reduce((s, r) => s + (r.payload.actualHours || 0), 0));
-    const approved = r2(rows.reduce((s, r) => s + (r.payload.approvedHours || 0), 0));
-    card('Faktiske timer', fmtH(actual) + ' registrert', [frozen ? 'fra frosset versjon' : 'fra registrert tid']);
-    card('Godkjente timer', fmtH(approved) + ' godkjent', null);
-    // 5: existing findings + the P1 union fact, narrowed to PAST planned days without registration
-    // (owner ruling: today and future never inflate this historical action number).
-    const rollup = packageRollupOf(rows);
-    let plannedDays = 0;
-    for (const r of rows) plannedDays += tidligerePlanlagteUtenRegistrering(dagerIPerioden({ plannedShifts: plannedFor(r.ansattId), days: r.payload.days, periodId }), todayWorkDate);
-    const parts = [];
-    if (rollup.hardCount) parts.push(rollup.hardCount + ' må rettes');
-    if (rollup.warnCount) parts.push(rollup.warnCount + ' se over');
-    if (plannedDays) parts.push(plannedDays + (plannedDays === 1 ? ' tidligere planlagt dag uten registrering' : ' tidligere planlagte dager uten registrering'));
-    card('Krever handling', String(rollup.hardCount + rollup.warnCount + plannedDays), parts.length ? parts : ['ingenting krever handling']);
+    if (p) card('Estimert planlagt kostnad', (p.estimate.coveredCount ? fmtKr(p.estimate.kr) : '–') + ' ' + p.estimate.label, f.estimate.subs);
+    else card('Estimert planlagt kostnad', '– (estimat)', ['ingen planprojeksjon tilgjengelig']);
+    card('Faktiske timer', fmtH(f.actualHours) + ' registrert', [frozen ? 'fra frosset versjon' : 'fra registrert tid']);
+    card('Godkjente timer', fmtH(f.approvedHours) + ' godkjent', null);
+    card('Krever handling', String(f.actionCount), f.actionParts.length ? f.actionParts : ['ingenting krever handling']);
     root.appendChild(wrap);
   }
 

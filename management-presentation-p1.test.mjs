@@ -141,7 +141,11 @@ t('P2-7a', 'past planned_only days count; today and future do not; both/actual_o
   assert.equal(tidligerePlanlagteUtenRegistrering([], today), 0);
 });
 t('P2-7b', 'the KREVER HANDLING card composes the past-only count with business-local today; wording says tidligere; hard/warn untouched', () => {
-  const cards = viewSrc.slice(viewSrc.indexOf('function drawMonthCards('), viewSrc.indexOf('function drawCalendar('));
+  // Oversikt V1 moved the composition into the exported monthFactsOf seam; the cards only format it.
+  const cards = viewSrc.slice(viewSrc.indexOf('export function monthFactsOf('), viewSrc.indexOf('// Day-row date'));
+  const drawn = viewSrc.slice(viewSrc.indexOf('function drawMonthCards('), viewSrc.indexOf('function drawCalendar('));
+  assert.ok(drawn.includes('monthFactsOf({ rows, plannedFor, periodId, planning: p, todayWorkDate, frozen })'), 'the cards read the shared seam');
+  assert.ok(!/\.reduce\(|planned_only|packageRollupOf\(/.test(drawn), 'no composition left in the card renderer');
   assert.ok(cards.includes("tidligerePlanlagteUtenRegistrering(dagerIPerioden({ plannedShifts: plannedFor(r.ansattId), days: r.payload.days, periodId }), todayWorkDate)"));
   assert.ok(!cards.includes(".filter((u) => u.kind === 'planned_only').length"), 'the unfiltered union count no longer feeds the card');
   assert.ok(cards.includes("' tidligere planlagt dag uten registrering'") && cards.includes("' tidligere planlagte dager uten registrering'"));

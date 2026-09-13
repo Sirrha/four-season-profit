@@ -330,6 +330,30 @@
     .lede-content { display:block; }
     .lede-ovcard { display:block; width:100%; text-align:left; cursor:pointer; font-family:inherit; }
     .lede-ovvalue { font-size:19px; font-weight:800; color:var(--text); margin:2px 0 2px; }
+    /* Oversikt V1 — owner cockpit: compact action rows, today lines, grouped facts */
+    .ov-sec { padding:14px 16px; margin-bottom:10px; }
+    .ov-sec .kicker { margin-bottom:6px; }
+    .ov-row { display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; min-height:40px; text-align:left; background:#fff; border:1px solid var(--line); border-radius:10px; padding:7px 11px; margin-top:5px; font:inherit; font-size:13.5px; font-weight:600; line-height:1.3; color:var(--text); cursor:pointer; }
+    .ov-row:hover { border-color:var(--green-line); }
+    .ov-row .chev { color:var(--faint); font-weight:800; font-size:16px; line-height:1; }
+    .ov-row.hard { border-color:#efc3bf; background:var(--red-pale); }
+    .ov-row.warn { border-color:var(--amber-line); background:var(--amber-pale); }
+    .ov-row.go { margin-top:8px; }
+    .ov-empty { color:var(--muted); font-size:14px; }
+    /* I dag: one stable row = name | planned time | state pill (desktop); stacked name/time with the pill at the right on narrow screens */
+    .ov-dag { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) auto; gap:4px 12px; align-items:center; padding:7px 0; border-top:1px solid var(--line); }
+    .ov-dag:first-of-type { border-top:0; }
+    .ov-dag .who { font-weight:700; font-size:14px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .ov-dag .when { color:var(--muted); font-size:13px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .ov-state { justify-self:end; font-size:12px; font-weight:700; padding:3px 10px; border-radius:999px; background:#f1f2ef; color:var(--muted); white-space:nowrap; line-height:1.4; }
+    .ov-state.on { background:var(--green-pale); color:var(--green-deep); }
+    .ov-state.pause, .ov-state.open { background:var(--amber-pale); color:var(--amber); }
+    @media (max-width:560px) { .ov-dag { grid-template-columns:1fr auto; } .ov-dag .when { grid-column:1; } .ov-dag .ov-state { grid-column:2; grid-row:1 / span 2; } }
+    .ov-fact { display:grid; grid-template-columns:1fr auto; gap:2px 12px; padding:7px 0; border-top:1px solid var(--line); font-size:14px; }
+    .ov-fact:first-of-type { border-top:0; }
+    .ov-fact .k { color:var(--muted); }
+    .ov-fact .v { font-weight:800; text-align:right; white-space:nowrap; }
+    .ov-fact .s { grid-column:1 / -1; font-size:12px; color:var(--muted); }
     /* Lønnsgrunnlag: inline expandable employee rows + three-level status chip */
     .lg-row { border-bottom:1px solid var(--line); }
     .lg-row:last-child { border-bottom:0; }

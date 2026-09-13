@@ -24,8 +24,9 @@ import { canOpenVaktplan, openShiftsOf, isEligible, applyScheduleOperation, shif
 import { seedFourSeasonEmployees, vaktplanPeopleFrom, canViewEmployees, employeesOf, employeeOf, startDateOf, missingInfoOf, currentTermsOf, contractStatusOf } from './management-employees-core.mjs';
 import { minAnsettelseFra, SCOPE_LINE } from './employee-myjob.mjs';   // Employee Page V1: pure, import-free presentation of the employee's own employment facts
 import { renderEmployeesView } from './management-employees-view.mjs';
-import { renderPayrollView, packageRollupOf, manualTargetFor } from './management-payroll-view.mjs';
+import { renderPayrollView, packageRollupOf, manualTargetFor, monthFactsOf, fmtH, fmtKr } from './management-payroll-view.mjs';
 import { planningEconomyFor } from './management-planning-economy.mjs';   // P2: pure planning projection (never stored)
+import { dagensBildeFra, ansattFaktaFra, oppmerksomhetFra, EMPTY_ATTENTION } from './management-oversikt.mjs';   // Oversikt V1: pure, import-free composition
 import { createPayrollStore, buildPayrollPackage, versionsOf, periodLabel } from './management-payroll-core.mjs';
 
 const POLICY = ETR2A_POLICY;
@@ -989,51 +990,121 @@ export function mountEmployeeShell(root) {
     exit.addEventListener('click', goChooser);
     root.appendChild(exit);
   }
-  // ---- OVERSIKT v1 (3A §1.3): exactly three derived cards, each a DOORWAY to its tab.
-  // Every number below is read from an EXISTING derivation — this front door computes nothing
-  // of its own, carries no economy widget, no chart and no invented deadline.
-  function drawOversikt(host) {
+  // ---- OVERSIKT V1 — owner cockpit (Sirrha OVERSIKT-V1-OWNER-COCKPIT-BUILD-RELEASE-001) ------
+  // "Hva skjer i virksomheten min, og hva trenger meg?" — attention first, then today, then the
+  // month's payroll facts, then people. READ-ONLY composition over the SAME projections the tabs
+  // draw: the shell fetches them here exactly as the tabs do, management-oversikt.mjs turns them
+  // into rows, and the payroll facts come from the ONE shared composition (monthFactsOf) that
+  // Lønn & økonomi's cards use. Nothing on this page sums, stores or infers anything of its own.
+  function oversiktFacts() {
     const today = tenantWorkDate(Date.now(), TZ);
+    const T = FOUR_SEASON_TENANT.tenantId;
     const tabs = ledelseTabs().map((t) => t.key);
+    const out = { today, tabs, dag: null, lonn: null, ansatte: null };
     if (tabs.includes('vaktplan')) {
-      // managerWeekFor is the EXISTING Vaktplan week projection; today's assigned cells are read
-      // straight out of its per-person day rows, and open shifts from the existing openShiftsOf.
-      const week = managerWeekFor({ anchorWorkDate: today, timezone: TZ, container: scheduleStore(), tenantId: FOUR_SEASON_TENANT.tenantId, people: vaktplanPeople(), todayWorkDate: today });
-      let assigned = 0;
-      for (const r of (week && week.rows ? week.rows : [])) {
-        const cell = (r.days || []).find((d) => d.workDate === today);
-        if (cell) assigned += (cell.shifts || []).filter((s) => s.projection.status === 'assigned').length;
-      }
-      const open = openShiftsOf(scheduleStore(), FOUR_SEASON_TENANT.tenantId).filter((s) => s.projection.workDate === today).length;
-      host.appendChild(oversiktCard('Vaktplan i dag',
-        assigned + (assigned === 1 ? ' vakt' : ' vakter') + (open ? ' · ' + open + ' åpen' : ''),
-        'Fra dagens vaktplan.', () => goLedelse('vaktplan')));
+      // managerWeekFor / openShiftsOf are the EXISTING Vaktplan projections; the attendance read is
+      // the same attendanceStore.get(attendanceIdFor(...)) the employee home and Vaktplan deps use.
+      const people = vaktplanPeople();
+      const week = managerWeekFor({ anchorWorkDate: today, timezone: TZ, container: scheduleStore(), tenantId: T, people, todayWorkDate: today });
+      out.dag = dagensBildeFra({ week, openShifts: openShiftsOf(scheduleStore(), T), today, people, lookup: (shiftId, ansattId) => attendanceStore.get(attendanceIdFor(shiftId, ansattId)) || null, fmtHM, roleLabels: ROLE_LABELS });
     }
     if (tabs.includes('ansatte')) {
-      const emps = employeesOf(employeeStore(), FOUR_SEASON_TENANT.tenantId);
-      const incomplete = emps.filter((e) => missingInfoOf(e, today).length > 0).length;
-      host.appendChild(oversiktCard('Ansatte',
-        incomplete === 0 ? emps.length + ' ansatte · alt utfylt' : incomplete + ' mangler opplysninger',
-        'Fra den eksisterende mangler-informasjon-merkingen.', () => goLedelse('ansatte')));
+      out.ansatte = ansattFaktaFra(employeesOf(employeeStore(), T).map((e) => ({ ansattId: e.ansattId, name: e.name, status: e.status, missing: missingInfoOf(e, today) })));
     }
     if (tabs.includes('lonn')) {
-      const periodId = LG_STATE.periodId || today.slice(0, 7);
-      const pkg = buildPayrollPackage({ employeeStore: employeeStore(), scheduleStore: scheduleStore(), attendanceStore, tenantId: FOUR_SEASON_TENANT.tenantId, periodId, generatedAt: Date.now(), todayWorkDate: today });
-      const approved = versionsOf(payrollStore(), FOUR_SEASON_TENANT.tenantId, periodId).find((v) => v.status === 'godkjent' || v.status === 'sendt');
-      const rollup = packageRollupOf(pkg.rows);
-      const line = approved ? (approved.status === 'sendt' ? 'Sendt' : 'Godkjent v' + approved.version) : (rollup.counts ? rollup.chip.label + ' · ' + rollup.counts : rollup.chip.label);
-      host.appendChild(oversiktCard('Lønnsgrunnlag · ' + periodLabel(periodId), line,
-        pkg.calendar.configured ? 'Frist ' + pkg.calendar.targetDate : pkg.calendar.label, () => goLedelse('lonn')));
+      const periodId = today.slice(0, 7);   // the CURRENT period
+      const pkg = buildPayrollPackage({ employeeStore: employeeStore(), scheduleStore: scheduleStore(), attendanceStore, tenantId: T, periodId, generatedAt: Date.now(), todayWorkDate: today });
+      // Frozen behaviour mirrors Lønn & økonomi's draw(): an approved/sent version shows ITS OWN
+      // snapshot rows; the planning projection stays live (estimates are never frozen).
+      const approved = versionsOf(payrollStore(), T, periodId).find((v) => v.status === 'godkjent' || v.status === 'sendt') || null;
+      const rows = approved ? approved.snapshot.rows : pkg.rows;
+      out.lonn = {
+        periodId, label: periodLabel(periodId), approved, calendar: pkg.calendar,
+        facts: monthFactsOf({ rows, plannedFor: plannedShiftsForPayroll, periodId, planning: planningEconomyForPeriod(periodId), todayWorkDate: today, frozen: !!approved }),
+      };
+    }
+    return out;
+  }
+  // Navigation = the existing Ledelse tab seam plus the shell-held tab state; no router, no URL.
+  function goOversiktTarget(target, f, openEmployee) {
+    if (target === 'lonn' && f.lonn) { LG_STATE.periodId = f.lonn.periodId; LG_STATE.openEmployee = openEmployee || null; goLedelse('lonn'); }
+    else if (target === 'vaktplan') { VP_STATE.offset = 0; goLedelse('vaktplan'); }   // offset 0 = the week holding today
+    else goLedelse('ansatte');
+  }
+  function drawOversikt(host) {
+    const f = oversiktFacts();
+    // 1. KREVER DIN OPPMERKSOMHET — compact action rows, or the honest empty state.
+    const items = oppmerksomhetFra({ monthFacts: f.lonn ? f.lonn.facts : null, periodLabel: f.lonn ? f.lonn.label : '', ansatte: f.ansatte, openTodayCount: f.dag ? f.dag.openCount : 0 });
+    const s1 = ovSection('Krever din oppmerksomhet');
+    if (!items.length) s1.appendChild(el('div', { cls: 'ov-empty', text: EMPTY_ATTENTION }));
+    for (const it of items) s1.appendChild(ovRow(it.text, it.tone, () => goOversiktTarget(it.target, f, it.openEmployee)));
+    host.appendChild(s1);
+    // 2. I DAG — one line per assigned shift with the attendance state the record carries.
+    if (f.dag) {
+      const s2 = ovSection('I dag · ' + fmtDayShort(f.today));
+      if (!f.dag.assigned.length && !f.dag.open.length) s2.appendChild(el('div', { cls: 'ov-empty', text: 'Ingen planlagte vakter i dag.' }));
+      for (const l of f.dag.assigned) {   // one scan line: name | planned time | attendance state (owner visual B)
+        const row = el('div', { cls: 'ov-dag' });
+        row.appendChild(el('div', { cls: 'who', text: l.name }));
+        row.appendChild(el('div', { cls: 'when', text: l.time }));
+        row.appendChild(el('div', { cls: 'ov-state ' + l.state.key, text: l.state.text }));
+        s2.appendChild(row);
+      }
+      for (const o of f.dag.open) {
+        const row = el('div', { cls: 'ov-dag' });
+        row.appendChild(el('div', { cls: 'who', text: 'Åpen vakt' + (o.role ? ' · ' + o.role : '') }));
+        row.appendChild(el('div', { cls: 'when', text: o.time }));
+        row.appendChild(el('div', { cls: 'ov-state open', text: 'Ikke tildelt' }));
+        s2.appendChild(row);
+      }
+      s2.appendChild(ovRow('Åpne Vaktplan for i dag', 'go', () => goOversiktTarget('vaktplan', f)));
+      host.appendChild(s2);
+    }
+    // 3. LØNNSGRUNNLAG · <current month> — the same facts as the Lønn & økonomi cards.
+    if (f.lonn) {
+      const L = f.lonn, m = L.facts, a = L.approved;
+      const s3 = ovSection('Lønnsgrunnlag · ' + L.label);
+      s3.appendChild(ovFact('Status', a ? (a.status === 'sendt' ? 'Sendt' : 'Godkjent v' + a.version) : 'Utkast · ' + m.chip.label, L.calendar.configured ? 'Frist ' + L.calendar.targetDate : L.calendar.label));
+      s3.appendChild(ovFact('Planlagte timer', m.plannedHoursTotal == null ? '–' : fmtH(m.plannedHoursTotal), 'planlagt bemanning fra Vaktplan'));
+      // Oversikt summarises (owner visual C): headline + the existing coverage line from the same seam; the named
+      // exclusions stay where the detail lives, in Lønn & økonomi (monthFactsOf.estimate.subs, unchanged there).
+      s3.appendChild(ovFact('Estimert planlagt kostnad', m.estimate ? ((m.estimate.coveredCount ? fmtKr(m.estimate.kr) : '–') + ' ' + m.estimate.label) : '– (estimat)', m.estimate ? m.estimate.coverageLine : 'ingen planprojeksjon tilgjengelig'));
+      s3.appendChild(ovFact('Faktiske timer', fmtH(m.actualHours), m.frozen ? 'fra frosset versjon' : 'fra registrert tid'));
+      s3.appendChild(ovFact('Godkjente timer', fmtH(m.approvedHours), null));
+      s3.appendChild(ovFact('Krever handling', String(m.actionCount), m.actionParts.length ? m.actionParts.join(' · ') : 'ingenting krever handling'));
+      s3.appendChild(ovRow('Åpne Lønn & økonomi', 'go', () => goOversiktTarget('lonn', f)));
+      host.appendChild(s3);
+    }
+    // 4. ANSATTE — counts from the existing missing-info classification only.
+    if (f.ansatte) {
+      const A = f.ansatte;
+      const s4 = ovSection('Ansatte');
+      s4.appendChild(ovFact('Aktive ansatte', String(A.active), null));
+      s4.appendChild(ovFact('Alt utfylt', A.complete + ' av ' + A.total, null));
+      s4.appendChild(ovFact('Mangler opplysninger', String(A.incomplete), A.categories.length ? A.categories.map((c) => c.count + ' ' + c.label).join(' · ') : null));
+      s4.appendChild(ovRow('Åpne Ansatte', 'go', () => goOversiktTarget('ansatte', f)));
+      host.appendChild(s4);
     }
     host.appendChild(el('div', { cls: 'vp-note', text: 'Oversikten viser eksisterende status fra de samme kildene som fanene – ingen egne beregninger.' }));
   }
-  function oversiktCard(title, value, sub, onOpen) {
-    const b = el('button', { cls: 'card lede-ovcard', attrs: { type: 'button' } });
-    b.appendChild(el('div', { cls: 'kicker neutral', text: title }));
-    b.appendChild(el('div', { cls: 'lede-ovvalue', text: value }));
-    if (sub) b.appendChild(el('div', { cls: 'sub', text: sub }));
+  function ovSection(title) {
+    const c = el('div', { cls: 'card ov-sec' });
+    c.appendChild(el('div', { cls: 'kicker neutral', text: title }));
+    return c;
+  }
+  function ovRow(text, tone, onOpen) {
+    const b = el('button', { cls: 'ov-row' + (tone ? ' ' + tone : ''), attrs: { type: 'button' } });
+    b.appendChild(el('span', { text }));
+    b.appendChild(el('span', { cls: 'chev', text: '›' }));
     b.addEventListener('click', onOpen);
     return b;
+  }
+  function ovFact(label, value, sub) {
+    const r = el('div', { cls: 'ov-fact' });
+    r.appendChild(el('div', { cls: 'k', text: label }));
+    r.appendChild(el('div', { cls: 'v', text: value }));
+    if (sub) r.appendChild(el('div', { cls: 's', text: sub }));
+    return r;
   }
   function mountVaktplan(host) {
     // Same module, same people/deps derivation as the standalone destination used — only the
