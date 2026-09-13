@@ -1,6 +1,130 @@
 # System-inventar — Four Season AS
 
-## MÅLT SJEKKPUNKT — 2026-09-12 (gjeldende tilstand, les først)
+## MÅLT SJEKKPUNKT — 2026-09-13 (gjeldende tilstand, les først)
+
+<!--
+  Denne seksjonen OVERSTYRER «MÅLT SJEKKPUNKT 2026-09-12» under der de er i
+  konflikt (HEAD-anker, Oversikt-status, arbeidstre). 2026-09-12-seksjonen
+  beholdes som historikk (Ansattside V1-aksepten der står fortsatt). Faktabasis:
+  eierens visuelle aksept av Ledelse → Oversikt V1 (review-/aksepthendelse
+  2026-09-12 kveld etter den avgrensede presentasjonskorreksjonen) og den
+  aksepterte sjekkpunkt-committen OVERSIKT-V1-OWNER-ACCEPTED-CHECKPOINT-COMMIT-
+  RELEASE-001, utført rett etter midnatt lokal tid 2026-09-13. Ingen kildekode
+  endret av denne oppdateringen.
+-->
+
+### A. COMMITTED REPOSITORY BASELINE (per 2026-09-13)
+
+- **Feature-branch**: `feature/employee-time-registration`. **HEAD** =
+  `eb071203caa1a4f232dfa62b06af61d5387fabb4`, subject
+  `checkpoint: accept oversikt v1` (parent `9f09b4f13fdb1e6ece94be3740053c442a2e45ef`,
+  docs-committen som registrerte Ansattside V1). Upstream-anker er fortsatt
+  `c40fa0404bd4d14e01d8f4053b8235b8d0a13703` (branch målt **11 foran** ved denne
+  oppdateringen); **ingen push, deploy, tag, merge eller rebase** som del av
+  sjekkpunktet. Under denne releasen opprettes **én lokal docs-commit** med subject
+  `docs: record oversikt v1 acceptance` (hash måles etter commit og føres inn i et
+  senere sjekkpunkt — ikke antatt her).
+- **Oversikt V1 (Ledelse-cockpit) = OWNER-ACCEPTED / CHECKPOINTED.** Eierens
+  visuelle aksept ble gitt 2026-09-12 (kveld) etter den siste korreksjonen;
+  committen ble utført rett etter midnatt 2026-09-13, som er akseptdato for
+  inventarformål.
+- **Ansattside V1 forblir OWNER-ACCEPTED / CHECKPOINTED** (`1f514331…` + docs
+  `9f09b4f1…`) og er bevart: de seks ansatt-filene er uendret mellom `1f51433` og
+  `eb07120`, og de delte skallfilene fikk kun Oversikt-hunkene i denne committen.
+- **Sjekkpunkt-pakke = nøyaktig 6 stier** (4 endrede + 2 nye), committet identitet
+  målt fra repo-blob ved `eb071203` (SHA-256 / bytes):
+  1. `employee-shell-ui.mjs` — 88912 B — `7bb30b5ea96ac856e8f62be8ac1fcdb8478ea2b8634a91c3a5c61c244aad24b8` (Oversikt-importer, `oversiktFacts` / `goOversiktTarget` / `drawOversikt` / `ovSection` / `ovRow` / `ovFact`)
+  2. `employee-shell.html` — 44232 B — `b96796a6f2ee9b4ada097a4598c27baeb807292ddf61f017b9dee63484164364` (én Oversikt-CSS-blokk: `.ov-sec` / `.ov-row` / `.ov-dag` / `.ov-state` / `.ov-fact`)
+  3. `management-payroll-view.mjs` — 56180 B — `0790ffa9d5ea1c65313bf42c1c2a3baa1f551a3ba20fc7015e061d29597db0b7` (delt søm `monthFactsOf`, eksporterte `fmtH` / `fmtKr`; `drawMonthCards` formaterer kun)
+  4. `management-presentation-p1.test.mjs` — 22340 B — `0e3e5dddb51fd89ee351f83054b52137ffe255e32c934b2ffc3a06dfb8b8c0f4` (P2-7b re-ankret til sømmen)
+  5. `management-oversikt.mjs` — 6794 B — `40b27411e1dfb2d26e210ccab60cc16543231d6f8916f38eb87a8f5b33243595` (NY — ren, importfri komposisjon: `vaktStatusOf`, `dagensBildeFra`, `ansattFaktaFra`, `oppmerksomhetFra`)
+  6. `management-presentation-oversikt.test.mjs` — 23400 B — `4ef274a7c9fa7eec75c1b4b7d8d57519b8aad392a3313b51788c59c483d99f2f` (NY — OV1–OV10)
+  `RouteA/` er **IKKE** i pakken (utracket, uinspisert). **ESTABLISHED.**
+
+### B. HVA OVERSIKT V1 REPRESENTERER (Ledelse → Oversikt, fikstur-kun)
+
+Alt under er **fikstur/lokal demo** i `employee-shell.html` (`?emp=1`); `index.html`
+(live-appen) er uendret. Formål: svare på ett blikk «Hva skjer i virksomheten min,
+og hva trenger meg?». Rekkefølge ovenfra og ned:
+
+1. **Krever din oppmerksomhet** — kompakte, klikkbare handlingsrader fra eksisterende
+   sannheter: lønnsgrunnlagets hard/warn-funn og tidligere planlagte dager uten
+   registrering (P2-regelen: kun dager strengt før forretningslokal i dag; i dag og
+   fremtid teller aldri), ansattes manglende opplysninger per kategori, og åpne
+   vakter i dag. Tom tilstand: «Ingenting krever oppmerksomhet akkurat nå.»
+2. **I dag** — tildelte vakter med ansattnavn, planlagt tid og oppmøtetilstand fra
+   eksisterende kanonisk sannhet (kun tilstander oppmøteposten selv bærer); åpne
+   vakter legges til når de finnes. Presentasjon: navn | tid | tilstand på én linje
+   (stablet på smal skjerm).
+3. **Lønnsgrunnlag · inneværende periode** — sammendrag fra den delte sømmen
+   `monthFactsOf` (samme komposisjon som kortene i Lønn & økonomi): Planlagte timer,
+   Estimert planlagt kostnad «(estimat)» med dekningslinjen som eneste sekundærlinje
+   (de navngitte eksklusjonene vises fortsatt i Lønn & økonomi), Faktiske timer,
+   Godkjente timer, Krever handling, samt eksisterende status- og fristordlyd.
+   Frossen versjon viser sin egen snapshot-rad-mengde; planprojeksjonen er alltid
+   levende.
+4. **Ansatte** — aktive / alt utfylt / mangler opplysninger fra den eksisterende
+   mangler-informasjon-sannheten, med dør inn til Ansatte.
+
+- Navigasjon bruker kun eksisterende Ledelse-faner og skallets fane-tilstand
+  (`goLedelse`, `LG_STATE`, `VP_STATE`); Vaktplan åpnes på inneværende uke; Lønn &
+  økonomi på inneværende periode (én-ansatt-åpning kun når nøyaktig én er berørt).
+- Ingen ny ruter, lager, persistens, lønns-/vaktplan-/oppmøtesannhet eller
+  fullstendighetsmodell. Ingen kroner per ansatt på Oversikt. Ingen slutning om
+  forsinkelse/fravær utover kanonisk sannhet. Ingen diagrammer, salg, lager eller
+  innkjøp uten sannhetskilde. `monthFactsOf` forblir den ene lesebare
+  komposisjonssømmen delt med Lønn & økonomi; P2-semantikken er uendret.
+- Endelig akseptert presentasjon: kompakte oppmerksomhetsrader; justerte I dag-rader;
+  konsis kostnadsestimat-linje på Oversikt; Ansatte uendret bortsett fra arvet
+  avstand.
+- **Eierens regel**: videre tillegg, forslag og designendringer skal drives av
+  reell bruk og observerte behov — ikke av videre spekulativ V1-polering.
+
+### C. MÅLT TEST- OG AKSEPTTILSTAND (per sjekkpunktet, fra index-øyeblikksbildet)
+
+- `management-presentation-oversikt.test.mjs` **10/0** (NY) ·
+  `management-presentation-p1.test.mjs` **17/0** · `employee-page-qa.test.mjs`
+  **12/0** · `employee-myjob.test.mjs` **9/0** · `employee-shell-core.test.mjs`
+  **200/0** · `employee-schedule-week.test.mjs` **33/0** (Europe/Oslo, UTC,
+  America/New_York, Asia/Tokyo) · `employee-schedule-month.test.mjs` **13/0** ·
+  `schedule-core.test.mjs` **129/0 + ORDER 16/0 + PREDICATE 5/0** ·
+  `management-manualtime-ui.test.mjs` **15/0** ·
+  `management-planning-economy.test.mjs` **7/0** ·
+  `management-presentation-3a.test.mjs` **5/0** · `management-payroll-core.test.mjs`
+  **19/0** · `management-employees-core.test.mjs` **24/0** ·
+  `management-contract-core.test.mjs` **52/0** · `management-schedule-core.test.mjs`
+  **49/0**. `node --check` på endrede Oversikt-moduler/tester PASS; `git diff
+  --cached --check` rent bortsett fra aksepterte linjeskift-notiser. **ESTABLISHED.**
+- Eierens siste visuelle gjennomgang = **PASS / OWNER-ACCEPTED**.
+- Fikstur-tall (f.eks. 442 t, kr 51 440 (estimat), 2 av 5 dekket, og antall
+  «tidligere planlagte dager uten registrering» som var 22 den 11.09 og 25 den
+  12.09) er **dato-avhengig fikstur-evidens**, ikke varig produktsannhet; den varige
+  sannheten er regelen (strengt før i dag).
+
+### D. WORKING TREE / LIVE-FLATE (per 2026-09-13, før docs-committen)
+
+- Staging tom; arbeidstre = **kun** `?? RouteA/` (alt Oversikt-kilde- og testarbeid er
+  committet; Ansattside V1 bevart committet). `RouteA/` utracket, uinspisert.
+- **Live-appen er uendret**: `index.html` SHA-256 `a6dc92885fa5a2a24c8036a4…`.
+  Lokal forhåndsvisning (målt): node-loopback 127.0.0.1:8765 lytter (skript utenfor
+  repoet), `Cache-Control: no-store`, `RouteA/` serveres som 403; ikke startet/stoppet
+  av denne releasen.
+
+### E. ÅPNE PUNKTER (egne gates)
+
+- **Push** av sjekkpunktene til origin: **OPEN** — ikke autorisert av denne releasen.
+  Ingen deploy utført.
+- `RouteA/` forblir utenfor scope.
+- **Produktforbedring etter V1 er bruksdrevet**: reelle driftsdata, reell
+  brukerfriksjon og forslag fra eier/ansatte kan mate en senere V1.1 eller neste
+  avgrensede skive. Ingen konkrete fremtidige funksjoner er lovet her.
+- Utsatt, ikke-blokkerende gjeld for Ansattside V1 (registrert i 2026-09-12-
+  seksjonen) står ved lag inntil et nytt akseptert sjekkpunkt uttrykkelig
+  supersederer den.
+- Kjent kjerne-detalj utenfor V1: Godkjente timer står på 0 t inntil per-dag-
+  godkjenning tas i bruk (pakke-godkjenning ≠ dag-godkjenning).
+
+## MÅLT SJEKKPUNKT — 2026-09-12 (historisk — supersedert 2026-09-13, se seksjonen over)
 
 <!--
   Denne seksjonen OVERSTYRER «MÅLT SJEKKPUNKT 2026-09-11» under der de er i
