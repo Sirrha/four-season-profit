@@ -479,6 +479,12 @@ select.fi:focus{background-color:#fff}
 .pin-btn:active{background:rgba(255,255,255,.25);transform:scale(.95)}
 .pin-btn.del{font-size:18px}
 .login-error{color:#f88;font-size:13px;text-align:center;min-height:20px;margin-bottom:8px}
+.auth-session{margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,.15)}
+.auth-session input{display:block;width:100%;box-sizing:border-box;padding:8px 10px;margin-bottom:8px;border-radius:8px;border:1px solid #444;background:#111;color:#eee;font-size:14px}
+.auth-session .row{display:flex;gap:8px}
+.auth-session button{flex:1;padding:9px 10px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;font-size:13px}
+.auth-session button:disabled{opacity:.45}
+.auth-session-status{font-size:12px;color:#aaa;text-align:center;min-height:18px;margin-top:6px}
 .login-user-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(77,184,118,.2);border:1px solid rgba(77,184,118,.4);color:var(--accent);padding:4px 10px;border-radius:20px;font-size:12px;font-weight:600}
 /* User badge in header */
 .user-badge{background:rgba(255,255,255,.13);border:none;color:#fff;padding:5px 10px;border-radius:7px;font-family:'Sora',sans-serif;font-size:11px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:5px}
@@ -640,10 +646,15 @@ select.fi:focus{background-color:#fff}
       <button class="pin-btn" onclick="pinPress('0')" style="grid-column:2">0</button>
       <button class="pin-btn del" onclick="pinDelete()">⌫</button>
     </div>
-    <div id="auth-credential-form" style="display:none">
-      <input id="auth-email" type="email">
-      <input id="auth-password" type="password">
-      <button id="auth-submit" type="button"></button>
+    <div id="auth-credential-form" class="auth-session">
+      <label class="pin-label">Firebase-økt (valgfri · styrer ikke tilgang)</label>
+      <input id="auth-email" type="email" autocomplete="username" placeholder="E-post">
+      <input id="auth-password" type="password" autocomplete="current-password" placeholder="Passord">
+      <div class="row">
+        <button id="auth-submit" type="button" disabled>Logg inn Firebase-økt</button>
+        <button id="auth-signout" type="button">Logg ut Firebase-økt</button>
+      </div>
+      <div class="auth-session-status" id="auth-session-status"></div>
     </div>
   </div>
 </div>
@@ -8169,6 +8180,84 @@ document.head.appendChild(shakeStyle);
     document.getElementById('login-screen').classList.remove('hidden');
   }
   initFirebase(FIREBASE_CONFIG);
+})();
+
+// ─────────────────────────────────────────
+// S2b-1 · FIREBASE SESSION · OBSERVATIONAL ONLY (REV2)
+// PIN (USERS/checkPin/fs_user) remains the sole business authority. Nothing in this block reads or
+// writes currentUser, sessionStorage, LOCAL, listeners, routing, roles, tenant paths, or Firestore.
+// Sign-in is gated: it is enabled only after setPersistence(SESSION) has RESOLVED. On persistence
+// failure sign-in stays unavailable and the Firebase session is a non-load-bearing no-op.
+// ─────────────────────────────────────────
+const AUTH_SESSION_DIAG={events:[],last:null,persistence:'PENDING',signInEnabled:false};
+function authSessionErrCode(e){return String((e&&e.code)||'unknown')}
+function authSessionUidSuffix(u){const id=String((u&&u.uid)||'');return id?'…'+id.slice(-6):''}
+function authSessionStatusText(rec){
+  switch(rec.kind){
+    case 'SIGNED_IN':return 'Firebase-økt: aktiv ('+rec.uidSuffix+')';
+    case 'SIGNED_OUT':return 'Firebase-økt: ingen';
+    case 'PERSISTENCE_SESSION_ESTABLISHED':return 'Firebase-økt: klar (SESSION)';
+    case 'PERSISTENCE_FAILED':return 'Firebase-økt: utilgjengelig ('+rec.code+')';
+    case 'SIGN_IN_STARTED':return 'Firebase-økt: logger inn…';
+    case 'SIGN_IN_FAILED':return 'Firebase-økt: innlogging feilet ('+rec.code+')';
+    case 'SIGN_IN_BLOCKED_NOT_READY':return 'Firebase-økt: ikke klar';
+    case 'SIGN_OUT_FAILED':return 'Firebase-økt: utlogging feilet ('+rec.code+')';
+    default:return 'Firebase-økt: '+rec.kind;
+  }
+}
+function authSessionRecord(kind,detail){
+  const rec=Object.assign({t:new Date().toISOString(),kind},detail||{});
+  AUTH_SESSION_DIAG.events.push(rec);
+  if(AUTH_SESSION_DIAG.events.length>50)AUTH_SESSION_DIAG.events.shift();
+  AUTH_SESSION_DIAG.last=rec;
+  console.info('[auth-session]',kind,rec);
+  const el=document.getElementById('auth-session-status');
+  if(el)el.textContent=authSessionStatusText(rec);
+}
+(function authSessionInit(){
+  // Step 1 — controls: sign-in is disabled in markup and stays disabled until step 4 succeeds.
+  const email=document.getElementById('auth-email');
+  const password=document.getElementById('auth-password');
+  const submit=document.getElementById('auth-submit');
+  const signout=document.getElementById('auth-signout');
+  if(!email||!password||!submit||!signout){authSessionRecord('UI_MISSING',{});return}
+  submit.disabled=true;
+  // Step 2 — SDK availability. Failure = no-op; PIN path untouched.
+  let auth;
+  try{auth=firebase.auth()}catch(e){AUTH_SESSION_DIAG.persistence='UNAVAILABLE';authSessionRecord('SDK_UNAVAILABLE',{code:authSessionErrCode(e)});return}
+  // Step 3 — observer (observational only; registered before any sign-in is possible).
+  auth.onAuthStateChanged(u=>{
+    if(u)authSessionRecord('SIGNED_IN',{uidSuffix:authSessionUidSuffix(u),emailVerified:!!u.emailVerified,providers:(u.providerData||[]).length});
+    else authSessionRecord('SIGNED_OUT',{});
+  });
+  // Step 4 — persistence gate. Sign-in handler is attached ONLY inside the resolved branch.
+  auth.setPersistence(firebase.auth.Auth.Persistence.SESSION).then(()=>{
+    AUTH_SESSION_DIAG.persistence='SESSION';
+    AUTH_SESSION_DIAG.signInEnabled=true;
+    authSessionRecord('PERSISTENCE_SESSION_ESTABLISHED',{});
+    submit.addEventListener('click',async()=>{
+      if(AUTH_SESSION_DIAG.persistence!=='SESSION'||!AUTH_SESSION_DIAG.signInEnabled){authSessionRecord('SIGN_IN_BLOCKED_NOT_READY',{});return}
+      const em=(email.value||'').trim();
+      const pw=password.value||'';
+      if(!em||!pw){authSessionRecord('SIGN_IN_SKIPPED',{code:'empty-fields'});return}
+      submit.disabled=true;
+      authSessionRecord('SIGN_IN_STARTED',{emailDomain:em.split('@')[1]||''});
+      try{await auth.signInWithEmailAndPassword(em,pw);authSessionRecord('SIGN_IN_RESOLVED',{})}
+      catch(e){authSessionRecord('SIGN_IN_FAILED',{code:authSessionErrCode(e)})}
+      finally{password.value='';submit.disabled=false}
+    });
+    password.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();submit.click()}});
+    submit.disabled=false;
+  }).catch(e=>{
+    AUTH_SESSION_DIAG.persistence='FAILED';
+    AUTH_SESSION_DIAG.signInEnabled=false;
+    submit.disabled=true;
+    authSessionRecord('PERSISTENCE_FAILED',{code:authSessionErrCode(e)});
+  });
+  // Sign-out needs no persistence gate: with no session it is a harmless no-op.
+  signout.addEventListener('click',async()=>{
+    try{await auth.signOut()}catch(e){authSessionRecord('SIGN_OUT_FAILED',{code:authSessionErrCode(e)})}
+  });
 })();
 
 // ─────────────────────────────────────────
