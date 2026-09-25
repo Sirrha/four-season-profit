@@ -467,17 +467,9 @@ select.fi:focus{background-color:#fff}
 .login-logo{color:#fff;font-size:26px;font-weight:700;margin-bottom:4px;text-align:center}.login-logo span{color:var(--accent)}
 .login-sub{color:rgba(255,255,255,.5);font-size:12px;margin-bottom:32px;text-align:center}
 .login-card{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:16px;padding:24px 20px;width:100%;max-width:340px}
-.login-select-label{color:rgba(255,255,255,.7);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;display:block}
-.login-select{width:100%;padding:12px 14px;background:rgba(255,255,255,.1);border:1.5px solid rgba(255,255,255,.2);border-radius:9px;color:#fff;font-family:'Sora',sans-serif;font-size:15px;font-weight:600;outline:none;margin-bottom:20px;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath fill='%23fff' d='M5 7L0 2h10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;padding-right:36px}
-.login-select option{background:#1b3828;color:#fff}
-.pin-label{color:rgba(255,255,255,.7);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;display:block;text-align:center}
-.pin-dots{display:flex;justify-content:center;gap:10px;margin-bottom:20px}
-.pin-dot{width:14px;height:14px;border-radius:50%;background:rgba(255,255,255,.2);transition:background .15s}
-.pin-dot.filled{background:var(--accent)}
-.pin-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px}
-.pin-btn{background:rgba(255,255,255,.12);border:1.5px solid rgba(255,255,255,.15);border-radius:12px;color:#fff;font-family:'Sora',sans-serif;font-size:22px;font-weight:600;padding:16px;cursor:pointer;transition:all .1s;text-align:center}
-.pin-btn:active{background:rgba(255,255,255,.25);transform:scale(.95)}
-.pin-btn.del{font-size:18px}
+.auth-label{color:rgba(255,255,255,.7);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;display:block;text-align:center}
+.auth-panel.hidden{display:none}
+.auth-panel-text{color:#eee;font-size:13px;text-align:center;margin-bottom:10px;line-height:1.4}
 .login-error{color:#f88;font-size:13px;text-align:center;min-height:20px;margin-bottom:8px}
 .auth-session{margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,.15)}
 .auth-session input{display:block;width:100%;box-sizing:border-box;padding:8px 10px;margin-bottom:8px;border-radius:8px;border:1px solid #444;background:#111;color:#eee;font-size:14px}
@@ -485,7 +477,6 @@ select.fi:focus{background-color:#fff}
 .auth-session button{flex:1;padding:9px 10px;border-radius:8px;border:1px solid #555;background:#222;color:#eee;font-size:13px}
 .auth-session button:disabled{opacity:.45}
 .auth-session-status{font-size:12px;color:#aaa;text-align:center;min-height:18px;margin-top:6px}
-.login-user-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(77,184,118,.2);border:1px solid rgba(77,184,118,.4);color:var(--accent);padding:4px 10px;border-radius:20px;font-size:12px;font-weight:600}
 /* User badge in header */
 .user-badge{background:rgba(255,255,255,.13);border:none;color:#fff;padding:5px 10px;border-radius:7px;font-family:'Sora',sans-serif;font-size:11px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:5px}
 
@@ -615,47 +606,28 @@ select.fi:focus{background-color:#fff}
   <div class="login-logo">Four <span>Season</span> AS</div>
   <div class="login-sub">Logg inn for å fortsette</div>
   <div class="login-card">
-    <label class="login-select-label">Velg bruker</label>
-    <select class="login-select" id="login-user" onchange="onLoginUserChange()">
-      <option value="">— Velg bruker —</option>
-      <option value="Herish">👤 Hasher</option>
-      <option value="Admin">🔧 Admin</option>
-      <option value="Regnskap">📊 Regnskap</option>
-      <option value="Sormena">👤 Sormena</option>
-    </select>
-    <label class="pin-label">Skriv inn 6-sifret PIN</label>
-    <div class="pin-dots" id="pin-dots">
-      <div class="pin-dot" id="dot-0"></div>
-      <div class="pin-dot" id="dot-1"></div>
-      <div class="pin-dot" id="dot-2"></div>
-      <div class="pin-dot" id="dot-3"></div>
-      <div class="pin-dot" id="dot-4"></div>
-      <div class="pin-dot" id="dot-5"></div>
-    </div>
-    <div class="login-error" id="login-error"></div>
-    <div class="pin-grid">
-      <button class="pin-btn" onclick="pinPress('1')">1</button>
-      <button class="pin-btn" onclick="pinPress('2')">2</button>
-      <button class="pin-btn" onclick="pinPress('3')">3</button>
-      <button class="pin-btn" onclick="pinPress('4')">4</button>
-      <button class="pin-btn" onclick="pinPress('5')">5</button>
-      <button class="pin-btn" onclick="pinPress('6')">6</button>
-      <button class="pin-btn" onclick="pinPress('7')">7</button>
-      <button class="pin-btn" onclick="pinPress('8')">8</button>
-      <button class="pin-btn" onclick="pinPress('9')">9</button>
-      <button class="pin-btn" onclick="pinPress('0')" style="grid-column:2">0</button>
-      <button class="pin-btn del" onclick="pinDelete()">⌫</button>
-    </div>
-    <div id="auth-credential-form" class="auth-session">
-      <label class="pin-label">Firebase-økt (valgfri · styrer ikke tilgang)</label>
+    <div id="auth-panel-signin" class="auth-session auth-panel">
+      <label class="auth-label">Logg inn med e-post og passord</label>
       <input id="auth-email" type="email" autocomplete="username" placeholder="E-post">
       <input id="auth-password" type="password" autocomplete="current-password" placeholder="Passord">
       <div class="row">
-        <button id="auth-submit" type="button" disabled>Logg inn Firebase-økt</button>
-        <button id="auth-signout" type="button">Logg ut Firebase-økt</button>
+        <button id="auth-submit" type="button" disabled>Logg inn</button>
       </div>
-      <div class="auth-session-status" id="auth-session-status"></div>
+      <div class="login-error" id="auth-error"></div>
     </div>
+    <div id="auth-panel-noaccess" class="auth-session auth-panel hidden">
+      <div class="auth-panel-text">Ingen tilgang for denne kontoen.</div>
+      <div class="row"><button id="auth-signout-noaccess" type="button">Logg ut</button></div>
+    </div>
+    <div id="auth-panel-error" class="auth-session auth-panel hidden">
+      <div class="auth-panel-text" id="auth-error-text">Kunne ikke hente tilgang.</div>
+      <div class="row"><button id="auth-retry" type="button">Prøv igjen</button><button id="auth-signout-error" type="button">Logg ut</button></div>
+    </div>
+    <div id="auth-panel-stale" class="auth-session auth-panel hidden">
+      <div class="auth-panel-text">Ny versjon av Sormena er tilgjengelig. Last inn siden på nytt.</div>
+      <div class="row"><button id="auth-reload" type="button">Last inn på nytt</button></div>
+    </div>
+    <div class="auth-session-status" id="auth-session-status"></div>
   </div>
 </div>
 
@@ -1419,8 +1391,9 @@ function initFirebase(cfg){
     try{app=firebase.app()}catch(e){app=firebase.initializeApp(cfg)}
     db=firebase.firestore(app);
     storage=firebase.storage(app);
-    document.getElementById('ld-text').textContent='Laster data…';
-    startListeners();
+    // S2b-2: no tenant listener starts here. authIdentityInit() resolves Firebase identity,
+    // membership and client generation; only the guarded READY path may reach startListeners().
+    authIdentityInit();
   }catch(e){
     document.getElementById('loading-screen').classList.add('hidden');
     alert('Firebase-feil: '+e.message);
@@ -1595,6 +1568,8 @@ const WRITE_TO_PURCHASES=false;
 // each retry — increments the generation, reseeds state, resets LOCAL, arms exactly one 30 s
 // timeout, and creates exactly one listener set. settleStartup() guarantees one outcome.
 function startListeners(){
+  // S2b-2 defense in depth: tenant listeners require a bound Firebase identity (membership-derived).
+  if(!currentUser||!authBoundUid||!firebase.auth().currentUser||firebase.auth().currentUser.uid!==authBoundUid){console.error('[auth] startListeners refused: no bound identity');return}
   stopListeners();
   const gen=++startupGeneration;
   startupSettled=false;
@@ -1720,7 +1695,9 @@ function settleStartup(outcome,detail){
 function retryStartup(){
   const ov=document.getElementById('startup-error');
   if(ov)ov.classList.add('hidden');
-  startListeners();
+  // S2b-2: retry never bypasses identity — only the guarded entry may start tenant listeners.
+  const outcome=authGuardedTenantDataEntry(authGeneration);
+  if(outcome!=='ready')authFailClosed(outcome==='SIGNED_OUT'?'SIGNED_OUT':'ACCESS_ERROR',{step:'retry',code:String(outcome)});
 }
 
 document.getElementById('startup-error-retry').addEventListener('click',retryStartup);
@@ -1734,10 +1711,11 @@ function renderIfActive(col){
 }
 
 // ─────────────────────────────────────────
-// AUTH M2 · SLICE 3 · GATE 3A — DORMANT SCAFFOLDING
-// Nothing below is wired. No landed entry routine has an external caller, no
-// onAuthStateChanged observer is registered, and no Auth call executes at boot.
-// Gate 3B wires it. Design: docs/architecture/auth-m2-startup-gating.md §3.3–§3.14.
+// AUTH · IDENTITY PLUMBING (formerly Gate 3A scaffolding) — WIRED BY S2b-2
+// Generation-bound settle latch, the single guarded tenant-listener entry (uid binding), and the
+// teardown routines below are consumed by the IDENTITY AUTHORITY module (see LOGIN section).
+// The claims-consuming identity pipeline that lived here was retired in S2b-2: custom claims are
+// never read. Design: CCODE-SIRRHA-S2B2-EXACT-SOURCE-CUTOVER-DESIGN-REV2-001.
 // ─────────────────────────────────────────
 
 let authGeneration=0;          // §3.12 identity attempt token — deliberately separate from startupGeneration
@@ -1775,45 +1753,8 @@ function authGuardedTenantDataEntry(gen){
   return 'ready';
 }
 
-// §3.3, §3.9, §3.11, §3.12 — the full identity pipeline. Generation is rechecked after every
-// suspension point. Definitive negatives settle AUTHZ_CLAIM_ERROR; an inability to answer
-// settles IDENTITY_LOAD_ERROR. This routine never calls authSignedOutTeardown: canonical
-// signed-out establishment is reserved for onAuthStateChanged(null) at Gate 3B.
-async function authResolveIdentity(user){
-  const gen=++authGeneration;
-  authAttemptSettled=false;
-  if(authIdentityTimer){clearTimeout(authIdentityTimer);authIdentityTimer=null}
-  authIdentityTimer=setTimeout(()=>{authSettleIdentityAttempt(gen,'IDENTITY_LOAD_ERROR')},30000);
-  try{
-    if(!user)return authSettleIdentityAttempt(gen,'SIGNED_OUT');
-    const tok=await user.getIdTokenResult(true);
-    if(gen!==authGeneration||authAttemptSettled)return null;
-    const claims=(tok&&tok.claims)||{};
-    const role=claims.role;
-    const rawAnsattId=claims.ansattId;
-    if(claims.tenantId!==TENANT_ID||(role!=='admin'&&role!=='employee')||typeof rawAnsattId!=='string'||!rawAnsattId.trim()){
-      return authSettleIdentityAttempt(gen,'AUTHZ_CLAIM_ERROR');
-    }
-    const normalizedAnsattId=rawAnsattId.trim();
-    const snap=await tenantCol('ansatte').doc(normalizedAnsattId).get();
-    if(gen!==authGeneration||authAttemptSettled)return null;
-    if(!snap.exists)return authSettleIdentityAttempt(gen,'AUTHZ_CLAIM_ERROR');
-    const emp=snap.data()||{};
-    const rawNavn=emp.navn;
-    if(emp.aktiv===false||typeof rawNavn!=='string'||!rawNavn.trim()){
-      return authSettleIdentityAttempt(gen,'AUTHZ_CLAIM_ERROR');
-    }
-    const normalizedNavn=rawNavn.trim();
-    currentUser={name:normalizedNavn,ansattId:normalizedAnsattId,role:role==='admin'?'admin':'staff',email:user.email||null};
-    authBoundUid=user.uid;
-    const outcome=authGuardedTenantDataEntry(gen);
-    if(!outcome)return null;
-    return authSettleIdentityAttempt(gen,outcome);
-  }catch(e){
-    if(gen!==authGeneration)return null;
-    return authSettleIdentityAttempt(gen,authClassifyIdentityFailure(e));
-  }
-}
+// S2b-2: the former claims-based authResolveIdentity() was retired here. Identity is resolved by
+// authResolveMembership() in the IDENTITY AUTHORITY module (membership document, never claims).
 
 // §3.13b step 3 / §3.14 — the #main-app hide path. Mirrors showApp()'s display write.
 function hideMainApp(){
@@ -1835,6 +1776,7 @@ async function authExplicitLogoutTeardown(){
   const gen=++authGeneration;
   if(authIdentityTimer){clearTimeout(authIdentityTimer);authIdentityTimer=null}
   authAttemptSettled=false;
+  authDetachWatches();
   hideMainApp();
   stopListeners();
   try{
@@ -1851,6 +1793,7 @@ async function authExplicitLogoutTeardown(){
 // no caller. Step 9 reveals only the existing outer #login-screen; the hidden credential
 // container stays display:none until Gate 3B.
 function authSignedOutTeardown(){
+  authDetachWatches();
   stopListeners();
   authGeneration++;
   startupGeneration++;
@@ -8051,89 +7994,245 @@ function exportCSV(type){
 
 
 // ─────────────────────────────────────────
-// LOGIN SYSTEM
+// IDENTITY AUTHORITY (S2b-2) — Firebase Auth + top-level membership + client generation
+// Business authority = request.auth.uid + the CURRENT document memberships/{uid}_{tenantId}
+// (fields uid, tenantId, accessRole, ansattId, accessEnabled). PIN/USERS/fs_user are retired.
+// Custom claims are never read. No tenant listener starts before three barriers are green:
+// R1 membership eligibility (exact A-1 query), E1 monotonic generation floor (transaction),
+// E2 server-confirmed revalidation of the selected membership. Failure paths keep zero listeners.
+// Design: CCODE-SIRRHA-S2B2-EXACT-SOURCE-CUTOVER-DESIGN-REV2-001 + review guards E1/E2/E3.
 // ─────────────────────────────────────────
-const USERS = {
-  'Herish':  {pin:'162026', role:'admin',    label:'👤 Hasher'},
-  'Admin':   {pin:'222026', role:'admin',    label:'🔧 Admin'},
-  'Regnskap':{pin:'732026', role:'regnskap', label:'📊 Regnskap'},
-  'Sormena': {pin:'052026', role:'staff',    label:'👤 Sormena'}
-};
-// Roles: admin=full access, regnskap=view only, staff=register only (no delete)
-
-function displayUserName(name){return name==='Herish'?'Hasher':name}
-
-let currentUser = null;
-let pinEntry = '';
-
-function onLoginUserChange(){
-  pinEntry = '';
-  updatePinDots();
-  document.getElementById('login-error').textContent = '';
-}
-
-function pinPress(digit){
-  if(pinEntry.length >= 6) return;
-  pinEntry += digit;
-  updatePinDots();
-  if(pinEntry.length === 6) setTimeout(checkPin, 150);
-}
-
-function pinDelete(){
-  pinEntry = pinEntry.slice(0,-1);
-  updatePinDots();
-  document.getElementById('login-error').textContent = '';
-}
-
-function updatePinDots(){
-  for(let i=0;i<6;i++){
-    const d = document.getElementById('dot-'+i);
-    if(d) d.classList.toggle('filled', i < pinEntry.length);
+const ENTRY_TENANT_ID=TENANT_ID; // S2b-2: fixed-tenant build. Entry only via an enabled admin membership for this tenant; memberships for other tenants grant nothing here. The multi-tenant door picker is a deferred frozen obligation (Soren ruling 2026-09-23 §3).
+const CLIENT_GENERATION=2;       // S2b-2 = generation 2. Builds before S2b-2 are generation 1 and carry no check.
+let currentUser = null;          // {uid,tenantId,accessRole,ansattId,name,email,role:'admin'} — in-memory UX cache, never authority
+let authWatches=[];              // E3 — active identity watches (own membership + generation); detached only via authDetachWatches()
+const AUTH_SESSION_DIAG={events:[],last:null,persistence:'PENDING',signInEnabled:false,state:'BOOT'};
+const AUTH_PANEL_FOR_STATE={SIGNED_OUT:'signin',PERSISTENCE_FAILED:'signin',AUTH_ERROR:'signin',LOGOUT_FAILURE:'error',NO_ACCESS:'noaccess',ACCESS_ERROR:'error',STALE:'stale'};
+function authSessionErrCode(e){return String((e&&e.code)||'unknown')}
+function authSessionUidSuffix(u){const id=String((u&&u.uid)||'');return id?'…'+id.slice(-6):''}
+function authSessionStatusText(rec){
+  switch(rec.kind){
+    case 'SIGNED_IN':return 'Firebase-økt: aktiv ('+rec.uidSuffix+')';
+    case 'SIGNED_OUT':return 'Ikke innlogget';
+    case 'PERSISTENCE_SESSION_ESTABLISHED':return 'Klar for innlogging';
+    case 'PERSISTENCE_FAILED':return 'Innlogging utilgjengelig ('+rec.code+')';
+    case 'SIGN_IN_STARTED':return 'Logger inn…';
+    case 'SIGN_IN_FAILED':case 'AUTH_ERROR':return 'Innlogging feilet ('+rec.code+')';
+    case 'SIGN_IN_BLOCKED_NOT_READY':return 'Ikke klar';
+    case 'SIGN_OUT_FAILED':case 'LOGOUT_FAILURE':return 'Utlogging feilet ('+(rec.code||'ukjent')+')';
+    case 'RESOLVING':return 'Henter tilgang…';
+    case 'READY':return 'Tilgang bekreftet';
+    case 'NO_ACCESS':return 'Ingen tilgang for denne kontoen';
+    case 'ACCESS_ERROR':return 'Kunne ikke hente tilgang ('+(rec.code||rec.step||'ukjent')+')';
+    case 'STALE':return 'Ny versjon tilgjengelig';
+    default:return String(rec.kind);
   }
 }
-
-function checkPin(){
-  const username = document.getElementById('login-user').value;
-  const errEl = document.getElementById('login-error');
-  if(!username){errEl.textContent='Velg bruker først';pinEntry='';updatePinDots();return}
-  const user = USERS[username];
-  if(!user){errEl.textContent='Ukjent bruker';pinEntry='';updatePinDots();return}
-  if(pinEntry === user.pin){
-    currentUser = {name: username, role: user.role, label: user.label};
-    sessionStorage.setItem('fs_user', JSON.stringify(currentUser));
-    document.getElementById('login-screen').classList.add('hidden');
-    const btn = document.getElementById('current-user-btn');
-    btn.textContent = user.label + ' · Logg ut';
-    btn.style.display = 'flex';
-    applyRoleRestrictions();
-    showToast('Velkommen, ' + displayUserName(username) + '! 👋');
-  } else {
-    errEl.textContent = 'Feil PIN-kode. Prøv igjen.';
-    pinEntry = '';
-    updatePinDots();
-    // Shake animation
-    const card = document.querySelector('.login-card');
-    card.style.animation = 'shake .3s ease';
-    setTimeout(()=>card.style.animation='',400);
-  }
+function authSessionRecord(kind,detail){
+  const rec=Object.assign({t:new Date().toISOString(),kind},detail||{});
+  AUTH_SESSION_DIAG.events.push(rec);
+  if(AUTH_SESSION_DIAG.events.length>50)AUTH_SESSION_DIAG.events.shift();
+  AUTH_SESSION_DIAG.last=rec;
+  console.info('[auth-session]',kind,rec);
+  const el=document.getElementById('auth-session-status');
+  if(el)el.textContent=authSessionStatusText(rec);
 }
-
-function logoutUser(){
-  if(!confirm('Logg ut ' + displayUserName(currentUser?.name||'') + '?')) return;
-  currentUser = null;
-  sessionStorage.removeItem('fs_user');
-  pinEntry = '';
-  document.getElementById('login-user').value = '';
-  updatePinDots();
-  document.getElementById('login-error').textContent = '';
+function authShowPanel(name){
+  ['signin','noaccess','error','stale'].forEach(p=>{const el=document.getElementById('auth-panel-'+p);if(el)el.classList.toggle('hidden',p!==name)});
+}
+function authSetState(state,detail){
+  AUTH_SESSION_DIAG.state=state;
+  authSessionRecord(state,detail||{});
+  authShowPanel(AUTH_PANEL_FOR_STATE[state]||null);
+  if(state==='ACCESS_ERROR'||state==='LOGOUT_FAILURE'){const t=document.getElementById('auth-error-text');if(t)t.textContent=authSessionStatusText(Object.assign({kind:state},detail||{}))+'.'}
+  if(state!=='READY'){const btn=document.getElementById('current-user-btn');if(btn)btn.style.display='none'}
+}
+// E3 — the single idempotent identity-watch detach helper. Every teardown/supersession path calls it.
+function authDetachWatches(){
+  const ws=authWatches;authWatches=[];
+  ws.forEach(un=>{try{if(typeof un==='function')un()}catch(e){console.error('[auth] watch unsubscribe failed',e)}});
+}
+function authWatchCount(){return authWatches.length}
+// Universal fail-closed transition: zero tenant listeners, zero identity watches, identity cleared, sign-in surface shown.
+// The Firebase session itself is left as is (the user may sign out from the panel).
+function authFailClosed(state,detail){
+  authDetachWatches();
+  authSignedOutTeardown();
+  authSetState(state,detail);
+}
+function authMembershipEligible(m,uid){return !!m&&m.uid===uid&&m.tenantId===ENTRY_TENANT_ID&&m.accessEnabled===true&&m.accessRole==='admin'}
+// R1 — the exact A-1 / R-3 bootstrap shape, server-confirmed. Nothing else is ever queried on memberships.
+async function authListMemberships(uid){
+  const snap=await db.collection('memberships').where('uid','==',uid).get({source:'server'});
+  return snap.docs.map(d=>Object.assign({id:d.id},d.data()));
+}
+// R3 — display name for opprettetAv/uploadedBy fields; audit text only, never authority, never blocking.
+async function authResolveDisplayName(user,ansattId){
+  try{
+    const s=await tenantCol('ansatte').doc(String(ansattId||'')).get();
+    const n=s.exists&&s.data()?s.data().navn:null;
+    if(typeof n==='string'&&n.trim())return n.trim();
+  }catch(e){}
+  return user.email||'admin';
+}
+// E1 — monotonic generation floor. Pure transaction body: reads inside the transaction, never lowers,
+// never coerces a malformed value. Returns {outcome:'COMPATIBLE'|'STALE'|'MALFORMED', value, action}.
+function authGenerationFloorTx(tx,ref,uid){
+  return tx.get(ref).then(snap=>{
+    const now=new Date().toISOString();
+    if(!snap.exists){
+      tx.set(ref,{minGeneration:CLIENT_GENERATION,updatedAt:now,updatedByUid:uid,initializedByGeneration:CLIENT_GENERATION});
+      return {outcome:'COMPATIBLE',value:CLIENT_GENERATION,action:'initialized'};
+    }
+    const raw=(snap.data()||{}).minGeneration;
+    if(typeof raw!=='number'||!Number.isFinite(raw)||!Number.isInteger(raw))return {outcome:'MALFORMED',value:raw,action:'none'};
+    if(raw<CLIENT_GENERATION){
+      tx.set(ref,{minGeneration:CLIENT_GENERATION,updatedAt:now,updatedByUid:uid},{merge:true});
+      return {outcome:'COMPATIBLE',value:CLIENT_GENERATION,action:'raised',from:raw};
+    }
+    if(raw===CLIENT_GENERATION)return {outcome:'COMPATIBLE',value:raw,action:'none'};
+    return {outcome:'STALE',value:raw,action:'none'};
+  });
+}
+function authGenerationRef(){return tenantCol('_meta').doc('client')}
+function authGenerationBarrier(uid){return db.runTransaction(tx=>authGenerationFloorTx(tx,authGenerationRef(),uid))}
+// E2 — server-confirmed revalidation of the selected membership immediately before READY. Same self-membership authority, no broader shape.
+async function authRevalidateMembership(uid,membershipId){
+  if(membershipId!==uid+'_'+ENTRY_TENANT_ID)return {ok:false,reason:'identity-mismatch'};
+  const s=await db.collection('memberships').doc(membershipId).get({source:'server'});
+  if(!s.exists)return {ok:false,reason:'missing'};
+  const m=Object.assign({id:s.id},s.data());
+  return authMembershipEligible(m,uid)?{ok:true,m}:{ok:false,reason:'ineligible'};
+}
+// Terminal non-READY settlement of the current attempt: no listeners exist yet; show the matching panel.
+function authSettle(gen,state,detail){
+  if(gen!==authGeneration||authAttemptSettled)return null;
+  authSettleIdentityAttempt(gen,state);
+  document.getElementById('loading-screen').classList.add('hidden');
   document.getElementById('login-screen').classList.remove('hidden');
-  document.getElementById('current-user-btn').style.display = 'none';
+  authSetState(state,detail);
+  return state;
+}
+// Live watches (attached only after all three barriers are green): own membership (M16) and generation floor (stale).
+function authAttachWatches(gen,uid,membershipId){
+  authDetachWatches();
+  authWatches.push(db.collection('memberships').doc(membershipId).onSnapshot(s=>{
+    if(gen!==authGeneration)return;
+    const m=s.exists?Object.assign({id:s.id},s.data()):null;
+    if(!authMembershipEligible(m,uid))authFailClosed('NO_ACCESS',{step:'watch',reason:s.exists?'ineligible':'missing'});
+  },e=>{if(gen!==authGeneration)return;authFailClosed('ACCESS_ERROR',{step:'membership-watch',code:authSessionErrCode(e)})}));
+  authWatches.push(authGenerationRef().onSnapshot(s=>{
+    if(gen!==authGeneration)return;
+    const raw=s.exists?(s.data()||{}).minGeneration:undefined;
+    if(typeof raw==='number'&&Number.isInteger(raw)&&raw>CLIENT_GENERATION)authFailClosed('STALE',{minGeneration:raw});
+  },e=>{if(gen!==authGeneration)return;authFailClosed('ACCESS_ERROR',{step:'generation-watch',code:authSessionErrCode(e)})}));
+}
+// The identity pipeline. Every await is followed by a generation check; a superseded attempt returns null and mutates nothing.
+async function authResolveMembership(user){
+  authDetachWatches();
+  const gen=++authGeneration;
+  authAttemptSettled=false;
+  if(authIdentityTimer){clearTimeout(authIdentityTimer);authIdentityTimer=null}
+  authIdentityTimer=setTimeout(()=>{if(gen===authGeneration&&!authAttemptSettled)authSettle(gen,'ACCESS_ERROR',{step:'identity-timeout',code:'timeout'})},30000);
+  authSetState('RESOLVING',{});
+  document.getElementById('loading-screen').classList.remove('hidden');
+  document.getElementById('ld-text').textContent='Henter tilgang…';
+  try{
+    let list;
+    try{list=await authListMemberships(user.uid)}catch(e){return authSettle(gen,'ACCESS_ERROR',{step:'membership-query',code:authSessionErrCode(e)})}
+    if(gen!==authGeneration||authAttemptSettled)return null;
+    const eligible=list.filter(m=>authMembershipEligible(m,user.uid));
+    if(eligible.length===0)return authSettle(gen,'NO_ACCESS',{step:'r1',memberships:list.length});
+    if(eligible.length>1)return authSettle(gen,'ACCESS_ERROR',{step:'r1',code:'membership-ambiguous'});
+    const chosen=eligible[0];
+    const name=await authResolveDisplayName(user,chosen.ansattId);
+    if(gen!==authGeneration||authAttemptSettled)return null;
+    let g;
+    try{g=await authGenerationBarrier(user.uid)}catch(e){return authSettle(gen,'ACCESS_ERROR',{step:'generation',code:authSessionErrCode(e)})}
+    if(gen!==authGeneration||authAttemptSettled)return null;
+    if(g.outcome==='MALFORMED')return authSettle(gen,'ACCESS_ERROR',{step:'generation',code:'generation-malformed'});
+    if(g.outcome==='STALE')return authSettle(gen,'STALE',{minGeneration:g.value});
+    let rv;
+    try{rv=await authRevalidateMembership(user.uid,chosen.id)}catch(e){return authSettle(gen,'ACCESS_ERROR',{step:'revalidate',code:authSessionErrCode(e)})}
+    if(gen!==authGeneration||authAttemptSettled)return null;
+    if(!rv.ok)return authSettle(gen,'NO_ACCESS',{step:'revalidate',reason:rv.reason});
+    currentUser={uid:user.uid,tenantId:rv.m.tenantId,accessRole:rv.m.accessRole,ansattId:rv.m.ansattId,name,email:user.email||null,role:'admin'};
+    authBoundUid=user.uid;
+    authAttachWatches(gen,user.uid,chosen.id);
+    if(gen!==authGeneration)return null;
+    const outcome=authGuardedTenantDataEntry(gen);
+    if(outcome!=='ready')return authSettle(gen,'ACCESS_ERROR',{step:'entry',code:String(outcome)});
+    authSettleIdentityAttempt(gen,outcome);
+    const btn=document.getElementById('current-user-btn');
+    if(btn){btn.textContent=currentUser.name+' · Logg ut';btn.style.display='flex'}
+    document.getElementById('login-screen').classList.add('hidden');
+    authSetState('READY',{uidSuffix:authSessionUidSuffix(user)});
+    return outcome;
+  }catch(e){
+    if(gen!==authGeneration)return null;
+    return authSettle(gen,'ACCESS_ERROR',{step:'resolve',code:authSessionErrCode(e)});
+  }
+}
+// Sign-in surface + observer. Persistence is SESSION-gated (C1): the observer and the sign-in handler
+// exist only after setPersistence(SESSION) resolved; on rejection nothing can sign in or resolve.
+function authIdentityInit(){
+  const email=document.getElementById('auth-email');
+  const password=document.getElementById('auth-password');
+  const submit=document.getElementById('auth-submit');
+  const errEl=document.getElementById('auth-error');
+  if(!email||!password||!submit){document.getElementById('loading-screen').classList.add('hidden');authSetState('ACCESS_ERROR',{step:'ui',code:'ui-missing'});return}
+  submit.disabled=true;
+  let auth;
+  try{auth=firebase.auth()}catch(e){AUTH_SESSION_DIAG.persistence='UNAVAILABLE';document.getElementById('loading-screen').classList.add('hidden');authSetState('PERSISTENCE_FAILED',{code:authSessionErrCode(e)});return}
+  const signOutNow=async()=>{try{await auth.signOut()}catch(e){authSessionRecord('SIGN_OUT_FAILED',{code:authSessionErrCode(e)})}};
+  ['auth-signout-noaccess','auth-signout-error'].forEach(id=>{const b=document.getElementById(id);if(b)b.addEventListener('click',()=>{authDetachWatches();signOutNow()})});
+  const retry=document.getElementById('auth-retry');
+  if(retry)retry.addEventListener('click',()=>{const u=auth.currentUser;if(u)authResolveMembership(u);else authFailClosed('SIGNED_OUT',{})});
+  const reload=document.getElementById('auth-reload');
+  if(reload)reload.addEventListener('click',()=>location.reload());
+  window.addEventListener('pageshow',e=>{if(e.persisted)location.reload()});
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&AUTH_SESSION_DIAG.state==='STALE')location.reload()});
+  auth.setPersistence(firebase.auth.Auth.Persistence.SESSION).then(()=>{
+    AUTH_SESSION_DIAG.persistence='SESSION';
+    AUTH_SESSION_DIAG.signInEnabled=true;
+    authSessionRecord('PERSISTENCE_SESSION_ESTABLISHED',{});
+    submit.addEventListener('click',async()=>{
+      if(AUTH_SESSION_DIAG.persistence!=='SESSION'||!AUTH_SESSION_DIAG.signInEnabled){authSessionRecord('SIGN_IN_BLOCKED_NOT_READY',{});return}
+      const em=(email.value||'').trim();
+      const pw=password.value||'';
+      if(!em||!pw){if(errEl)errEl.textContent='Fyll inn e-post og passord.';return}
+      submit.disabled=true;
+      if(errEl)errEl.textContent='';
+      authSessionRecord('SIGN_IN_STARTED',{emailDomain:em.split('@')[1]||''});
+      try{await auth.signInWithEmailAndPassword(em,pw);authSessionRecord('SIGN_IN_RESOLVED',{})}
+      catch(e){authSetState('AUTH_ERROR',{code:authSessionErrCode(e)});if(errEl)errEl.textContent='Innlogging feilet ('+authSessionErrCode(e)+').'}
+      finally{password.value='';submit.disabled=false}
+    });
+    password.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();submit.click()}});
+    submit.disabled=false;
+    auth.onAuthStateChanged(u=>{
+      if(u){authSessionRecord('SIGNED_IN',{uidSuffix:authSessionUidSuffix(u),emailVerified:!!u.emailVerified,providers:(u.providerData||[]).length});authResolveMembership(u)}
+      else authFailClosed('SIGNED_OUT',{});
+    });
+  }).catch(e=>{
+    AUTH_SESSION_DIAG.persistence='FAILED';
+    AUTH_SESSION_DIAG.signInEnabled=false;
+    submit.disabled=true;
+    document.getElementById('loading-screen').classList.add('hidden');
+    authSetState('PERSISTENCE_FAILED',{code:authSessionErrCode(e)});
+  });
+}
+// Header logout: Firebase signOut → observer(null) → authFailClosed('SIGNED_OUT'). No PIN state exists.
+function logoutUser(){
+  if(!confirm('Logg ut '+((currentUser&&currentUser.name)||'')+'?'))return;
+  authDetachWatches();
+  authExplicitLogoutTeardown().then(r=>{if(r==='LOGOUT_FAILURE')authSetState('LOGOUT_FAILURE',{})});
 }
 
 function applyRoleRestrictions(){
   if(!currentUser) return;
   const role = currentUser.role;
-  // Regnskap: hide FAB, hide delete buttons
+  // S2b-2: role is membership-derived; only 'admin' can reach this point. Kept for the header/FAB wiring.
   const fab = document.getElementById('fabBtn');
   if(role === 'regnskap'){
     fab.style.display = 'none';
@@ -8142,26 +8241,6 @@ function applyRoleRestrictions(){
   }
   updateHdrAddBtn();
 }
-
-function checkLoginSession(){
-  const saved = sessionStorage.getItem('fs_user');
-  if(saved){
-    try{
-      currentUser = JSON.parse(saved);
-      const btn = document.getElementById('current-user-btn');
-      btn.textContent = USERS[currentUser.name]?.label + ' · Logg ut';
-      btn.style.display = 'flex';
-      applyRoleRestrictions();
-      return true;
-    }catch(e){}
-  }
-  return false;
-}
-
-// Add shake keyframe
-const shakeStyle = document.createElement('style');
-shakeStyle.textContent = '@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}';
-document.head.appendChild(shakeStyle);
 
 // ─────────────────────────────────────────
 // BOOT
@@ -8175,89 +8254,10 @@ document.head.appendChild(shakeStyle);
     messagingSenderId: "606244090266",
     appId: "1:606244090266:web:297797b06685c9ad5b8a23"
   };
-  // Check if already logged in this session
-  if(!checkLoginSession()){
-    document.getElementById('login-screen').classList.remove('hidden');
-  }
+  // S2b-2: legacy PIN session storage is never read; remove it defensively. Identity is resolved by authIdentityInit().
+  try{sessionStorage.removeItem('fs_user')}catch(e){}
+  document.getElementById('login-screen').classList.remove('hidden');
   initFirebase(FIREBASE_CONFIG);
-})();
-
-// ─────────────────────────────────────────
-// S2b-1 · FIREBASE SESSION · OBSERVATIONAL ONLY (REV2)
-// PIN (USERS/checkPin/fs_user) remains the sole business authority. Nothing in this block reads or
-// writes currentUser, sessionStorage, LOCAL, listeners, routing, roles, tenant paths, or Firestore.
-// Sign-in is gated: it is enabled only after setPersistence(SESSION) has RESOLVED. On persistence
-// failure sign-in stays unavailable and the Firebase session is a non-load-bearing no-op.
-// ─────────────────────────────────────────
-const AUTH_SESSION_DIAG={events:[],last:null,persistence:'PENDING',signInEnabled:false};
-function authSessionErrCode(e){return String((e&&e.code)||'unknown')}
-function authSessionUidSuffix(u){const id=String((u&&u.uid)||'');return id?'…'+id.slice(-6):''}
-function authSessionStatusText(rec){
-  switch(rec.kind){
-    case 'SIGNED_IN':return 'Firebase-økt: aktiv ('+rec.uidSuffix+')';
-    case 'SIGNED_OUT':return 'Firebase-økt: ingen';
-    case 'PERSISTENCE_SESSION_ESTABLISHED':return 'Firebase-økt: klar (SESSION)';
-    case 'PERSISTENCE_FAILED':return 'Firebase-økt: utilgjengelig ('+rec.code+')';
-    case 'SIGN_IN_STARTED':return 'Firebase-økt: logger inn…';
-    case 'SIGN_IN_FAILED':return 'Firebase-økt: innlogging feilet ('+rec.code+')';
-    case 'SIGN_IN_BLOCKED_NOT_READY':return 'Firebase-økt: ikke klar';
-    case 'SIGN_OUT_FAILED':return 'Firebase-økt: utlogging feilet ('+rec.code+')';
-    default:return 'Firebase-økt: '+rec.kind;
-  }
-}
-function authSessionRecord(kind,detail){
-  const rec=Object.assign({t:new Date().toISOString(),kind},detail||{});
-  AUTH_SESSION_DIAG.events.push(rec);
-  if(AUTH_SESSION_DIAG.events.length>50)AUTH_SESSION_DIAG.events.shift();
-  AUTH_SESSION_DIAG.last=rec;
-  console.info('[auth-session]',kind,rec);
-  const el=document.getElementById('auth-session-status');
-  if(el)el.textContent=authSessionStatusText(rec);
-}
-(function authSessionInit(){
-  // Step 1 — controls: sign-in is disabled in markup and stays disabled until step 4 succeeds.
-  const email=document.getElementById('auth-email');
-  const password=document.getElementById('auth-password');
-  const submit=document.getElementById('auth-submit');
-  const signout=document.getElementById('auth-signout');
-  if(!email||!password||!submit||!signout){authSessionRecord('UI_MISSING',{});return}
-  submit.disabled=true;
-  // Step 2 — SDK availability. Failure = no-op; PIN path untouched.
-  let auth;
-  try{auth=firebase.auth()}catch(e){AUTH_SESSION_DIAG.persistence='UNAVAILABLE';authSessionRecord('SDK_UNAVAILABLE',{code:authSessionErrCode(e)});return}
-  // Step 3 — observer (observational only; registered before any sign-in is possible).
-  auth.onAuthStateChanged(u=>{
-    if(u)authSessionRecord('SIGNED_IN',{uidSuffix:authSessionUidSuffix(u),emailVerified:!!u.emailVerified,providers:(u.providerData||[]).length});
-    else authSessionRecord('SIGNED_OUT',{});
-  });
-  // Step 4 — persistence gate. Sign-in handler is attached ONLY inside the resolved branch.
-  auth.setPersistence(firebase.auth.Auth.Persistence.SESSION).then(()=>{
-    AUTH_SESSION_DIAG.persistence='SESSION';
-    AUTH_SESSION_DIAG.signInEnabled=true;
-    authSessionRecord('PERSISTENCE_SESSION_ESTABLISHED',{});
-    submit.addEventListener('click',async()=>{
-      if(AUTH_SESSION_DIAG.persistence!=='SESSION'||!AUTH_SESSION_DIAG.signInEnabled){authSessionRecord('SIGN_IN_BLOCKED_NOT_READY',{});return}
-      const em=(email.value||'').trim();
-      const pw=password.value||'';
-      if(!em||!pw){authSessionRecord('SIGN_IN_SKIPPED',{code:'empty-fields'});return}
-      submit.disabled=true;
-      authSessionRecord('SIGN_IN_STARTED',{emailDomain:em.split('@')[1]||''});
-      try{await auth.signInWithEmailAndPassword(em,pw);authSessionRecord('SIGN_IN_RESOLVED',{})}
-      catch(e){authSessionRecord('SIGN_IN_FAILED',{code:authSessionErrCode(e)})}
-      finally{password.value='';submit.disabled=false}
-    });
-    password.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();submit.click()}});
-    submit.disabled=false;
-  }).catch(e=>{
-    AUTH_SESSION_DIAG.persistence='FAILED';
-    AUTH_SESSION_DIAG.signInEnabled=false;
-    submit.disabled=true;
-    authSessionRecord('PERSISTENCE_FAILED',{code:authSessionErrCode(e)});
-  });
-  // Sign-out needs no persistence gate: with no session it is a harmless no-op.
-  signout.addEventListener('click',async()=>{
-    try{await auth.signOut()}catch(e){authSessionRecord('SIGN_OUT_FAILED',{code:authSessionErrCode(e)})}
-  });
 })();
 
 // ─────────────────────────────────────────
