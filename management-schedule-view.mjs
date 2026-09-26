@@ -39,7 +39,7 @@ const WD_SHORT = ['Man', 'Tir', 'Ons', 'Tor', 'Fre', 'Lør', 'Søn'];
 const WD_MIN = ['M', 'T', 'O', 'T', 'F', 'L', 'S'];
 const MONTH_NAMES = ['januar', 'februar', 'mars', 'april', 'mai', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'desember'];
 
-export function renderManagementView(root, { store, tenantId, tenantLabel, people, roleLabels, actor, policy, deps, nowMs, timezone, onViewAs, initialQuery, initialOffset, onOffsetChange }) {
+export function renderManagementView(root, { store, tenantId, tenantLabel, people, roleLabels, actor, policy, deps, nowMs, timezone, onViewAs, initialQuery, initialOffset, onOffsetChange, applyOperation }) {
   if (!root) return;
   const todayWd = tenantWorkDate(nowMs, timezone);
   const baseMonday = isoWeekMonday(todayWd);
@@ -83,10 +83,20 @@ export function renderManagementView(root, { store, tenantId, tenantLabel, peopl
     if (code === 'TIME_INVALID') return 'Oppgi gyldige klokkeslett (TT:MM).';
     return 'Kunne ikke lagre (' + code + ').';
   }
+  // Thin production operation seam (Vaktplan bridge): a host may supply `applyOperation`, which receives the SAME
+  // arguments this view has always handed to applyScheduleOperation and may resolve asynchronously (an adapter
+  // transaction). Without it the accepted in-memory behaviour is unchanged.
   function apply(op) {
-    const res = applyScheduleOperation({ store, tenantId, actor, op, now: Date.now(), policy, deps });
-    if (res.ok) { sel = null; errMsg = ''; } else { errMsg = opError(res.code); }
-    draw();
+    const settle = (res) => {
+      if (res && res.ok) { sel = null; errMsg = ''; } else { errMsg = opError(res && res.code ? res.code : 'UNKNOWN'); }
+      draw();
+    };
+    const run = typeof applyOperation === 'function' ? applyOperation : applyScheduleOperation;
+    let res;
+    try { res = run({ store, tenantId, actor, op, now: Date.now(), policy, deps }); }
+    catch (e) { settle({ ok: false, code: e && e.code ? e.code : 'UNKNOWN' }); return; }
+    if (res && typeof res.then === 'function') res.then(settle, (e) => settle({ ok: false, code: e && e.code ? e.code : 'UNKNOWN' }));
+    else settle(res);
   }
 
   function shiftChip(s, cls) {
@@ -488,4 +498,7 @@ export function renderManagementView(root, { store, tenantId, tenantLabel, peopl
   }
 
   draw();
+  // Vaktplan bridge: a production host redraws from the live store when a server snapshot changes it,
+  // keeping the view's own navigation/editor state. Preview callers ignore the return value.
+  return { redraw: draw };
 }

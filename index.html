@@ -659,7 +659,7 @@ select.fi:focus{background-color:#fff}
      (#emp-identity, #emp-nav, #emp-root); the shell is mounted ONLY by authEnterEmployeeSurface through the bridge door.
 ══════════════════════════════════════ -->
 <div id="employee-host">
-  <div class="emp-hostbar"><span>Four Season AS · ansatt</span><span class="sp"></span><span id="emp-host-notice" class="emp-notice"></span><button type="button" class="emp-hostbtn" id="emp-host-back" style="display:none" onclick="authReturnToManagement()">Tilbake til ledelse</button><button type="button" class="emp-hostbtn" onclick="logoutUser()">Logg ut</button></div>
+  <div class="emp-hostbar"><span id="emp-host-label">Four Season AS · ansatt</span><span class="sp"></span><span id="emp-host-notice" class="emp-notice"></span><button type="button" class="emp-hostbtn" id="vp-host-back" style="display:none" onclick="authCloseVaktplan()">Tilbake til ledelse</button><button type="button" class="emp-hostbtn" id="emp-host-back" style="display:none" onclick="authReturnToManagement()">Tilbake til ledelse</button><button type="button" class="emp-hostbtn" onclick="logoutUser()">Logg ut</button></div>
   <header class="top"><div class="top-in">
     <div class="brand"><span class="mark" aria-hidden="true"></span>Sormena</div>
     <button id="emp-identity" class="idbtn" type="button" hidden><span class="av"></span><span class="nm"></span></button>
@@ -683,6 +683,7 @@ select.fi:focus{background-color:#fff}
   </div>
   <div class="hdr-right"><button class="user-badge" id="current-user-btn" onclick="logoutUser()" style="display:none"></button>
     <button class="hdr-btn" id="hdrEmpBtn" style="display:none" onclick="authOpenMinAnsattside()">Min ansattside</button>
+    <button class="hdr-btn" id="hdrVpBtn" style="display:none" onclick="authOpenVaktplan()">Vaktplan</button>
     <button class="hdr-add-btn" id="hdrAddBtn" onclick="handleHdrAdd()"></button>
     <button class="hdr-btn" id="hdrExpBtn" style="display:none" onclick="handleExport()">📤 CSV</button>
 
@@ -8036,6 +8037,7 @@ let authWatches=[];              // E3 — active identity watches (own membersh
 let ACTIVE_SURFACE='none';      // S4 host: none | management | employee — at most ONE listener set is live (C5 switch discipline)
 let authMembership=null;        // S4 host: the ONE bridge-shaped membership {uid,tenantId,accessRole,ansattId,accessEnabled} resolved by authResolveMembership
 let empHost=null;               // S4 host: {gen,adapters,membership} while the employee surface is mounted; null otherwise
+let vpHost=null;                // Vaktplan bridge: {gen,adapters,view} while the production management Vaktplan is open (management surface stays active)
 const AUTH_SESSION_DIAG={events:[],last:null,persistence:'PENDING',signInEnabled:false,state:'BOOT'};
 const AUTH_PANEL_FOR_STATE={SIGNED_OUT:'signin',PERSISTENCE_FAILED:'signin',AUTH_ERROR:'signin',LOGOUT_FAILURE:'error',NO_ACCESS:'noaccess',ACCESS_ERROR:'error',STALE:'stale'};
 function authSessionErrCode(e){return String((e&&e.code)||'unknown')}
@@ -8080,6 +8082,7 @@ function authSetState(state,detail){
 // E3 — the single idempotent identity-watch detach helper. Every teardown/supersession path calls it.
 function authDetachWatches(){
   authLeaveEmployeeSurface();  // S4 host (C5): every teardown/supersession path also disposes the employee surface
+  authLeaveVaktplan();         // Vaktplan bridge: same discipline for the management Vaktplan listener
   const ws=authWatches;authWatches=[];
   ws.forEach(un=>{try{if(typeof un==='function')un()}catch(e){console.error('[auth] watch unsubscribe failed',e)}});
 }
@@ -8233,9 +8236,9 @@ async function authResolveMembership(user){
 // listener set is live at any time; every step, import completion and adapter callback is generation-guarded.
 // ─────────────────────────────────────────
 // Self-test hook: at most one non-zero; management ≤ 17; employee ≤ 4.
-function authSurfaceCounts(){return {surface:ACTIVE_SURFACE,management:Object.keys(listeners).length,employee:empHost&&empHost.adapters?empHost.adapters.listenerCount():0}}
+function authSurfaceCounts(){return {surface:ACTIVE_SURFACE,management:Object.keys(listeners).length,vaktplan:vpHost&&vpHost.adapters?vpHost.adapters.listenerCount():0,employee:empHost&&empHost.adapters?empHost.adapters.listenerCount():0}}
 // Any runtime state that a negative settle must tear down (OBS-1).
-function authRuntimeLive(){return Object.keys(listeners).length>0||ACTIVE_SURFACE!=='none'||!!empHost||!!currentUser||!!authBoundUid}
+function authRuntimeLive(){return Object.keys(listeners).length>0||ACTIVE_SURFACE!=='none'||!!empHost||!!vpHost||!!currentUser||!!authBoundUid}
 // The minimal host-only Firestore capability required by validateFsCapability, over the existing compat instance. ZERO new initializeApp.
 function authCompatFs(){
   // First-snapshot readiness: the accepted adapters expose no change signal and the shell renders from the mirrors at mount,
@@ -8266,9 +8269,12 @@ function authUpdateEmployeeControls(){
   const admin=!!(currentUser&&currentUser.role==='admin');
   const b=document.getElementById('hdrEmpBtn');if(b)b.style.display=admin&&own&&ACTIVE_SURFACE==='management'?'':'none';
   const back=document.getElementById('emp-host-back');if(back)back.style.display=admin&&ACTIVE_SURFACE==='employee'?'':'none';
+  const vp=document.getElementById('hdrVpBtn');if(vp)vp.style.display=admin&&ACTIVE_SURFACE==='management'&&!vpHost?'':'none';
+  const vpBack=document.getElementById('vp-host-back');if(vpBack)vpBack.style.display=vpHost?'':'none';
 }
 // management → (nothing): stop the 17 listeners and reset the startup coordinator so a later guarded re-entry starts clean.
 function authLeaveManagement(){
+  authLeaveVaktplan();   // Vaktplan bridge: the management Vaktplan listener is disposed BEFORE the 17 stop and before any employee mount
   stopListeners();
   startupGeneration++;
   if(startupTimer){clearTimeout(startupTimer);startupTimer=null}
@@ -8335,6 +8341,88 @@ async function authEnterEmployeeSurface(gen,membership){
   authUpdateEmployeeControls();
   return 'employee';
 }
+// ─────────────────────────────────────────
+// VAKTPLAN BRIDGE — production management Vaktplan (admin only). People = LOCAL.ansatte (document id = ansattId);
+// schedule truth = S4 tenants/{T}/shifts through createManagementScheduleAdapters (ONE bounded workDate-range
+// listener; writes through the accepted admin seam). The management surface and its 17 listeners stay active;
+// the Vaktplan listener is disposed on close, on every teardown, and BEFORE any employee mount (C5).
+// ─────────────────────────────────────────
+function authVaktplanPeople(){
+  return (LOCAL.ansatte||[]).filter(a=>a&&typeof a.id==='string'&&a.id&&typeof a.navn==='string'&&a.navn.trim()&&a.aktiv!==false)
+    .map(a=>({ansattId:a.id,name:a.navn.trim(),roleKey:(typeof a.stilling==='string'&&a.stilling.trim())?a.stilling.trim():null}))
+    .sort((x,y)=>x.name.localeCompare(y.name,'nb'));
+}
+// Bounded read window around today (tenant-local dates): 8 weeks back, 16 weeks ahead.
+function authVaktplanRange(){
+  const f=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Oslo',year:'numeric',month:'2-digit',day:'2-digit'});
+  const d=ms=>f.format(new Date(ms));const now=Date.now();
+  return {from:d(now-56*86400000),to:d(now+112*86400000)};
+}
+function authVaktplanAdapterError(gen,e){
+  if(gen!==authGeneration||!vpHost||vpHost.gen!==gen)return;
+  const code=e&&e.code?String(e.code):'unknown';
+  authSessionRecord('VAKTPLAN_ADAPTER_ERROR',{scope:e&&e.scope?String(e.scope):'',code});
+  if(code==='PERMISSION_DENIED'){authFailClosed('ACCESS_ERROR',{step:'vaktplan-listen',code:'permission-denied'});return}
+  showToast('Vaktplan: datafeil ('+code+')','err');
+}
+// Dispose the management Vaktplan (listener -> 0, view detached, host cleared). Never touches the 17 management listeners.
+function authLeaveVaktplan(){
+  const h=vpHost;vpHost=null;
+  if(!h)return;
+  if(h.view&&typeof h.view.dispose==='function'){try{h.view.dispose()}catch(e){console.error('[host] vaktplan view dispose failed',e)}}
+  if(h.adapters){
+    try{h.adapters.dispose()}catch(e){console.error('[host] vaktplan dispose failed',e)}
+    let n=0;try{n=h.adapters.listenerCount()}catch(e){}if(n!==0)console.error('[host] vaktplan listeners still live after dispose: '+n);
+  }
+  const root=document.getElementById('emp-root');if(root)while(root.firstChild)root.removeChild(root.firstChild);
+  const lab=document.getElementById('emp-host-label');if(lab)lab.textContent='Four Season AS · ansatt';
+  if(!empHost){const host=document.getElementById('employee-host');if(host)host.classList.remove('active');authEmployeeCss(false)}
+}
+// Header control "Vaktplan": admin, management active, not already open. Same membership object, no re-auth.
+async function authOpenVaktplan(){
+  const gen=authGeneration;
+  if(!currentUser||currentUser.role!=='admin'||ACTIVE_SURFACE!=='management'||vpHost)return null;
+  if(!authMembership||authMembership.accessRole!=='admin')return null;
+  authSessionRecord('VAKTPLAN_OPEN',{});
+  document.getElementById('loading-screen').classList.remove('hidden');
+  document.getElementById('ld-text').textContent='Åpner vaktplan…';
+  let ui,ad,core;
+  try{[ui,ad,core]=await Promise.all([import('./employee-shell-ui.mjs'),import('./employee-production-adapters.mjs'),import('./employee-shell-core.mjs')])}
+  catch(e){if(gen!==authGeneration)return null;document.getElementById('loading-screen').classList.add('hidden');showToast('Kunne ikke laste vaktplanen ('+authSessionErrCode(e)+')','err');return null}
+  if(gen!==authGeneration||ACTIVE_SURFACE!=='management'||vpHost)return null;  // superseded during the import → nothing mounts
+  const range=authVaktplanRange();
+  const people=authVaktplanPeople();
+  const fsCap=authCompatFs();
+  let adapters;
+  try{
+    adapters=ad.createManagementScheduleAdapters({fs:fsCap,tenantId:TENANT_ID,membership:authMembership,people,range,isCurrent:()=>gen===authGeneration&&ACTIVE_SURFACE==='management'&&!!vpHost&&vpHost.gen===gen,nowMs:()=>Date.now(),policy:core.ETR2A_POLICY,onError:(e)=>authVaktplanAdapterError(gen,e)});
+    vpHost={gen,adapters,view:null,people:people.length,range};
+    adapters.start();
+  }catch(e){vpHost=null;document.getElementById('loading-screen').classList.add('hidden');showToast('Vaktplan: '+authSessionErrCode(e),'err');return null}
+  await fsCap.whenSettled(1,5000);
+  if(gen!==authGeneration||ACTIVE_SURFACE!=='management'||!vpHost||vpHost.gen!==gen)return null;
+  const host=document.getElementById('employee-host');if(host)host.classList.add('active');
+  const lab=document.getElementById('emp-host-label');if(lab)lab.textContent='Four Season AS · Vaktplan';
+  authEmployeeCss(true);
+  hideMainApp();
+  try{vpHost.view=ui.mountManagementVaktplan(document.getElementById('emp-root'),{identity:authMembership,expectedTenantId:TENANT_ID,adapters,people})}
+  catch(e){authLeaveVaktplan();document.getElementById('main-app').style.display='block';document.getElementById('loading-screen').classList.add('hidden');showToast('Vaktplan: '+authSessionErrCode(e),'err');return null}
+  document.getElementById('loading-screen').classList.add('hidden');
+  authUpdateEmployeeControls();
+  return 'vaktplan';
+}
+// Host control "Tilbake til ledelse" from the Vaktplan: dispose (-> 0), show the still-running management surface again.
+function authCloseVaktplan(){
+  const gen=authGeneration;
+  if(!vpHost)return null;
+  authLeaveVaktplan();
+  if(gen!==authGeneration||ACTIVE_SURFACE!=='management')return null;
+  document.getElementById('main-app').style.display='block';
+  authSessionRecord('VAKTPLAN_CLOSE',{});
+  authUpdateEmployeeControls();
+  return 'management';
+}
+
 // Header control "Min ansattside": admin with a bound ansattId, management active, same membership object, no re-auth.
 function authOpenMinAnsattside(){
   const gen=authGeneration;

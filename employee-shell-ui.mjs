@@ -1422,3 +1422,53 @@ export function mountEmployeePreview(root) { return mountEmployeeShell(root, { m
 export function mountEmployeeProduction(root, { identity, expectedTenantId, adapters } = {}) {
   return mountEmployeeShell(root, { mode: 'production', identity, expectedTenantId, adapters });
 }
+
+// ---- PRODUCTION MANAGEMENT VAKTPLAN DOOR (Vaktplan bridge) ------------------------------------------------
+// Admin-only. Identity = the ONE resolved membership supplied by the host (no fixture actor, no chooser, no
+// re-resolution); adapters = createManagementScheduleAdapters over the host capability; people = legacy `ansatte`
+// (document id = ansattId) supplied by the host. The accepted management view renders unchanged; every write goes
+// through adapters.schedule.admin (same transactions and truthful events as the employee-side admin seam).
+export function mountManagementVaktplan(root, { identity, expectedTenantId, adapters, people, initialOffset, onOffsetChange } = {}) {
+  if (!root) return null;
+  const m = identity && typeof identity === 'object' ? identity : null;
+  const denied = (code) => {
+    clear(root);
+    const card = el('div', { cls: 'card', style: 'max-width:520px' });
+    card.appendChild(el('div', { cls: 'kicker neutral', text: 'Ingen tilgang' }));
+    card.appendChild(el('h2', { text: 'Vaktplan kan ikke åpnes' }));
+    card.appendChild(el('div', { cls: 'sub', text: denialMessage(code) }));
+    root.appendChild(card);
+    return null;
+  };
+  if (!m || typeof m.uid !== 'string' || !m.uid) return denied(DENIAL.IDENTITY_MISSING);
+  if (typeof expectedTenantId !== 'string' || !expectedTenantId) return denied(DENIAL.CONFIG_TENANT_MISSING);
+  if (m.tenantId !== expectedTenantId) return denied(DENIAL.IDENTITY_TENANT_MISMATCH);
+  if (m.accessEnabled !== true) return denied(DENIAL.IDENTITY_DISABLED);
+  if (m.accessRole !== 'admin') return denied(DENIAL.IDENTITY_ROLE_INVALID);
+  if (!adapters || !adapters.schedule || typeof adapters.schedule.store !== 'function' || !adapters.schedule.admin) return denied(DENIAL.ADAPTERS_MISSING);
+  const list = (Array.isArray(people) ? people : []).filter((p) => p && typeof p.ansattId === 'string' && p.ansattId && typeof p.name === 'string' && p.name)
+    .map((p) => ({ ansattId: p.ansattId, name: p.name, roleKey: typeof p.roleKey === 'string' && p.roleKey ? p.roleKey : null }));
+  // Capability-shaped actor DERIVED from the membership (the frozen engine requires accessRole admin for writes).
+  const actor = Object.freeze({ uid: m.uid, accessRole: 'admin', ansattId: typeof m.ansattId === 'string' && m.ansattId ? m.ansattId : null, accessEnabled: m.accessEnabled === true, tenantId: m.tenantId,
+    canManageSchedule: true, canViewOwnSchedule: false, canViewEmployeeCore: false, canViewEmployeeCompensation: false, canEditEmployment: false });
+  const A = adapters.schedule.admin;
+  const applyOperation = ({ op }) => {
+    if (!op || typeof op !== 'object') return Promise.resolve({ ok: false, code: 'UNSUPPORTED_OPERATION' });
+    if (op.kind === 'create') return A.create({ workDate: op.workDate, ansattId: op.ansattId == null ? null : op.ansattId, fromHM: op.fromHM, toHM: op.toHM, roleKey: op.roleKey == null ? null : op.roleKey });
+    if (op.kind === 'revise') return A.revise(op.shiftId, { fromHM: op.fromHM, toHM: op.toHM });
+    if (op.kind === 'assign') return A.assign(op.shiftId, op.ansattId == null ? null : op.ansattId);
+    if (op.kind === 'unassign') return A.assign(op.shiftId, null);
+    if (op.kind === 'cancel') return A.cancel(op.shiftId);
+    return Promise.resolve({ ok: false, code: 'UNSUPPORTED_OPERATION' });
+  };
+  clear(root);
+  const handle = renderManagementView(root, {
+    store: adapters.schedule.store(), tenantId: m.tenantId, tenantLabel: tenantLabel(m.tenantId),
+    people: list, roleLabels: ROLE_LABELS, actor, policy: POLICY,
+    deps: { resolveAssignee: (a) => (list.some((p) => p.ansattId === a) ? { status: 'FOUND', tenantId: m.tenantId, ansattId: a } : { status: 'NOT_FOUND' }) },
+    nowMs: Date.now(), timezone: TZ, initialOffset, onOffsetChange, applyOperation,
+  });
+  let off = null;
+  if (typeof adapters.onChange === 'function') off = adapters.onChange(() => { if (handle && typeof handle.redraw === 'function') handle.redraw(); });
+  return { dispose: () => { if (off) off(); off = null; clear(root); }, actor, peopleCount: list.length };
+}

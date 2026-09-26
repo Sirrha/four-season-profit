@@ -4,7 +4,7 @@
 // (step-c-emulator/s4/test/run-adapters.mjs). Node built-ins only. Run: node employee-production-adapters.test.mjs
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { createProductionAdapters, s4Path, normalizeEvent, validateFsCapability, ADAPTER_ERROR, S4_COLLECTIONS } from './employee-production-adapters.mjs';
+import { createProductionAdapters, createManagementScheduleAdapters, s4Path, normalizeEvent, validateFsCapability, ADAPTER_ERROR, S4_COLLECTIONS } from './employee-production-adapters.mjs';
 import { ETR2A_POLICY as POLICY, clockIn, clockOut, startBreak, employeeEdit, attendanceIdFor, eventIdFor, tenantLocalHMToUtcMs, tenantWorkDate } from './employee-shell-core.mjs';
 import { seedFourSeasonEmployees, employeeOf } from './management-employees-core.mjs';
 import { FOUR_SEASON_PEOPLE } from './employee-schedule-fixture.mjs';
@@ -24,7 +24,13 @@ function makeFakeFs() {
   const matches = (spec, path, data) => {
     if (spec.doc) return path === spec.doc;
     if (colOf(path) !== spec.col) return false;
-    for (const [f, op, v] of spec.where || []) { if (op !== '==') throw new Error('fake supports == only'); if ((data[f] === undefined ? null : data[f]) !== v) return false; }
+    for (const [f, op, v] of spec.where || []) {
+      const val = data[f] === undefined ? null : data[f];
+      if (op === '==') { if (val !== v) return false; }
+      else if (op === '>=') { if (!(val >= v)) return false; }
+      else if (op === '<=') { if (!(val <= v)) return false; }
+      else throw new Error('fake supports ==, >=, <= only');
+    }
     return true;
   };
   const docsFor = (spec) => {
@@ -254,6 +260,58 @@ await t('P14', 'source guards: adapters/projection have zero Firebase or network
   assert.ok(shell.includes("return { schedule: { store: previewScheduleStore }, attendance: new Map(), employees: { store: previewEmployeeStore } };"), 'preview adapters unchanged');
   assert.ok(shell.includes('attendanceStore.set(attId, res.attendance);'), 'preview direct set retained inside the seam');
   assert.ok(!shell.includes("import { createProductionAdapters"), 'the shell never imports the production adapters (the host injects them)');
+});
+
+// ---- Vaktplan bridge: management schedule adapter (createManagementScheduleAdapters) ----
+const ADM_M = { uid: 'uid-admin-1', tenantId: T, accessRole: 'admin', ansattId: 'Ij7AmknF9ZDAdWgwQGJi', accessEnabled: true };
+const LEGACY = { ansattId: 'Kx9mQ2vT7pLa4RcW1nZb', name: 'Mr Testperson', roleKey: 'butikkmedarbeider' };
+const RANGE = { from: '2026-09-01', to: '2026-10-31' };
+const buildM = (F, extra) => createManagementScheduleAdapters(Object.assign({ fs: F.api, tenantId: T, membership: ADM_M, people: [LEGACY], range: RANGE, policy: POLICY }, extra || {}));
+await t('P15', 'management factory: admin-only membership, well-formed range, capability required; employee/disabled/other-tenant memberships and fixture-less people are refused or ignored', () => {
+  const F = makeFakeFs();
+  assert.throws(() => buildM(F, { membership: { ...ADM_M, accessRole: 'employee' } }), (e) => e.code === ADAPTER_ERROR.CORE_REFUSED);
+  assert.throws(() => buildM(F, { membership: { ...ADM_M, accessEnabled: false } }), (e) => e.code === ADAPTER_ERROR.CORE_REFUSED);
+  assert.throws(() => buildM(F, { membership: { ...ADM_M, tenantId: 'other' } }), (e) => e.code === ADAPTER_ERROR.CORE_REFUSED);
+  assert.throws(() => buildM(F, { range: { from: '2026-10-31', to: '2026-09-01' } }), (e) => e.code === ADAPTER_ERROR.CORE_REFUSED);
+  assert.throws(() => buildM(F, { range: { from: 'x', to: 'y' } }), (e) => e.code === ADAPTER_ERROR.CORE_REFUSED);
+  assert.throws(() => createManagementScheduleAdapters({ fs: {}, tenantId: T, membership: ADM_M, range: RANGE, policy: POLICY }), (e) => e.code === ADAPTER_ERROR.CAPABILITY_MISSING);
+  const M = buildM(F, { membership: { ...ADM_M, ansattId: null } });   // admin without ansattId is a valid Vaktplan operator
+  assert.equal(M.identity.ansattId, null); assert.equal(M.identity.accessRole, 'admin');
+  assert.deepEqual(M.people(), [LEGACY]); assert.deepEqual(M.range, RANGE);
+});
+await t('P16', 'management read: ONE bounded workDate-range listener on shifts; in-range docs mirrored as raw projections, out-of-range excluded; onChange fires; dispose -> 0 listeners and empty mirror', () => {
+  const F = makeFakeFs();
+  F.seed(s4Path(T, 'shifts', 's-in'), { ansattId: LEGACY.ansattId, plannedStartAt: 1, plannedEndAt: 2, workDate: '2026-09-15', roleKey: null, status: 'assigned', revision: 1, createdByUid: 'u', createdAt: 1, updatedAt: 1, serverCreatedAt: F.ST, serverUpdatedAt: F.ST });
+  F.seed(s4Path(T, 'shifts', 's-out'), { ansattId: LEGACY.ansattId, plannedStartAt: 1, plannedEndAt: 2, workDate: '2027-01-15', roleKey: null, status: 'assigned', revision: 1, createdByUid: 'u', createdAt: 1, updatedAt: 1, serverCreatedAt: F.ST, serverUpdatedAt: F.ST });
+  const M = buildM(F); let changes = 0; const off = M.onChange(() => { changes += 1; });
+  M.start(); M.start();
+  assert.equal(M.listenerCount(), 1);
+  assert.equal(F.listeners.length, 1); assert.deepEqual(F.listeners[0].spec.where, [['workDate', '>=', RANGE.from], ['workDate', '<=', RANGE.to]]);
+  F.emit();
+  const st = M.schedule.store()[T];
+  assert.ok(st['s-in'] && !st['s-out']); assert.equal(st['s-in'].serverCreatedAt, undefined, 'server stamps stripped'); assert.equal(changes, 1);
+  off(); F.emit(); assert.equal(changes, 1, 'unsubscribed watcher not called');
+  M.dispose(); assert.equal(M.listenerCount(), 0); assert.deepEqual(M.schedule.store()[T], {}); assert.equal(F.state.unsubscribed, 1);
+});
+await t('P17', 'management admin write seam: create/revise/assign(null=unassign)/assign/cancel through the shared writer write ONLY S4 shift + event paths with truthful events; assignee resolution comes from the host-supplied people (fixture id refused); actorAnsattId = admin membership ansattId', async () => {
+  const F = makeFakeFs(); const M = buildM(F); M.start();
+  const c = await M.schedule.admin.create({ workDate: '2026-09-15', ansattId: LEGACY.ansattId, fromHM: '09:00', toHM: '17:00', roleKey: 'butikkmedarbeider' });
+  assert.ok(c.ok); assert.equal(c.shiftId, 'mg-2026-09-15-' + LEGACY.ansattId); assert.equal(c.projection.revision, 1); assert.equal(c.event.type, 'shift_created'); assert.equal(c.event.actorRole, 'admin');
+  await assert.rejects(M.schedule.admin.assign(c.shiftId, 'ans-maria'), (e) => e.code === 'ASSIGNEE_NOT_RESOLVED');
+  const r = await M.schedule.admin.revise(c.shiftId, { fromHM: '10:00', toHM: '18:00' }); assert.equal(r.projection.revision, 2); assert.equal(r.event.type, 'shift_revised');
+  const u = await M.schedule.admin.assign(c.shiftId, null); assert.equal(u.projection.status, 'open'); assert.equal(u.event.type, 'shift_assignment_changed');
+  const a = await M.schedule.admin.assign(c.shiftId, LEGACY.ansattId); assert.equal(a.projection.status, 'assigned'); assert.equal(a.projection.revision, 4);
+  const x = await M.schedule.admin.cancel(c.shiftId); assert.equal(x.projection.status, 'cancelled'); assert.equal(x.event.type, 'shift_cancelled'); assert.equal(x.projection.revision, 5);
+  assert.ok(F.writes.every((p) => p.startsWith(s4Path(T, 'shifts'))), 'only shift + shift-event paths written: ' + F.writes.join(','));
+  assert.ok(!F.writes.some((p) => /vakter|ansatte|employeeSelf|attendance/.test(p)), 'no legacy/other collection written');
+  assert.throws(() => s4Path(T, 'vakter', 'x'), (e) => e.code === ADAPTER_ERROR.PATH_FORBIDDEN);
+});
+await t('P18', 'management adapter: superseded (isCurrent false) or disposed refuses writes and ignores snapshots', async () => {
+  const F = makeFakeFs(); let cur = true; const M = buildM(F, { isCurrent: () => cur }); M.start();
+  cur = false; F.emit(); assert.deepEqual(M.schedule.store()[T], {});
+  await assert.rejects(M.schedule.admin.create({ workDate: '2026-09-15', ansattId: LEGACY.ansattId, fromHM: '09:00', toHM: '17:00', roleKey: null }), (e) => e.code === ADAPTER_ERROR.NOT_CURRENT);
+  cur = true; M.dispose();
+  await assert.rejects(M.schedule.admin.cancel('x'), (e) => e.code === ADAPTER_ERROR.DISPOSED);
 });
 
 for (const l of lines) console.log(l);

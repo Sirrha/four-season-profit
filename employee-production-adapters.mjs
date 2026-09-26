@@ -68,6 +68,63 @@ export function validateFsCapability(fs) {
   return { ok: missing.length === 0, missing };
 }
 
+// ---- shared admin writer (employee factory + management Vaktplan factory) -------------------------------------
+// The management-schedule-core boundary decides; this only persists projection + truthful event inside ONE transaction.
+// Body is the accepted employee-factory adminWrite, unchanged; every free variable is bound through `ctx`.
+function makeAdminWriter(ctx) {
+  const { fs, T, nowMs, policy, deps, adminActor, assertLive, rejectMapped, st, evRef } = ctx;
+  return async function adminWrite(kind, shiftId, buildOp) {
+    assertLive();
+    return fs.runTransaction(async (tx) => {
+      const now = nowMs();
+      let id = shiftId, existing = null;
+      if (kind === 'create') {
+        // collision-safe id law (newShiftIdFor): first free of base, base-2, base-3 … proven by tx reads
+        const base = 'mg-' + buildOp.workDate + '-' + (buildOp.ansattId != null ? buildOp.ansattId : 'manko');
+        id = base; let n = 1;
+        for (;;) { const s = await tx.get(fs.doc(s4Path(T, 'shifts', id))); if (!s.exists) break; n += 1; id = base + '-' + n; if (n > 50) throw adapterError(ADAPTER_ERROR.CORE_REFUSED, 'ID_SPACE'); }
+      } else {
+        const s = await tx.get(fs.doc(s4Path(T, 'shifts', id)));
+        if (!s.exists) throw adapterError(ADAPTER_ERROR.NO_SHIFT);
+        existing = stripServerFields(s.data);
+      }
+      let attExists = false;
+      if (existing && existing.ansattId !== null) {
+        const a = await tx.get(fs.doc(s4Path(T, 'attendance', attendanceIdFor(id, existing.ansattId))));
+        attExists = !!(a && a.exists);
+      }
+      const store = { [T]: existing ? { [id]: existing } : {} };
+      const resolveAssignee = typeof deps.resolveAssignee === 'function' ? deps.resolveAssignee : (a) => (typeof a === 'string' && a ? { status: 'FOUND', tenantId: T, ansattId: a } : { status: 'NOT_FOUND' });
+      let res;
+      if (kind === 'assign') {
+        const patch = buildOp.ansattId == null ? { status: 'open', ansattId: null } : { status: 'assigned', ansattId: buildOp.ansattId };
+        const v = validateAssignmentChange({
+          actor: adminActor(), scope: { tenantId: T, shiftId: id }, existing, patch, now, policy,
+          context: { proposedAssigneeResolution: patch.ansattId ? resolveAssignee(patch.ansattId) : undefined, attendanceExistsForCurrentAssignee: existing.ansattId !== null ? attExists : undefined },
+        });
+        res = v.ok ? { ok: true, shiftId: id, projection: v.projection, event: v.event } : v;
+      } else {
+        res = applyScheduleOperation({
+          store, tenantId: T, actor: adminActor(), op: Object.assign({ kind }, buildOp, kind === 'create' ? {} : { shiftId: id }), now, policy,
+          deps: { resolveAssignee, attendanceExistsFor: () => attExists },
+        });
+        // applyScheduleOperation mints its own id from the in-memory store; production uses the tx-proven id above
+        if (res.ok && kind === 'create') res = Object.assign({}, res, { shiftId: id });
+      }
+      if (!res.ok) throw adapterError(res.code);
+      const p = res.projection;
+      const ev = normalizeEvent(res.event);
+      if (ev.eventId !== eventIdFor(id, p.revision)) ev.eventId = eventIdFor(id, p.revision);   // id law bound to the persisted document id
+      const ref = fs.doc(s4Path(T, 'shifts', id));
+      if (kind === 'create') tx.set(ref, Object.assign({}, p, { serverCreatedAt: st(), serverUpdatedAt: st() }));
+      else tx.update(ref, Object.assign({}, p, { serverUpdatedAt: st() }));
+      tx.set(evRef('shifts', id, ev), ev);
+      return { ok: true, shiftId: id, projection: p, event: ev };
+    }).catch(rejectMapped);
+  };
+
+}
+
 /**
  * createProductionAdapters({ fs, tenantId, membership, isCurrent, nowMs, policy, onError, deps })
  *   fs          injected datastore capability: doc(path)→ref · listen(spec, onDocs, onError)→unsubscribe
@@ -183,56 +240,7 @@ export function createProductionAdapters(options) {
       return { ok: true, shiftId, projection: p, event: ev };
     }).catch(rejectMapped);
   }
-  // admin: the management-schedule-core boundary decides; this only persists projection + truthful event
-  async function adminWrite(kind, shiftId, buildOp) {
-    assertLive();
-    return fs.runTransaction(async (tx) => {
-      const now = nowMs();
-      let id = shiftId, existing = null;
-      if (kind === 'create') {
-        // collision-safe id law (newShiftIdFor): first free of base, base-2, base-3 … proven by tx reads
-        const base = 'mg-' + buildOp.workDate + '-' + (buildOp.ansattId != null ? buildOp.ansattId : 'manko');
-        id = base; let n = 1;
-        for (;;) { const s = await tx.get(fs.doc(s4Path(T, 'shifts', id))); if (!s.exists) break; n += 1; id = base + '-' + n; if (n > 50) throw adapterError(ADAPTER_ERROR.CORE_REFUSED, 'ID_SPACE'); }
-      } else {
-        const s = await tx.get(fs.doc(s4Path(T, 'shifts', id)));
-        if (!s.exists) throw adapterError(ADAPTER_ERROR.NO_SHIFT);
-        existing = stripServerFields(s.data);
-      }
-      let attExists = false;
-      if (existing && existing.ansattId !== null) {
-        const a = await tx.get(fs.doc(s4Path(T, 'attendance', attendanceIdFor(id, existing.ansattId))));
-        attExists = !!(a && a.exists);
-      }
-      const store = { [T]: existing ? { [id]: existing } : {} };
-      const resolveAssignee = typeof deps.resolveAssignee === 'function' ? deps.resolveAssignee : (a) => (typeof a === 'string' && a ? { status: 'FOUND', tenantId: T, ansattId: a } : { status: 'NOT_FOUND' });
-      let res;
-      if (kind === 'assign') {
-        const patch = buildOp.ansattId == null ? { status: 'open', ansattId: null } : { status: 'assigned', ansattId: buildOp.ansattId };
-        const v = validateAssignmentChange({
-          actor: adminActor(), scope: { tenantId: T, shiftId: id }, existing, patch, now, policy,
-          context: { proposedAssigneeResolution: patch.ansattId ? resolveAssignee(patch.ansattId) : undefined, attendanceExistsForCurrentAssignee: existing.ansattId !== null ? attExists : undefined },
-        });
-        res = v.ok ? { ok: true, shiftId: id, projection: v.projection, event: v.event } : v;
-      } else {
-        res = applyScheduleOperation({
-          store, tenantId: T, actor: adminActor(), op: Object.assign({ kind }, buildOp, kind === 'create' ? {} : { shiftId: id }), now, policy,
-          deps: { resolveAssignee, attendanceExistsFor: () => attExists },
-        });
-        // applyScheduleOperation mints its own id from the in-memory store; production uses the tx-proven id above
-        if (res.ok && kind === 'create') res = Object.assign({}, res, { shiftId: id });
-      }
-      if (!res.ok) throw adapterError(res.code);
-      const p = res.projection;
-      const ev = normalizeEvent(res.event);
-      if (ev.eventId !== eventIdFor(id, p.revision)) ev.eventId = eventIdFor(id, p.revision);   // id law bound to the persisted document id
-      const ref = fs.doc(s4Path(T, 'shifts', id));
-      if (kind === 'create') tx.set(ref, Object.assign({}, p, { serverCreatedAt: st(), serverUpdatedAt: st() }));
-      else tx.update(ref, Object.assign({}, p, { serverUpdatedAt: st() }));
-      tx.set(evRef('shifts', id, ev), ev);
-      return { ok: true, shiftId: id, projection: p, event: ev };
-    }).catch(rejectMapped);
-  }
+  const adminWrite = makeAdminWriter({ fs, T, nowMs, policy, deps, adminActor, assertLive, rejectMapped, st, evRef });
   const admin = {
     create: (op) => adminWrite('create', null, op),                 // { workDate, ansattId|null, fromHM, toHM, roleKey }
     revise: (shiftId, op) => adminWrite('revise', shiftId, op),     // { fromHM, toHM }
@@ -303,5 +311,75 @@ export function createProductionAdapters(options) {
     employeeSelf: { write: writeEmployeeSelf, project: projectEmployeeSelf },
     start, dispose, listenerCount,
     identity: Object.freeze({ tenantId: T, ansattId: MY, uid: UID, accessRole: ROLE }),
+  };
+}
+
+// ---- MANAGEMENT VAKTPLAN ADAPTER (production Vaktplan bridge) ------------------------------------------------
+// Admin-only. ONE bounded listener: tenants/{T}/shifts where workDate is inside [range.from, range.to] (single-field
+// range, no composite index). Mirror = the same raw-projection container shape the accepted cores/view consume.
+// Writes reuse the accepted admin writer above (same transactions, same truthful events). People (legacy `ansatte`,
+// document id = ansattId) are host-supplied and used ONLY for assignee resolution. `vakter` is unconstructible here
+// (s4Path law). onChange() lets a host redraw when a server snapshot changed the mirror.
+export function createManagementScheduleAdapters(options) {
+  const o = options || {};
+  const cap = validateFsCapability(o.fs);
+  if (!cap.ok) throw adapterError(ADAPTER_ERROR.CAPABILITY_MISSING, cap.missing.join(','));
+  const fs = o.fs;
+  const T = o.tenantId;
+  const m = o.membership || {};
+  if (typeof T !== 'string' || !ID_RE.test(T)) throw adapterError(ADAPTER_ERROR.PATH_FORBIDDEN, 'tenant');
+  if (typeof m.uid !== 'string' || !m.uid || m.tenantId !== T || m.accessRole !== 'admin' || m.accessEnabled !== true) throw adapterError(ADAPTER_ERROR.CORE_REFUSED, 'membership');
+  const ANS = typeof m.ansattId === 'string' && ID_RE.test(m.ansattId) ? m.ansattId : null;
+  const UID = m.uid;
+  const range = o.range || {};
+  const WD_RE = /^\d{4}-\d{2}-\d{2}$/;
+  if (typeof range.from !== 'string' || typeof range.to !== 'string' || !WD_RE.test(range.from) || !WD_RE.test(range.to) || range.from > range.to) throw adapterError(ADAPTER_ERROR.CORE_REFUSED, 'range');
+  const isCurrent = typeof o.isCurrent === 'function' ? o.isCurrent : () => true;
+  const nowMs = typeof o.nowMs === 'function' ? o.nowMs : () => Date.now();
+  const policy = o.policy;
+  const onError = typeof o.onError === 'function' ? o.onError : () => {};
+  const people = (Array.isArray(o.people) ? o.people : []).filter((p) => p && typeof p.ansattId === 'string' && ID_RE.test(p.ansattId));
+  const deps = { resolveAssignee: (a) => (people.some((p) => p.ansattId === a) ? { status: 'FOUND', tenantId: T, ansattId: a } : { status: 'NOT_FOUND' }) };
+  let disposed = false;
+  const live = () => !disposed && isCurrent();
+  const assertLive = () => { if (disposed) throw adapterError(ADAPTER_ERROR.DISPOSED); if (!isCurrent()) throw adapterError(ADAPTER_ERROR.NOT_CURRENT); };
+  const subs = [];
+  const st = () => fs.serverTimestamp();
+  const evRef = (col, parentId, ev) => fs.doc(s4Path(T, col, parentId, 'events', ev.eventId));
+  const rejectMapped = (e) => Promise.reject(e && e.code && Object.values(ADAPTER_ERROR).includes(e.code) ? e : adapterError(mapFsError(e), e && e.message));
+  const adminActor = () => ({ uid: UID, accessRole: 'admin', ansattId: ANS, accessEnabled: true, tenantId: T });
+  const container = { [T]: {} };                       // ONE schedule truth for the management view (raw projections by shiftId)
+  const watchers = new Set();
+  const notify = () => { for (const cb of Array.from(watchers)) { try { cb(); } catch (e) { /* a failing watcher must not break the mirror */ } } };
+  let started = false;
+  function start() {
+    assertLive();
+    if (started) return;
+    started = true;
+    const un = fs.listen({ col: s4Path(T, 'shifts'), where: [['workDate', '>=', range.from], ['workDate', '<=', range.to]] },
+      (docs) => { if (!live()) return; const next = {}; for (const d of (Array.isArray(docs) ? docs : [])) if (d.exists !== false) next[d.id] = stripServerFields(d.data); container[T] = next; notify(); },
+      (err) => { if (!live()) return; onError({ scope: 'shifts', code: mapFsError(err) }); });
+    subs.push(typeof un === 'function' ? un : () => {});
+  }
+  function dispose() {
+    disposed = true;
+    for (const un of subs.splice(0)) { try { un(); } catch (e) { /* one failing unsubscribe must not abort the sweep */ } }
+    container[T] = {}; watchers.clear();
+  }
+  function listenerCount() { return subs.length; }
+  function onChange(cb) { if (typeof cb !== 'function') return () => {}; watchers.add(cb); return () => { watchers.delete(cb); }; }
+  const adminWrite = makeAdminWriter({ fs, T, nowMs, policy, deps, adminActor, assertLive, rejectMapped, st, evRef });
+  const admin = {
+    create: (op) => adminWrite('create', null, op),                 // { workDate, ansattId|null, fromHM, toHM, roleKey }
+    revise: (shiftId, op) => adminWrite('revise', shiftId, op),     // { fromHM, toHM }
+    assign: (shiftId, ansattId) => adminWrite('assign', shiftId, { ansattId }),   // null = unassign (open)
+    cancel: (shiftId) => adminWrite('cancel', shiftId, {}),
+  };
+  return {
+    schedule: { store: () => container, admin },
+    people: () => people.slice(),
+    start, dispose, listenerCount, onChange,
+    range: Object.freeze({ from: range.from, to: range.to }),
+    identity: Object.freeze({ tenantId: T, ansattId: ANS, uid: UID, accessRole: 'admin' }),
   };
 }
