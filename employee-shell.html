@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="no">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Sormena – Forhåndsvisning</title>
+  <!--
+    Employee shell entry page (home / clocking / plan). Standalone from the live index.html boot path.
+    Loads ONLY local ES modules. No CDN, no Firebase SDK, no remote script, no remote font, no images,
+    no analytics, no fetch/XHR/WebSocket. Local demo data only. Enabled only with ?emp=1 in the URL.
+  -->
+  <link rel="stylesheet" href="employee-shell.css">
+</head>
+<body>
+  <header class="top"><div class="top-in">
+    <div class="brand"><span class="mark" aria-hidden="true"></span>Sormena</div>
+    <div class="cue">Forhåndsvisning</div>
+    <button id="emp-identity" class="idbtn" type="button" hidden><span class="av"></span><span class="nm"></span></button>
+  </div></header>
+  <nav id="emp-nav" class="nav" hidden aria-label="Meny"><div class="nav-in">
+    <button type="button" data-nav="today">I dag</button>
+    <button type="button" data-nav="plan">Plan</button>
+    <button type="button" data-nav="work">Jobb &amp; økonomi</button>
+  </div></nav>
+  <main class="wrap"><div id="emp-root"></div></main>
+
+  <script type="module">
+    const root = document.getElementById('emp-root');
+    const enabled = new URLSearchParams(location.search).get('emp') === '1';
+    if (!enabled) {
+      const d = document.createElement('div');
+      d.className = 'disabled';
+      d.textContent = 'Forhåndsvisningen er ikke aktivert. Legg til ?emp=1 i adressen for å åpne den.';
+      root.appendChild(d);
+    } else {
+      import('./employee-shell-ui.mjs')
+        .then((m) => m.mountEmployeePreview(root))   // EXPLICIT preview door (employee-production-bridge); never the production entry
+        .catch((err) => {
+          const d = document.createElement('div');
+          d.className = 'disabled';
+          d.textContent = 'Kunne ikke laste forhåndsvisningen: ' + (err && err.message ? err.message : String(err));
+          root.appendChild(d);
+        });
+    }
+  </script>
+</body>
+</html>

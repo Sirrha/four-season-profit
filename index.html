@@ -27,6 +27,7 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 /* ── LOADING ── */
 #loading-screen{position:fixed;inset:0;background:var(--primary);z-index:9998;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
 #loading-screen.hidden{display:none}
+#employee-host{display:none;min-height:100vh}#employee-host.active{display:block}.emp-hostbar{display:flex;gap:8px;align-items:center;padding:6px 16px;background:#1b2b20;color:#fff;font-size:12px;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}.emp-hostbar .sp{flex:1}.emp-hostbar .emp-notice{color:#ffd9a8}.emp-hostbtn{background:rgba(255,255,255,.14);border:none;color:#fff;padding:6px 10px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer}
 .ld-logo{color:#fff;font-size:20px;font-weight:700}.ld-logo span{color:var(--accent)}
 .ld-spin{width:32px;height:32px;border:3px solid rgba(255,255,255,.2);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
 .ld-text{color:rgba(255,255,255,.6);font-size:13px}
@@ -653,6 +654,24 @@ select.fi:focus{background-color:#fff}
 <!-- ══════════════════════════════════════
      MAIN APP
 ══════════════════════════════════════ -->
+<!-- ══════════════════════════════════════
+     S4 EMPLOYEE HOST (sibling of #main-app, hidden by default). Same chrome ids the accepted employee shell expects
+     (#emp-identity, #emp-nav, #emp-root); the shell is mounted ONLY by authEnterEmployeeSurface through the bridge door.
+══════════════════════════════════════ -->
+<div id="employee-host">
+  <div class="emp-hostbar"><span>Four Season AS · ansatt</span><span class="sp"></span><span id="emp-host-notice" class="emp-notice"></span><button type="button" class="emp-hostbtn" id="emp-host-back" style="display:none" onclick="authReturnToManagement()">Tilbake til ledelse</button><button type="button" class="emp-hostbtn" onclick="logoutUser()">Logg ut</button></div>
+  <header class="top"><div class="top-in">
+    <div class="brand"><span class="mark" aria-hidden="true"></span>Sormena</div>
+    <button id="emp-identity" class="idbtn" type="button" hidden><span class="av"></span><span class="nm"></span></button>
+  </div></header>
+  <nav id="emp-nav" class="nav" hidden aria-label="Meny"><div class="nav-in">
+    <button type="button" data-nav="today">I dag</button>
+    <button type="button" data-nav="plan">Plan</button>
+    <button type="button" data-nav="work">Jobb &amp; økonomi</button>
+  </div></nav>
+  <main class="wrap"><div id="emp-root"></div></main>
+</div>
+
 <div id="main-app" style="display:none">
 
 <header class="hdr">
@@ -663,6 +682,7 @@ select.fi:focus{background-color:#fff}
     </div>
   </div>
   <div class="hdr-right"><button class="user-badge" id="current-user-btn" onclick="logoutUser()" style="display:none"></button>
+    <button class="hdr-btn" id="hdrEmpBtn" style="display:none" onclick="authOpenMinAnsattside()">Min ansattside</button>
     <button class="hdr-add-btn" id="hdrAddBtn" onclick="handleHdrAdd()"></button>
     <button class="hdr-btn" id="hdrExpBtn" style="display:none" onclick="handleExport()">📤 CSV</button>
 
@@ -1570,6 +1590,7 @@ const WRITE_TO_PURCHASES=false;
 function startListeners(){
   // S2b-2 defense in depth: tenant listeners require a bound Firebase identity (membership-derived).
   if(!currentUser||!authBoundUid||!firebase.auth().currentUser||firebase.auth().currentUser.uid!==authBoundUid){console.error('[auth] startListeners refused: no bound identity');return}
+  if(currentUser.role!=='admin'){console.error('[auth] startListeners refused: management listeners are admin-only (S4 host)');return}
   stopListeners();
   const gen=++startupGeneration;
   startupSettled=false;
@@ -1749,7 +1770,11 @@ function authGuardedTenantDataEntry(gen){
   if(!user)return 'SIGNED_OUT';
   if(!currentUser||!authBoundUid)return null;
   if(user.uid!==authBoundUid)return null;
+  if(currentUser.role!=='admin')return null;          // S4 host: the management door is admin-only; an employee identity never starts the 17 listeners
+  if(ACTIVE_SURFACE==='employee')return null;        // S4 host (C5): never two listener sets — the employee surface must be left first
   startListeners();
+  ACTIVE_SURFACE='management';
+  authUpdateEmployeeControls();
   return 'ready';
 }
 
@@ -1779,6 +1804,7 @@ async function authExplicitLogoutTeardown(){
   authDetachWatches();
   hideMainApp();
   stopListeners();
+  ACTIVE_SURFACE='none';authUpdateEmployeeControls();  // S4 host: authDetachWatches() above already disposed the employee surface
   try{
     await firebase.auth().signOut();
   }catch(e){
@@ -1805,6 +1831,7 @@ function authSignedOutTeardown(){
   if(se)se.classList.add('hidden');
   currentUser=null;
   authBoundUid=null;
+  authMembership=null;ACTIVE_SURFACE='none';authUpdateEmployeeControls();  // S4 host: no surface survives a teardown
   try{sessionStorage.removeItem('fs_user')}catch(e){}
   resetLocalCollections();
   STARTUP_COLS.forEach(col=>{delete startupState[col]});
@@ -8006,6 +8033,9 @@ const ENTRY_TENANT_ID=TENANT_ID; // S2b-2: fixed-tenant build. Entry only via an
 const CLIENT_GENERATION=2;       // S2b-2 = generation 2. Builds before S2b-2 are generation 1 and carry no check.
 let currentUser = null;          // {uid,tenantId,accessRole,ansattId,name,email,role:'admin'} — in-memory UX cache, never authority
 let authWatches=[];              // E3 — active identity watches (own membership + generation); detached only via authDetachWatches()
+let ACTIVE_SURFACE='none';      // S4 host: none | management | employee — at most ONE listener set is live (C5 switch discipline)
+let authMembership=null;        // S4 host: the ONE bridge-shaped membership {uid,tenantId,accessRole,ansattId,accessEnabled} resolved by authResolveMembership
+let empHost=null;               // S4 host: {gen,adapters,membership} while the employee surface is mounted; null otherwise
 const AUTH_SESSION_DIAG={events:[],last:null,persistence:'PENDING',signInEnabled:false,state:'BOOT'};
 const AUTH_PANEL_FOR_STATE={SIGNED_OUT:'signin',PERSISTENCE_FAILED:'signin',AUTH_ERROR:'signin',LOGOUT_FAILURE:'error',NO_ACCESS:'noaccess',ACCESS_ERROR:'error',STALE:'stale'};
 function authSessionErrCode(e){return String((e&&e.code)||'unknown')}
@@ -8049,6 +8079,7 @@ function authSetState(state,detail){
 }
 // E3 — the single idempotent identity-watch detach helper. Every teardown/supersession path calls it.
 function authDetachWatches(){
+  authLeaveEmployeeSurface();  // S4 host (C5): every teardown/supersession path also disposes the employee surface
   const ws=authWatches;authWatches=[];
   ws.forEach(un=>{try{if(typeof un==='function')un()}catch(e){console.error('[auth] watch unsubscribe failed',e)}});
 }
@@ -8060,7 +8091,12 @@ function authFailClosed(state,detail){
   authSignedOutTeardown();
   authSetState(state,detail);
 }
-function authMembershipEligible(m,uid){return !!m&&m.uid===uid&&m.tenantId===ENTRY_TENANT_ID&&m.accessEnabled===true&&m.accessRole==='admin'}
+// S4 host: admin as before; employee ONLY with accessRole employee AND a non-empty ansattId. No other role. uid/tenant/accessEnabled checks unchanged.
+function authMembershipEligible(m,uid){
+  if(!m||m.uid!==uid||m.tenantId!==ENTRY_TENANT_ID||m.accessEnabled!==true)return false;
+  if(m.accessRole==='admin')return true;
+  return m.accessRole==='employee'&&typeof m.ansattId==='string'&&m.ansattId.length>0;
+}
 // R1 — the exact A-1 / R-3 bootstrap shape, server-confirmed. Nothing else is ever queried on memberships.
 async function authListMemberships(uid){
   const snap=await db.collection('memberships').where('uid','==',uid).get({source:'server'});
@@ -8104,10 +8140,14 @@ async function authRevalidateMembership(uid,membershipId){
   const m=Object.assign({id:s.id},s.data());
   return authMembershipEligible(m,uid)?{ok:true,m}:{ok:false,reason:'ineligible'};
 }
-// Terminal non-READY settlement of the current attempt: no listeners exist yet; show the matching panel.
+// Terminal non-READY settlement of the current attempt. Sign-in path: no listeners exist yet; show the matching panel. Re-entry from a live runtime: full fail-closed teardown (OBS-1).
 function authSettle(gen,state,detail){
   if(gen!==authGeneration||authAttemptSettled)return null;
   authSettleIdentityAttempt(gen,state);
+  // OBS-1 hardening (S4 host): a negative settle after runtime state exists (listeners, a mounted surface, a bound
+  // identity) must be universally fail-closed. Route through the existing teardown primitive; generation semantics
+  // are those of authFailClosed (attempt already settled above).
+  if(authRuntimeLive()){authFailClosed(state,detail);return state}
   document.getElementById('loading-screen').classList.add('hidden');
   document.getElementById('login-screen').classList.remove('hidden');
   authSetState(state,detail);
@@ -8156,23 +8196,164 @@ async function authResolveMembership(user){
     try{rv=await authRevalidateMembership(user.uid,chosen.id)}catch(e){return authSettle(gen,'ACCESS_ERROR',{step:'revalidate',code:authSessionErrCode(e)})}
     if(gen!==authGeneration||authAttemptSettled)return null;
     if(!rv.ok)return authSettle(gen,'NO_ACCESS',{step:'revalidate',reason:rv.reason});
-    currentUser={uid:user.uid,tenantId:rv.m.tenantId,accessRole:rv.m.accessRole,ansattId:rv.m.ansattId,name,email:user.email||null,role:'admin'};
+    const role=rv.m.accessRole==='admin'?'admin':'employee';
+    currentUser={uid:user.uid,tenantId:rv.m.tenantId,accessRole:rv.m.accessRole,ansattId:rv.m.ansattId,name,email:user.email||null,role};
     authBoundUid=user.uid;
+    // S4 host: the ONE membership object every surface uses (bridge shape). No re-resolution, chooser or fixture identity anywhere.
+    authMembership={uid:user.uid,tenantId:rv.m.tenantId,accessRole:rv.m.accessRole,ansattId:rv.m.ansattId,accessEnabled:rv.m.accessEnabled};
     authAttachWatches(gen,user.uid,chosen.id);
     if(gen!==authGeneration)return null;
+    if(role==='employee'){
+      // S4 host: employee identity → employee surface. Never authGuardedTenantDataEntry, never the 17 management listeners, never #main-app.
+      authSettleIdentityAttempt(gen,'employee');
+      document.getElementById('login-screen').classList.add('hidden');
+      authSetState('READY',{uidSuffix:authSessionUidSuffix(user),surface:'employee'});
+      authEnterEmployeeSurface(gen,authMembership);
+      return 'employee';
+    }
     const outcome=authGuardedTenantDataEntry(gen);
     if(outcome!=='ready')return authSettle(gen,'ACCESS_ERROR',{step:'entry',code:String(outcome)});
     authSettleIdentityAttempt(gen,outcome);
     const btn=document.getElementById('current-user-btn');
     if(btn){btn.textContent=currentUser.name+' · Logg ut';btn.style.display='flex'}
     document.getElementById('login-screen').classList.add('hidden');
-    authSetState('READY',{uidSuffix:authSessionUidSuffix(user)});
+    authSetState('READY',{uidSuffix:authSessionUidSuffix(user),surface:'management'});
     return outcome;
   }catch(e){
     if(gen!==authGeneration)return null;
     return authSettle(gen,'ACCESS_ERROR',{step:'resolve',code:authSessionErrCode(e)});
   }
 }
+// ─────────────────────────────────────────
+// S4 HOST — EMPLOYEE SURFACE (host packaging A, REV2 C5 switch discipline)
+// ACTIVE_SURFACE ∈ {none, management, employee}. Identity and authGeneration stay the single shared authority.
+// Management = the existing 17 STARTUP_COLS listeners behind authGuardedTenantDataEntry. Employee = the accepted
+// employee product (employee-shell-ui.mjs) mounted through the bridge door mountEmployeeProduction with production
+// adapters (employee-production-adapters.mjs) over the ONE existing compat firebase.firestore() instance. At most one
+// listener set is live at any time; every step, import completion and adapter callback is generation-guarded.
+// ─────────────────────────────────────────
+// Self-test hook: at most one non-zero; management ≤ 17; employee ≤ 4.
+function authSurfaceCounts(){return {surface:ACTIVE_SURFACE,management:Object.keys(listeners).length,employee:empHost&&empHost.adapters?empHost.adapters.listenerCount():0}}
+// Any runtime state that a negative settle must tear down (OBS-1).
+function authRuntimeLive(){return Object.keys(listeners).length>0||ACTIVE_SURFACE!=='none'||!!empHost||!!currentUser||!!authBoundUid}
+// The minimal host-only Firestore capability required by validateFsCapability, over the existing compat instance. ZERO new initializeApp.
+function authCompatFs(){
+  // First-snapshot readiness: the accepted adapters expose no change signal and the shell renders from the mirrors at mount,
+  // so the host mounts only after every listener delivered its first snapshot (or error), bounded by a timeout.
+  const pending=[];
+  const track=(sub)=>{let done=false;let fire;const p=new Promise(r=>{fire=()=>{if(!done){done=true;r()}}});pending.push(p);return {sub,fire}};
+  return {
+    doc:(p)=>db.doc(p),
+    serverTimestamp:()=>firebase.firestore.FieldValue.serverTimestamp(),
+    listen:(spec,onDocs,onErr)=>{
+      const t=track();
+      const docsCb=(docs)=>{t.fire();onDocs(docs)};const errCb=(e)=>{t.fire();onErr(e)};
+      if(spec&&spec.doc)return db.doc(spec.doc).onSnapshot(s=>docsCb([{id:s.id,exists:s.exists,data:s.data()}]),errCb);
+      let q=db.collection(spec.col);
+      (spec.where||[]).forEach(w=>{q=q.where(w[0],w[1],w[2])});
+      if(spec.orderBy)q=q.orderBy(spec.orderBy[0],spec.orderBy[1]);
+      return q.onSnapshot(s=>docsCb(s.docs.map(d=>({id:d.id,exists:true,data:d.data()}))),errCb);
+    },
+    runTransaction:(fn)=>db.runTransaction(tx=>fn({get:async(ref)=>{const s=await tx.get(ref);return {exists:s.exists,data:s.data()}},set:(ref,d)=>tx.set(ref,d),update:(ref,d)=>tx.update(ref,d)})),
+    batch:()=>{const b=db.batch();return {set:(r,d)=>b.set(r,d),update:(r,d)=>b.update(r,d),commit:()=>b.commit()}},
+    whenSettled:(n,ms)=>Promise.race([Promise.all(pending.slice(0,n)),new Promise(r=>setTimeout(r,ms))])
+  };
+}
+function authEmployeeCss(on){let l=document.getElementById('employee-shell-css');if(on){if(!l){l=document.createElement('link');l.id='employee-shell-css';l.rel='stylesheet';l.href='employee-shell.css';document.head.appendChild(l)}}else if(l)l.remove()}
+// Host controls: "Min ansattside" only for an admin with a bound ansattId while management is active; "Tilbake til ledelse" only for an admin on the employee surface.
+function authUpdateEmployeeControls(){
+  const own=!!(authMembership&&typeof authMembership.ansattId==='string'&&authMembership.ansattId.length>0);
+  const admin=!!(currentUser&&currentUser.role==='admin');
+  const b=document.getElementById('hdrEmpBtn');if(b)b.style.display=admin&&own&&ACTIVE_SURFACE==='management'?'':'none';
+  const back=document.getElementById('emp-host-back');if(back)back.style.display=admin&&ACTIVE_SURFACE==='employee'?'':'none';
+}
+// management → (nothing): stop the 17 listeners and reset the startup coordinator so a later guarded re-entry starts clean.
+function authLeaveManagement(){
+  stopListeners();
+  startupGeneration++;
+  if(startupTimer){clearTimeout(startupTimer);startupTimer=null}
+  startupSettled=false;
+  _appShown=false;
+  STARTUP_COLS.forEach(col=>{delete startupState[col]});
+  resetLocalCollections();
+  hideMainApp();
+  const se=document.getElementById('startup-error');if(se)se.classList.add('hidden');
+  const n=Object.keys(listeners).length;if(n!==0)throw new Error('management listeners still live: '+n);
+  if(ACTIVE_SURFACE==='management')ACTIVE_SURFACE='none';
+}
+// employee → (nothing): dispose the adapters (assert 0 listeners), clear and hide the host, unload the employee stylesheet.
+function authLeaveEmployeeSurface(){
+  const h=empHost;empHost=null;
+  if(h&&h.adapters){
+    try{h.adapters.dispose()}catch(e){console.error('[host] employee dispose failed',e)}
+    let n=0;try{n=h.adapters.listenerCount()}catch(e){}if(n!==0)console.error('[host] employee listeners still live after dispose: '+n);
+  }
+  const root=document.getElementById('emp-root');if(root)while(root.firstChild)root.removeChild(root.firstChild);
+  const idb=document.getElementById('emp-identity');if(idb){idb.hidden=true;idb.onclick=null}
+  const nav=document.getElementById('emp-nav');if(nav)nav.hidden=true;
+  const notice=document.getElementById('emp-host-notice');if(notice)notice.textContent='';
+  const host=document.getElementById('employee-host');if(host)host.classList.remove('active');
+  authEmployeeCss(false);
+  if(ACTIVE_SURFACE==='employee')ACTIVE_SURFACE='none';
+}
+// Adapter error surface: listener denial is fail-closed through the existing teardown; anything else is fail-visible in the host bar.
+function authEmployeeAdapterError(gen,e){
+  if(gen!==authGeneration||ACTIVE_SURFACE!=='employee')return;
+  const code=e&&e.code?String(e.code):'unknown';
+  authSessionRecord('EMPLOYEE_ADAPTER_ERROR',{scope:e&&e.scope?String(e.scope):'',code});
+  if(code==='PERMISSION_DENIED'){authFailClosed('ACCESS_ERROR',{step:'employee-listen',code:'permission-denied'});return}
+  const notice=document.getElementById('emp-host-notice');if(notice)notice.textContent=code==='UNAVAILABLE'?'Ingen forbindelse – prøver igjen.':'Datafeil ('+code+').';
+}
+// (management|none) → employee. Steps: gen check · leave management (17→0, assert) · show host + stylesheet · dynamic import
+// (gen re-check: a stale import never mounts) · adapters over the ONE compat instance · start (≤4 listeners) · bridge door mount.
+async function authEnterEmployeeSurface(gen,membership){
+  if(gen!==authGeneration)return null;
+  if(!membership||typeof membership.ansattId!=='string'||!membership.ansattId)return null;
+  if(Object.keys(listeners).length!==0||startupTimer)authLeaveManagement();
+  ACTIVE_SURFACE='employee';
+  authSessionRecord('SURFACE_EMPLOYEE_ENTER',{role:membership.accessRole});
+  const host=document.getElementById('employee-host');if(host)host.classList.add('active');
+  authEmployeeCss(true);
+  document.getElementById('loading-screen').classList.remove('hidden');
+  document.getElementById('ld-text').textContent='Åpner ansattsiden…';
+  let ui,ad,core;
+  try{[ui,ad,core]=await Promise.all([import('./employee-shell-ui.mjs'),import('./employee-production-adapters.mjs'),import('./employee-shell-core.mjs')])}
+  catch(e){if(gen!==authGeneration||ACTIVE_SURFACE!=='employee')return null;authFailClosed('ACCESS_ERROR',{step:'employee-import',code:authSessionErrCode(e)});return null}
+  if(gen!==authGeneration||ACTIVE_SURFACE!=='employee')return null;  // H5d: generation moved during the import → no mount
+  const isCurrent=()=>gen===authGeneration&&ACTIVE_SURFACE==='employee'&&!!empHost&&empHost.gen===gen;
+  let adapters;const fsCap=authCompatFs();
+  try{
+    adapters=ad.createProductionAdapters({fs:fsCap,tenantId:TENANT_ID,membership,isCurrent,nowMs:()=>Date.now(),policy:core.ETR2A_POLICY,onError:(e)=>authEmployeeAdapterError(gen,e)});
+    empHost={gen,adapters,membership};
+    adapters.start();
+  }catch(e){if(gen!==authGeneration)return null;authFailClosed('ACCESS_ERROR',{step:'employee-adapters',code:authSessionErrCode(e)});return null}
+  await fsCap.whenSettled(4,5000);
+  if(gen!==authGeneration||ACTIVE_SURFACE!=='employee'||!empHost||empHost.gen!==gen)return null;  // superseded while the first snapshots were pending → no mount
+  try{ui.mountEmployeeProduction(document.getElementById('emp-root'),{identity:membership,expectedTenantId:TENANT_ID,adapters})}
+  catch(e){if(gen!==authGeneration)return null;authFailClosed('ACCESS_ERROR',{step:'employee-mount',code:authSessionErrCode(e)});return null}
+  document.getElementById('loading-screen').classList.add('hidden');
+  authUpdateEmployeeControls();
+  return 'employee';
+}
+// Header control "Min ansattside": admin with a bound ansattId, management active, same membership object, no re-auth.
+function authOpenMinAnsattside(){
+  const gen=authGeneration;
+  if(!currentUser||currentUser.role!=='admin'||ACTIVE_SURFACE!=='management')return null;
+  if(!authMembership||typeof authMembership.ansattId!=='string'||!authMembership.ansattId)return null;
+  return authEnterEmployeeSurface(gen,authMembership);
+}
+// Host control "Tilbake til ledelse" (admin self-smoke only): dispose employee (→0), then re-enter ONLY through the guarded current-generation entry.
+function authReturnToManagement(){
+  const gen=authGeneration;
+  if(!currentUser||currentUser.role!=='admin'||ACTIVE_SURFACE!=='employee')return null;
+  authLeaveEmployeeSurface();
+  if(gen!==authGeneration)return null;
+  authSessionRecord('SURFACE_MANAGEMENT_ENTER',{});
+  const outcome=authGuardedTenantDataEntry(gen);
+  if(outcome!=='ready'){authFailClosed('ACCESS_ERROR',{step:'return',code:String(outcome)});return null}
+  return outcome;
+}
+
 // Sign-in surface + observer. Persistence is SESSION-gated (C1): the observer and the sign-in handler
 // exist only after setPersistence(SESSION) resolved; on rejection nothing can sign in or resolve.
 function authIdentityInit(){

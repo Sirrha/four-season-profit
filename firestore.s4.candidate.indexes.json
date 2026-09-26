@@ -1,0 +1,23 @@
+{
+  "_comment": "S4 CANDIDATE (REV3) composite indexes for tenants/{tenantId}/shifts. LOCAL CANDIDATE ONLY - not deployed. Own-schedule query: ansattId == + workDate range. Ledige vakter query: status == open + ansattId == null + orderBy plannedStartAt.",
+  "indexes": [
+    {
+      "collectionGroup": "shifts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ansattId", "order": "ASCENDING" },
+        { "fieldPath": "workDate", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "shifts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "ansattId", "order": "ASCENDING" },
+        { "fieldPath": "plannedStartAt", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

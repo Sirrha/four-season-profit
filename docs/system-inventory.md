@@ -1,5 +1,98 @@
 # System-inventar — Four Season AS
 
+## UNCOMMITTED LOKAL BUILD — 2026-09-26 — S4 HOST INTEGRATION (worktree `../four-season-s4host`, branch `s4-host-integration` fra `origin/main` d9e5139c; IKKE commit/push/deploy/regelpublisering)
+Release: SIRRHA-CCODE-S4-HOST-INTEGRATION-LOCAL-BUILD-RELEASE-001 (eier-RED «open S4 RED and start employee host integration»). Bygger på det aksepterte S4-sjekkpunktet `f508c6e9` (employee-bridge-session) importert byte-eksakt på S2b-2-baselinen.
+- **Import (R2)**: de 13 aksepterte S4-stiene + deres transitive avhengigheter (til sammen 20 runtime-moduler, 19 testbatterier, `employee-shell.html`, `four-season-logo.gif`, `firestore.s4.candidate.rules` sha 418d0b09…, `firestore.s4.candidate.indexes.json` sha 4da806d2…) hentet med `git show f508c6e9:<sti>` — hver fil blob-identisk med sjekkpunktet, LF på disk. Inventarblokken for S4-fundamentet (82 linjer, over) er den eneste inventar-sammenslåingen; S2b-2-notatene under er urørt. Ingen gammel `index.html` importert.
+- **Vert (R3, `index.html`)**: `ACTIVE_SURFACE ∈ {none, management, employee}`; `authMembership` (bro-form {uid,tenantId,accessRole,ansattId,accessEnabled}); `empHost`. `authMembershipEligible` slipper inn admin som før **og** `accessRole == employee` KUN med ikke-tom `ansattId` (ingen annen rolle). Etter positiv revalidering: employee → `authEnterEmployeeSurface(gen, membership)` (aldri `authGuardedTenantDataEntry`, aldri de 17 ledelseslytterne, aldri `#main-app`); admin → ledelse som før. `#employee-host` (søsken FØR `#main-app`, skjult) med vertsstripe (Logg ut / «Tilbake til ledelse» kun for admin) + samme chrome-ider som forhåndsvisningen (`#emp-identity`, `#emp-nav`, `#emp-root`). Ansattsiden monteres KUN via brodøren `mountEmployeeProduction(root,{identity: membership, expectedTenantId: TENANT_ID, adapters})` med `createProductionAdapters({fs, tenantId, membership, isCurrent, nowMs, policy: ETR2A_POLICY (graceHours 6), onError})`. `authCompatFs()` = minimal vertskapasitet over den ENE eksisterende `firebase.firestore()`-instansen (doc/listen/runTransaction/batch/serverTimestamp; `tx.get → {exists,data}`; lister → `[{id,exists,data}]`) + `whenSettled(n,ms)` (verten monterer først når de 4 ansattlytterne har levert første snapshot, maks 5 s). Stilark: `employee-shell.css` (ekstrahert byte-innhold fra forhåndsvisningens `<style>`; `employee-shell.html` lenker det) lastes/fjernes av verten ved inn-/utgang (globale regler `html/body/button` gjelder derfor bare mens ansattflaten er aktiv). C5-bryter: `authOpenMinAnsattside()` (header-knapp `#hdrEmpBtn`, kun admin med ansattId): gen-sjekk → `authLeaveManagement()` (17→0, assert, oppstartskoordinator nullstilt) → import → gen-resjekk → adaptere (≤4) → montering; `authReturnToManagement()`: dispose (→0, assert) → tøm/skjul vert → KUN via `authGuardedTenantDataEntry(gen)` → 17 via koordinatoren. Aldri to lyttersett samtidig. Nedrivning: `authDetachWatches()` disposer ansattflaten; `authSignedOutTeardown`/`authExplicitLogoutTeardown` ender i `ACTIVE_SURFACE=none`, 0/0. Vern: `authGuardedTenantDataEntry` er admin-only og nekter når ansattflaten er aktiv; `startListeners` nekter ikke-admin. `authSurfaceCounts()` = selvtest-hook.
+- **OBS-1 herding (R4)**: `authSettle` ruter en negativ avgjørelse gjennom `authFailClosed` når kjøretidstilstand finnes (`authRuntimeLive()`: lyttere, aktiv flate, `empHost`, `currentUser`/`authBoundUid`) — programmatisk re-entry fra READY etterlater nå 0 lyttere, skjult app, nullet identitet, tom LOCAL (bevist OBS1-mgmt + OBS1-emp).
+- **Bevis (R6)**: node-batterier 19/19 grønne (shell-core 200, schedule-core 129+16+5, week 33, month 13, page-qa 12, myjob 9, bridge 21, adapters 15, projection 8, grace 10, mgmt schedule 49, employees 24, contract 52, manualtime 15, payroll 19, planning 7, 3a 5, oversikt 10, p1 17; tre kildevakter leser nå html+css). Emulator: S4-matrise 320/320 og reell-adapter-matrise 34/34 (adaptermodulen importert fra dette worktreet) på REV3.1. Vertsmatrise (headless Chrome via CDP + Auth/Firestore-emulator, demo-sormena): 33/33 — H1 employee → 0/4, H2 admin → 17/0, H3 «Min ansattside» 17→0→4 og tilbake 4→0→17 (samplet, aldri begge ≠0), H5a ×3 uten vekst (watches = 2), H5b logout fra ansattflate → 0/0, H5c live deaktivering → NO_ACCESS 0/0, H5c-stale → STALE 0/0, H5d generasjonsflytt under import → ingen montering, H5e admin uten ansattId → ingen knapp, H6 ingen fixture-/chooser-autoritet (`?emp=1` uten virkning; forhåndsvisningen fungerer som før), OBS1 begge flater, S2b-2-regresjoner (nomem/disabled/feil passord/reload/bfcache/STALE) uendret.
+- **REV3.2 (2026-09-26, SIRRHA-CCODE-S4-REV3.2-GENERATION-FLOOR-READ-CORRECTION-001, eier-RED)**: den lastbærende blokkeringen fra vertsbygget (S4-kandidaten ga `tenants/{t}/_meta/**` kun til admin, mens S2b-2-generasjonsbarrieren kjøres for alle identiteter ⇒ ansatt endte i `ACCESS_ERROR generation permission-denied`) er lukket i den LOKALE kandidaten `firestore.s4.candidate.rules` med nøyaktig én tillagt linje under `match /tenants/{tenantId}`: `match /_meta/client { allow get: if isSelfActor(tenantId); }` (skriving fortsatt kun admin; ingen annen `_meta`-lesing for ansatte). Kandidat-sha REV3.1 418d0b09… → **REV3.2 a34a39f17bff18db17f4c294116ad399b3e5cb3c223ee24f788965f37d7aacee**; indekskandidat uendret (4da806d2…); produksjons-`firestore.rules` urørt; verten uendret (barrieren er ikke omgått). Bevis på REV3.2: G-01…G-11 (16 tilfeller: ansatt GET tillatt; CREATE/UPDATE/DELETE og andre `_meta`-dokumenter nektet; tom/manglende ansattId, deaktivert, feil tenant, uten medlemskap og uautentisert nektet; admin med/uten ansattId beholder GET/WRITE) + generasjonsbarrieren med den eksakte `authGenerationFloorTx`-teksten som ansatt: gulv 2 → COMPATIBLE uten skriving, 3 → STALE, manglende/1 → skriveforsøk NEKTET (kun admin initialiserer/hever), malformert → MALFORMED uten skriving (24/24); S3-regresjon 167/167 + S4-base 153/153 = 320/320; reell-adapter-matrise 34/34; vertsmatrise 32/32 med den faktiske kandidaten som regelkilde (ansatt → READY 0/4 med navn og vakt, H2/H3/H5a–e/OBS1/bfcache/STALE). Ansattruten er dermed bevist under den faktiske kandidaten, ikke en scratch-variant. Fortsatt ikke publisert.
+- **OBS-2 (produktgrense, ikke vertsfeil)**: adapterne har ikke noe endringssignal og skallet tegner fra speilene ved navigasjon; live endringer i vaktplanen etter montering vises først ved neste navigasjon/handling (verten venter på første snapshot før montering; ingen re-tegning ved senere snapshots). Egen release om ønskelig.
+- **Ikke gjort**: push, deploy, regel-/indekspublisering, ansattprovisjonering, produksjonsdata, RouteA. Alt lokalt, ustaget, ucommittet.
+
+## UNCOMMITTED LOKAL BUILD — 2026-09-25 (kveld) — S4 Local Production Foundation (isolert worktree, IKKE sjekkpunkt)
+
+Release: SIRRHA-CCODE-S4-LOCAL-PRODUCTION-FOUNDATION-BUILD-RELEASE-001 (eier-RED). Samme worktree/branch som
+bridge-bygget under (`../four-season-empbridge`, `employee-bridge-session` @ `26d640aa…`). **Ingen commit, push,
+deploy, regelpublisering eller produksjonsendring. index.html og S2b-2-worktreet urørt.**
+
+- **OD-5 (eier-ratifisert)**: `ETR2A_POLICY.graceHours` 0 → **6** i `employee-shell-core.mjs` (én konstant; alle andre
+  vern uendret). T7/T24 i `employee-shell-core.test.mjs` pinner nå graceHours 0 eksplisitt (samme påstander).
+  Ny `employee-grace-policy.test.mjs` **10/0**: nattvakt 22–02 stemples ut (avvist under 0), redigeringsvindu åpent
+  05:59 / stengt 06:00, 36 t-tak, dagvakt uendret, DST-faktum dokumentert.
+- **Produksjonsadaptere** `employee-production-adapters.mjs` (NY; null Firebase-import, all datastore-kapasitet
+  injiseres som `fs` fra verten): `createProductionAdapters({ fs, tenantId, membership, isCurrent, nowMs, policy,
+  onError, deps })` → `schedule.store()/claim()/admin.{create,revise,assign,cancel}`, `attendance.get/has/values/commit()`
+  (`set()` nektes i produksjon), `employees.store()`, `employeeSelf.write()`, `start/dispose/listenerCount`. Fire
+  lyttere (egne vakter, ledige vakter, eget oppmøte, egen employeeSelf). Speilene endres KUN via snapshots (aldri
+  optimistisk). Alle beslutninger tas av de aksepterte kjernene (`applyScheduleOperation`, `validateAssignmentChange`,
+  employee-shell-core-operasjoner); `s4Path()` kan ikke bygge stier utenfor shifts/attendance/employeeSelf (+events)
+  — `vakter` kan ikke skrives. Stale revisjon: én re-kjøring via `rerun(serverRecord)`, deretter synlig feil.
+  Enhetsbatteri mot falsk datastore `employee-production-adapters.test.mjs` **15/0**.
+- **Min ansettelse-projeksjon** `employee-self-projection.mjs` (NY, ren): `projectEmployeeSelf` (8 eier-godkjente felt,
+  avledet via de kanoniske hjelperne i management-employees-core), `validateEmployeeSelfDoc` (eksakt nøkkelsett),
+  `employeeSelfToShellEmployee` (ansattId fra STI). Batteri `employee-self-projection.test.mjs` **8/0** (rader identiske
+  med kanonisk kilde; ingen lønn/konto/personnummer/notater).
+- **Bro-søm utvidet minimalt** i `employee-shell-ui.mjs`: `persistAttendance(attId, res, rerun)` — preview skriver Map
+  som før; produksjon kaller `attendanceStore.commit(res, { create, rerun })` og viser feil. De tre ansatt-skriverne
+  (stemple inn/ut, pause, pausedeklarasjon) går gjennom sømmen; kjerne-kallene er byte-identiske (QA-A3 grønn).
+- **Regel-/indekskandidater** (lokale filer, IKKE publisert): `firestore.s4.candidate.rules` = REV3.1 — REV3-lovene
+  uendret, men oppmøte-blokken skrevet om til verdi-overføring + billige diskriminatorer først (Firestore-
+  regelbudsjett 1000 uttrykk; eksakt REV3 sha 5e50a41e… feilet på admin manuell føring). `firestore.s4.candidate.
+  indexes.json` (shifts: ansattId+workDate; status+ansattId+plannedStartAt). `firestore.rules` (produksjon) urørt.
+- **Emulatorbevis (scratch step-c-emulator/s4, demo-prosjekt)**: S3-adminregresjon **167/167**, S4 REV3-matrise
+  **153/153** (totalt 320/320) mot REV3.1; ekte adaptere mot emulator+regler **34/34** inkl. Ta vakten-kappløp (én
+  vinner), full oppmøtesekvens med sanne hendelser, stale-retry én gang, PERMISSION_DENIED uten lokal tilstand,
+  **M1 vaktbasert og M2 vaktløs manuell føring** (attested, sanne manager_manual_entry-hendelser) + negativer
+  (utenfor ansettelse, manglende ansettelse, ugyldig intervall/pause, ansattrolle, falsk hendelse), employeeSelf
+  egen-lesing/kryss-nekt/ansatt-skriv-nekt/sensitivt felt nektet, admin create/revise/assign/cancel med hendelser,
+  `vakter` uendret.
+- **Gjenstår (kun vert, etter S2b-2/S3)**: index.html-ruten for ansattrolle (mount `mountEmployeeProduction` med
+  `fs`-kapasitet over compat-SDK), Vaktplan-skriver i produksjon, S4-publisering, pilot.
+
+## UNCOMMITTED LOKAL BUILD — 2026-09-25 — Employee Production Bridge (isolert worktree, IKKE sjekkpunkt)
+
+Release: SIRRHA-CCODE-EMPLOYEE-PRODUCTION-BRIDGE-LOCAL-BUILD-RELEASE-001 (eier-RED). Bygget i
+worktree `C:/Users/gamme/projects/four-season-empbridge`, branch `employee-bridge-session` fra
+`26d640aa…`. **Ingen commit, push, deploy eller produksjonsendring.** S2b-2-worktreet urørt.
+
+- **Formål**: ansattproduktet kan monteres med ÉN eksternt oppløst produksjonsidentitet
+  `{ uid, tenantId, accessRole, ansattId, accessEnabled }` (membership = autoritet, REV2) i stedet
+  for `DEFAULT_UID`/fikstur-velger. Ingen Firestore-sti, ingen nettverksadapter, ingen Firebase-init
+  i ansattmodulene er oppfunnet — kun sømmer.
+- **Ny modul** `employee-production-bridge.mjs` (ren, importfri): `validateProductionIdentity`
+  (fail-closed: mangler/feilformet/deaktivert/feil rolle/feil tenant/manglende ansattId/manglende
+  konfig), `resolveEmployeeEntry` (`production` | `preview` | alt annet = nektet; produksjon leser
+  aldri preview-input), `ADAPTER_CONTRACT` + `validateAdapters` (schedule.store / attendance
+  get·set·has / employees.store), `denialMessage`, `EMPLOYEE_SURFACE_ROLES = ['employee','admin']`.
+- **`employee-shell-ui.mjs`**: `mountEmployeeShell(root, options)` krever eksplisitt modus (ingen
+  standard; ukjent modus = nektet-panel). To strukturelt adskilte dører:
+  `mountEmployeePreview(root)` og `mountEmployeeProduction(root, { identity, expectedTenantId,
+  adapters })`. Butikk-tilgang KUN via `ADAPTERS` (`scheduleStore()`/`employeeStore()`/
+  `attendanceStore` bundet ved mount; preview binder de eksisterende fikstur-butikkene via
+  `createPreviewAdapters()`). `route()`/`goChooser()`/Ledelse-fanene/Vaktplan-portene er
+  preview-only; identitetsknappen er inert i produksjon (`aria-label` «Innlogget»). Visningsnavn/
+  rolle hentes fra ansattsannheten (`personFor`), `resolveAssigneeIn` bruker ansattsannheten i
+  produksjon. `actorFromMembership` bærer validert `accessEnabled`. Nytt `goDenied`-panel
+  («Ansattsiden kan ikke åpnes», ingen knapper, nav skjult). Døde `goTodaySlice1`/`goTodayLegacy`
+  urørt (kjent gjeld, egen release).
+- **`employee-shell.html`**: kaller `mountEmployeePreview(root)` eksplisitt (`?emp=1`-porten beholdt).
+- **Tester**: ny `employee-production-bridge.test.mjs` **21/0** (A–J). Aksepterte batterier uendret
+  og grønne: shell-core 200/0 · schedule-core 129/0 (+16/0 +5/0) · week 33/0 · month 13/0 ·
+  page-qa 12/0 · myjob 9/0 · mgmt schedule 49/0 · employees 24/0 · contract 52/0 · manualtime 15/0 ·
+  payroll 19/0 · planning 7/0 · 3a 5/0 · oversikt 10/0 · p1 17/0. DOM-røyk i Chrome mot loopback
+  8766: preview lander på Maria og velgeren virker; produksjon gyldig identitet → I dag med
+  STEMPLE INN; deaktivert/feil tenant/uten adaptere/uten modus → nektet-panel uten velger.
+- **Identiteter (bytes / sha256)**: `employee-shell-ui.mjs` 93941 B
+  `4d82e1b33953878fb67014de043ac43165e4b1da28f9ff2d46c4324423ca68c3` · `employee-shell.html`
+  44318 B `6d160e5bc47c7e31894ad7e6d30f8faa690cc536439c705a0f74498cf3282ad6` ·
+  `employee-production-bridge.mjs` 8451 B `bc8e1f0697c1abcf22ce3bcda691af79e5fa80ebb730b55666185606cc295539` ·
+  `employee-production-bridge.test.mjs` 18035 B `1ff880755cf776b2ce4142814554f5236ef9b57885e77eca565b8ca69bcee6c3`.
+- **Gjenstår og avhenger av S2b-2/S3**: selve produksjonsadapterne (Firestore-stier/spørringer for
+  vakter, oppmøte, ansatt — må måles/designes eget), verten som leverer den delte identiteten til
+  `mountEmployeeProduction` fra `index.html`-innloggingen, S4-regler. Ikke påbegynt.
+
+
 > **GJELDENDE BASELINE (oppdatert 2026-08-02, runtime-kilde gjennom M2 Slice 2 commit ca9e4b3) — load-bearing, les først:**
 > - **Sanity er nå `10 / 1 / 2`** (`if(WRITE_TO_PURCHASES)`=10, `dbAll('purchases')`=1, `dbFind('purchases'`=2). Skiftet **9→10** ved **V2C.5.2a Path B** (commit 7715de1, 02.07, Sage-GREEN). Enhver eldre milestone-bullet som sier «9 / 1 / 2» var korrekt på sin dato — **ikke gjeldende**. `EXPENSE_KINDS.length`=12.
 > - **Gjeldende arbeidsbue = Auth M2** (Firebase-autentisering + trygg oppstartsgating). **Slice 0** ferdig (`95e2b20` — firebase-auth SDK lastet, inert), **Slice 1** ferdig (`647ebb3` — retry-sikker oppstartskoordinator), **Slice 2** ferdig (`ca9e4b3` — migrasjonene fjernet fra oppstart). **Slice 3-designet er ferdig og forsonet** — fire dokumentasjons-commits landet, ingen runtime-endring: `cdb28a5` (Seksjon 3 lagt til), `1dd87c6` (overskriftsnivå), `088f9ad` (30 forsoningspunkter), `5232f33` (normalizedNavn i revisjonsstempel). Slice 3 er delt i fire gates: **3A** dormant stillas (pushes), **3B** cutover (kun lokal commit), **3C** nettleser-matrise, **3D** produksjonspush. **Neste: Gate 3A — IKKE implementert ennå.** **Ingenting av Auth-cutoveren er live**; runtime står på Slice 2 (`ca9e4b3`) og PIN er fortsatt eneste identitetssti. Sanity-baseline uendret `10 / 1 / 2`. Design: `docs/architecture/auth-m2-startup-gating.md`.

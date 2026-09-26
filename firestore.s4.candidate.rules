@@ -1,0 +1,420 @@
+rules_version = '2';
+// S4 CANDIDATE (REV3.1: budget-safe attendance block, laws unchanged from REV3) — Sormena employee production integration. SCRATCH / EMULATOR ONLY. NOT PUBLISHED.
+// Architecture: no recursive tenant-wide grant. S3 admin capability is preserved by ONE explicit
+// recursive grant per management collection of the measured operation inventory (17 STARTUP_COLS
+// + _meta + employeeAuthLock). The S4 protected collections (shifts, attendance, employeeSelf and
+// their events) are matched ONLY by their own blocks, so every allow there is invariant-preserving
+// for admin AND employee. Authority = request.auth.uid + memberships/{uid}_{tenantId}. No claims.
+// REV3: immutable events are bound to the ACTUAL parent pre-state -> post-state transition (type,
+// revision, actor and the exact changed payload), evaluated once per request (rules expression budget).
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function memberPath(tenantId) { return /databases/$(database)/documents/memberships/$(request.auth.uid + '_' + tenantId); }
+    function memberExists(tenantId) { return signedIn() && exists(memberPath(tenantId)); }
+    function member(tenantId) { return get(memberPath(tenantId)).data; }
+    function isEnabledMember(tenantId) {
+      return memberExists(tenantId)
+        && member(tenantId).uid == request.auth.uid
+        && member(tenantId).tenantId == tenantId
+        && member(tenantId).accessEnabled == true;
+    }
+    function isEnabledAdminMember(tenantId) { return isEnabledMember(tenantId) && member(tenantId).accessRole == 'admin'; }
+    // Self actor = the caller acting on OWN employee context: role employee or admin, bound ansattId.
+    // Mirrors the accepted core (laterScopeError allowedRoles ['employee','admin'] + requireOwn) and the bridge.
+    function isSelfActor(tenantId) {
+      return isEnabledMember(tenantId)
+        && member(tenantId).accessRole in ['employee', 'admin']
+        && member(tenantId).ansattId is string && member(tenantId).ansattId.size() > 0;
+    }
+    function myAnsattId(tenantId) { return member(tenantId).ansattId; }
+    function nowMs() { return request.time.toMillis(); }
+    function nearNow(v) { return v is int && v >= nowMs() - 300000 && v <= nowMs() + 300000; }
+    function safeId(s) { return s is string && s.size() > 0 && s.size() <= 200 && s.matches('^[A-Za-z0-9_-]+$'); }
+    // ---- event-fidelity helpers (pure over passed-in values; evaluated once per request) ----
+    // c = event.changed; every listed key present and no other key
+    function cKeys(c, ks) { return c.keys().hasOnly(ks) && c.keys().hasAll(ks); }
+    // changed[k] == { before: b, after: a } exactly
+    function cv(c, k, b, a) {
+      return (k in c) && c[k] is map && c[k].keys().hasOnly(['before', 'after']) && c[k].keys().hasAll(['before', 'after'])
+        && c[k].before == b && c[k].after == a;
+    }
+    // schedule-core changed-map law: a present key is a real pre!=post change with exact values; absent = unchanged
+    function kf(c, p, q, k) { return (k in c) ? (cv(c, k, p[k], q[k]) && p[k] != q[k]) : (p[k] == q[k]); }
+    // employee-shell-core diffMap law: 'before' that never existed is absent (JSON-normalised undefined)
+    function dk(c, p, q, k) {
+      return (k in c)
+        ? (c[k] is map && c[k].keys().hasOnly(['before', 'after']) && ('after' in c[k])
+           && (k in q) && c[k].after == q[k]
+           && ((k in p) ? (('before' in c[k]) && c[k].before == p[k] && p[k] != q[k]) : !('before' in c[k])))
+        : ((k in p) ? ((k in q) && p[k] == q[k]) : !(k in q));
+    }
+    function selfOk(e, q, mrole, mans) { return mrole in ['employee', 'admin'] && mans is string && mans.size() > 0 && e.actorRole == mrole && e.actorAnsattId == mans && q.ansattId == mans; }
+    function admOk(e, mrole, mans) { return mrole == 'admin' && e.actorRole == 'admin' && e.actorAnsattId == ((mans is string && mans.size() > 0) ? mans : null); }
+    function noReason(e) { return e.reasonCode == null && e.reasonNote == null; }
+    // ATTENDANCE event fidelity: e=event, x=parent existed before, p=pre (or {}), q=post, c=changed, mrole/mans=membership
+    function attFid(e, x, p, q, c, mrole, mans) {
+      return e.revision == q.revision && e.at == q.updatedAt && (
+           (e.type == 'clock_in' && selfOk(e, q, mrole, mans) && !x && q.revision == 1 && q.status == 'clocked_in'
+              && cKeys(c, ['observedClockInAt', 'declaredStartAt'])
+              && cv(c, 'observedClockInAt', null, q.observedClockInAt) && cv(c, 'declaredStartAt', null, q.declaredStartAt))
+        || (e.type == 'clock_out' && selfOk(e, q, mrole, mans) && x && p.status == 'clocked_in' && q.status == 'clocked_out'
+              && cKeys(c, ['observedClockOutAt', 'declaredEndAt'])
+              && cv(c, 'observedClockOutAt', null, q.observedClockOutAt) && cv(c, 'declaredEndAt', null, q.declaredEndAt))
+        || (e.type == 'break_start' && selfOk(e, q, mrole, mans) && noReason(e) && x && p.breakState == 'working' && q.breakState == 'on_break'
+              && cKeys(c, ['observedBreakStartAt', 'breakState'])
+              && cv(c, 'observedBreakStartAt', null, q.openBreakStartedAt) && cv(c, 'breakState', 'working', 'on_break'))
+        || (e.type == 'break_end' && selfOk(e, q, mrole, mans) && noReason(e) && x && p.breakState == 'on_break' && q.breakState == 'working'
+              && cKeys(c, ['observedBreakEndAt', 'observedBreakMinutesTotal', 'breakState'])
+              && cv(c, 'observedBreakEndAt', null, q.updatedAt)
+              && cv(c, 'observedBreakMinutesTotal', p.observedBreakMinutesTotal, q.observedBreakMinutesTotal)
+              && cv(c, 'breakState', 'on_break', 'working'))
+        || (e.type == 'employee_declaration' && selfOk(e, q, mrole, mans) && x && p.declaredBreakMinutesTotal != q.declaredBreakMinutesTotal
+              && cKeys(c, ['declaredBreakMinutesTotal'])
+              && cv(c, 'declaredBreakMinutesTotal', p.declaredBreakMinutesTotal, q.declaredBreakMinutesTotal))
+        || (e.type == 'employee_edit' && selfOk(e, q, mrole, mans) && x && q.employeeEditCount == p.employeeEditCount + 1
+              && c.keys().hasOnly(['declaredStartAt', 'declaredEndAt', 'note']) && c.size() >= 1
+              && dk(c, p, q, 'declaredStartAt') && dk(c, p, q, 'declaredEndAt') && dk(c, p, q, 'note'))
+        || (e.type == 'manager_manual_entry' && admOk(e, mrole, mans) && !x && q.revision == 1 && q.status == 'attested'
+              && cKeys(c, ['declaredStartAt', 'declaredEndAt', 'declaredBreakMinutesTotal', 'status'])
+              && cv(c, 'declaredStartAt', null, q.declaredStartAt) && cv(c, 'declaredEndAt', null, q.declaredEndAt)
+              && cv(c, 'declaredBreakMinutesTotal', null, q.declaredBreakMinutesTotal) && cv(c, 'status', null, 'attested'))
+        || (e.type == 'manager_correction' && admOk(e, mrole, mans) && x && q.declarationSource == 'manager' && q.revision == p.revision + 1
+              && c.keys().hasOnly(['declaredStartAt', 'declaredEndAt', 'note', 'declaredBreakMinutesTotal']) && c.size() >= 1
+              && dk(c, p, q, 'declaredStartAt') && dk(c, p, q, 'declaredEndAt') && dk(c, p, q, 'note') && dk(c, p, q, 'declaredBreakMinutesTotal'))
+        || (e.type == 'approval' && admOk(e, mrole, mans) && noReason(e) && x && p.status in ['clocked_out', 'attested'] && q.status == 'approved'
+              && cKeys(c, ['approvedStartAt', 'approvedEndAt', 'status'])
+              && cv(c, 'approvedStartAt', p.approvedStartAt, q.approvedStartAt) && cv(c, 'approvedEndAt', p.approvedEndAt, q.approvedEndAt)
+              && cv(c, 'status', p.status, 'approved')));
+    }
+    // SHIFT event fidelity (schedule-core buildEvent / shiftChangedMapError; management-schedule-core claim)
+    function shiftFid(e, x, p, q, c, mrole, mans) {
+      return e.revision == q.revision && e.at == q.updatedAt && (
+           (mrole == 'admin' && e.actorRole == 'admin' && (
+                (e.type == 'shift_created' && !x && q.revision == 1
+                   && cKeys(c, ['ansattId', 'plannedStartAt', 'plannedEndAt', 'workDate', 'roleKey', 'status'])
+                   && cv(c, 'ansattId', null, q.ansattId) && cv(c, 'plannedStartAt', null, q.plannedStartAt)
+                   && cv(c, 'plannedEndAt', null, q.plannedEndAt) && cv(c, 'workDate', null, q.workDate)
+                   && cv(c, 'roleKey', null, q.roleKey) && cv(c, 'status', null, q.status))
+             || (e.type == 'shift_revised' && x && q.revision == p.revision + 1
+                   && c.keys().hasOnly(['plannedStartAt', 'plannedEndAt', 'roleKey']) && c.size() >= 1
+                   && kf(c, p, q, 'plannedStartAt') && kf(c, p, q, 'plannedEndAt') && kf(c, p, q, 'roleKey')
+                   && q.status == p.status && q.ansattId == p.ansattId)
+             || (e.type == 'shift_assignment_changed' && x && q.revision == p.revision + 1
+                   && c.keys().hasOnly(['status', 'ansattId']) && c.size() >= 1
+                   && kf(c, p, q, 'status') && kf(c, p, q, 'ansattId')
+                   && q.plannedStartAt == p.plannedStartAt && q.plannedEndAt == p.plannedEndAt && q.roleKey == p.roleKey && q.status != 'cancelled')
+             || (e.type == 'shift_cancelled' && x && q.revision == p.revision + 1 && p.status != 'cancelled' && q.status == 'cancelled'
+                   && cKeys(c, ['status']) && cv(c, 'status', p.status, 'cancelled'))))
+        || (mrole in ['employee', 'admin'] && mans is string && mans.size() > 0 && e.actorRole == 'employee'
+              && e.type == 'shift_assignment_changed' && x && q.revision == p.revision + 1
+              && p.status == 'open' && p.ansattId == null && q.status == 'assigned' && q.ansattId == mans
+              && cKeys(c, ['status', 'ansattId'])
+              && cv(c, 'status', 'open', 'assigned') && cv(c, 'ansattId', null, mans)
+              && q.plannedStartAt == p.plannedStartAt && q.plannedEndAt == p.plannedEndAt && q.roleKey == p.roleKey && q.workDate == p.workDate));
+    }
+
+    // ---- A-1 bootstrap self-read preserved; no client membership writes ----
+    match /memberships/{membershipId} {
+      allow get, list: if signedIn() && resource.data.uid == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
+    match /tenants/{tenantId} {
+      // ---- S3 admin behaviour preserved: explicit per-collection recursive grants (measured inventory) ----
+      match /products/{document=**}            { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /purchases/{document=**}           { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /sales/{document=**}               { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /svinn/{document=**}               { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /leverandorer/{document=**}        { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /dagsalg/{document=**}             { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /innboks/{document=**}             { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /ansatte/{document=**}             { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /vakter/{document=**}              { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /payments/{document=**}            { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /bankTransactions/{document=**}    { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /bankStatements/{document=**}      { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /bankAccounts/{document=**}        { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /expenses/{document=**}            { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /recurring_templates/{document=**} { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /expense_taxonomy/{document=**}    { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /documents/{document=**}           { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /_meta/client                      { allow get: if isSelfActor(tenantId); }   // REV3.2: self-actors may READ the S2b-2 generation floor; writes stay admin-only
+      match /_meta/{document=**}               { allow read, write: if isEnabledAdminMember(tenantId); }
+      match /employeeAuthLock/{document=**}    { allow read, write: if isEnabledAdminMember(tenantId); }
+
+      // ---- S4: PLANNED SCHEDULE (layer A). Frozen ten fields + two server audit stamps. ----
+      match /shifts/{shiftId} {
+        function sd() { return request.resource.data; }
+        function od() { return resource.data; }
+        function shiftShape(d) {
+          return d.keys().hasOnly(['ansattId','plannedStartAt','plannedEndAt','workDate','roleKey','status','revision','createdByUid','createdAt','updatedAt','serverCreatedAt','serverUpdatedAt'])
+            && d.keys().hasAll(['ansattId','plannedStartAt','plannedEndAt','workDate','roleKey','status','revision','createdByUid','createdAt','updatedAt','serverCreatedAt','serverUpdatedAt'])
+            && (d.ansattId == null || (d.ansattId is string && d.ansattId.size() > 0))
+            && d.plannedStartAt is int && d.plannedEndAt is int && d.plannedEndAt > d.plannedStartAt
+            && d.workDate is string && d.workDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+            && (d.roleKey == null || d.roleKey is string)
+            && d.status in ['open', 'assigned', 'cancelled']
+            && ((d.status == 'open' && d.ansattId == null) || (d.status == 'assigned' && d.ansattId != null) || d.status == 'cancelled')
+            && d.revision is int && d.revision >= 1
+            && d.createdByUid is string && d.createdAt is int && d.updatedAt is int;
+        }
+        function shiftImmutablesKept() {
+          return sd().workDate == od().workDate && sd().createdByUid == od().createdByUid
+            && sd().createdAt == od().createdAt && sd().serverCreatedAt == od().serverCreatedAt;
+        }
+        // admin (management planner): create at revision 1; revise/assign/cancel with revision+1; cancelled terminal; no delete
+        allow get, list: if isEnabledAdminMember(tenantId);
+        allow create: if isEnabledAdminMember(tenantId) && safeId(shiftId) && shiftShape(sd())
+          && sd().status in ['open', 'assigned'] && sd().revision == 1
+          && sd().createdByUid == request.auth.uid
+          && nearNow(sd().createdAt) && sd().updatedAt == sd().createdAt
+          && sd().serverCreatedAt == request.time && sd().serverUpdatedAt == request.time;
+        allow update: if isEnabledAdminMember(tenantId) && shiftShape(sd()) && shiftImmutablesKept()
+          && od().status != 'cancelled'
+          && sd().revision == od().revision + 1
+          && nearNow(sd().updatedAt) && sd().serverUpdatedAt == request.time;
+        allow delete: if false;
+        // self actor (employee): own assigned shifts + open shifts; Ta vakten = exactly-one-winner transition
+        allow get, list: if isSelfActor(tenantId)
+          && (od().ansattId == myAnsattId(tenantId) || (od().status == 'open' && od().ansattId == null));
+        allow update: if isSelfActor(tenantId)
+          && od().status == 'open' && od().ansattId == null
+          && sd().status == 'assigned' && sd().ansattId == myAnsattId(tenantId)
+          && sd().revision == od().revision + 1
+          && sd().diff(od()).affectedKeys().hasOnly(['status', 'ansattId', 'revision', 'updatedAt', 'serverUpdatedAt'])
+          && nearNow(sd().updatedAt) && sd().serverUpdatedAt == request.time;
+        // events: create-only for everyone; id = shiftId-rev-NNNNNN; type/revision/actor/changed bound to the real transition
+        match /events/{eventId} {
+          function ev() { return request.resource.data; }
+          function shiftPath() { return /databases/$(database)/documents/tenants/$(tenantId)/shifts/$(shiftId); }
+          function evShape(q) {
+            return ev().keys().hasOnly(['eventId', 'type', 'actorUid', 'actorRole', 'at', 'revision', 'changed'])
+              && ev().keys().hasAll(['eventId', 'type', 'actorUid', 'actorRole', 'at', 'revision', 'changed'])
+              && ev().eventId == eventId && safeId(shiftId)
+              && ev().revision is int && ev().revision >= 1
+              && eventId.size() == shiftId.size() + 11
+              && eventId.matches('^' + shiftId + '-rev-0*' + string(ev().revision) + '$')
+              && ev().revision == q.revision
+              && ev().actorUid == request.auth.uid
+              && nearNow(ev().at) && ev().changed is map;
+          }
+          allow get, list: if isEnabledAdminMember(tenantId) || (isSelfActor(tenantId) && get(shiftPath()).data.ansattId == myAnsattId(tenantId));
+          allow create: if isEnabledMember(tenantId)
+            && evShape(getAfter(shiftPath()).data)
+            && shiftFid(ev(), exists(shiftPath()), exists(shiftPath()) ? get(shiftPath()).data : {}, getAfter(shiftPath()).data, ev().changed,
+                        member(tenantId).accessRole, member(tenantId).ansattId);
+          allow update, delete: if false;
+        }
+      }
+
+      // ---- S4: ATTENDANCE (layer B). The accepted employee-shell-core record; transitions enforced server-side. ----
+      // REV3.1 (budget-safe form): every predicate receives the request/resource data ONCE as a value
+      // (n = request.resource.data, o = resource.data, my = the caller's ansattId, shift = the parent shift data).
+      // The laws are the REV3 laws unchanged; only the call structure changed (Firestore evaluates at most
+      // 1000 expressions per rule; REV3's sd()/od() function calls exhausted that on the admin create path).
+      match /attendance/{attendanceId} {
+        function attKeys() {
+          return ['attendanceId','shiftId','ansattId','createdByUid','workDate','plannedSnapshot','plannedShiftRevision',
+                  'observedClockInAt','observedClockOutAt','declaredStartAt','declaredEndAt',
+                  'approvedStartAt','approvedEndAt','approvedByUid','approvedAt',
+                  'status','employeeEditCount','employeeEditDeadline','breakState','openBreakStartedAt',
+                  'observedBreakMinutesTotal','declaredBreakMinutesTotal','approvedBreakMinutesTotal','breakCount',
+                  'revision','createdAt','updatedAt','serverCreatedAt','serverUpdatedAt','note','declarationSource'];
+        }
+        function attShape(d) {
+          return d.keys().hasOnly(attKeys())
+            && d.attendanceId == attendanceId
+            && d.ansattId is string && d.ansattId.size() > 0
+            && d.workDate is string && d.workDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+            && d.status in ['clocked_in', 'clocked_out', 'attested', 'approved']
+            && d.breakState in ['working', 'on_break']
+            && d.revision is int && d.revision >= 1
+            && d.createdAt is int && d.updatedAt is int
+            && d.employeeEditCount is int && d.employeeEditCount >= 0
+            && d.employeeEditDeadline is int
+            && d.observedBreakMinutesTotal is int && d.observedBreakMinutesTotal >= 0
+            && d.breakCount is int && d.breakCount >= 0
+            && (d.declaredBreakMinutesTotal == null || (d.declaredBreakMinutesTotal is int && d.declaredBreakMinutesTotal >= 0))
+            // coherence: clocked_out/approved require an observed OR declared completion; clocked_in never has observedClockOutAt
+            && (d.status != 'clocked_in' || d.observedClockOutAt == null)
+            && (d.status != 'clocked_out' || (d.observedClockOutAt is int && d.observedClockInAt is int && d.observedClockOutAt >= d.observedClockInAt))
+            && (d.breakState != 'on_break' || (d.openBreakStartedAt is int && d.status == 'clocked_in'))
+            && (d.breakState != 'working' || d.openBreakStartedAt == null)
+            && (d.declaredEndAt == null || d.declaredStartAt == null || d.declaredEndAt >= d.declaredStartAt);
+        }
+        function ownershipKept(n, o) {
+          return n.ansattId == o.ansattId && n.shiftId == o.shiftId && n.workDate == o.workDate
+            && n.attendanceId == o.attendanceId && n.plannedShiftRevision == o.plannedShiftRevision
+            && n.plannedSnapshot == o.plannedSnapshot
+            && n.createdByUid == o.createdByUid && n.createdAt == o.createdAt
+            && n.serverCreatedAt == o.serverCreatedAt
+            && n.employeeEditDeadline == o.employeeEditDeadline;
+        }
+        function observedKept(n, o) {
+          return n.observedClockInAt == o.observedClockInAt
+            && (o.observedClockOutAt == null || n.observedClockOutAt == o.observedClockOutAt);
+        }
+        function approvalKept(n, o) {
+          return n.approvedStartAt == o.approvedStartAt && n.approvedEndAt == o.approvedEndAt
+            && n.approvedByUid == o.approvedByUid && n.approvedAt == o.approvedAt
+            && n.approvedBreakMinutesTotal == o.approvedBreakMinutesTotal;
+        }
+        function stamped(n, o) { return n.revision == o.revision + 1 && nearNow(n.updatedAt) && n.serverUpdatedAt == request.time; }
+        function changedOnly(n, o, keys) { return n.diff(o).affectedKeys().hasOnly(keys); }
+
+        // ---- employee (self-actor) operations — each is ONE exact transition shape ----
+        function opClockOut(n, o) {
+          return o.status == 'clocked_in' && o.breakState == 'working' && o.observedClockOutAt == null
+            && n.status == 'clocked_out' && n.breakState == 'working' && n.openBreakStartedAt == null
+            && n.observedClockOutAt == n.updatedAt
+            && n.declaredEndAt is int
+            && changedOnly(n, o, ['status', 'observedClockOutAt', 'declaredEndAt', 'revision', 'updatedAt', 'serverUpdatedAt']);
+        }
+        function opBreakStart(n, o) {
+          return o.status == 'clocked_in' && n.status == 'clocked_in'
+            && o.breakState == 'working' && n.breakState == 'on_break'
+            && n.openBreakStartedAt == n.updatedAt
+            && changedOnly(n, o, ['breakState', 'openBreakStartedAt', 'revision', 'updatedAt', 'serverUpdatedAt']);
+        }
+        function opBreakEnd(n, o) {
+          return o.status == 'clocked_in' && n.status == 'clocked_in'
+            && o.breakState == 'on_break' && n.breakState == 'working' && n.openBreakStartedAt == null
+            && n.breakCount == o.breakCount + 1
+            && n.observedBreakMinutesTotal >= o.observedBreakMinutesTotal
+            && (n.observedBreakMinutesTotal - o.observedBreakMinutesTotal) * 60000 <= (n.updatedAt - o.openBreakStartedAt) + 30000
+            && (n.observedBreakMinutesTotal - o.observedBreakMinutesTotal) * 60000 >= (n.updatedAt - o.openBreakStartedAt) - 30000
+            && changedOnly(n, o, ['breakState', 'openBreakStartedAt', 'observedBreakMinutesTotal', 'breakCount', 'revision', 'updatedAt', 'serverUpdatedAt']);
+        }
+        function opDeclareBreak(n, o) {
+          return o.status in ['clocked_in', 'clocked_out'] && n.status == o.status
+            && o.breakState == 'working' && n.breakState == 'working'
+            && n.declaredBreakMinutesTotal is int && n.declaredBreakMinutesTotal >= 0
+            && n.declaredBreakMinutesTotal != o.declaredBreakMinutesTotal
+            && changedOnly(n, o, ['declaredBreakMinutesTotal', 'revision', 'updatedAt', 'serverUpdatedAt']);
+        }
+        function opEmployeeEdit(n, o) {
+          return o.status in ['clocked_in', 'clocked_out'] && n.status == o.status
+            && n.breakState == o.breakState
+            && o.employeeEditCount == 0 && n.employeeEditCount == 1
+            && n.updatedAt < o.employeeEditDeadline
+            && changedOnly(n, o, ['declaredStartAt', 'declaredEndAt', 'note', 'employeeEditCount', 'revision', 'updatedAt', 'serverUpdatedAt']);
+        }
+        function selfCreateOk(n, my, shift) {
+          return n.ansattId == my
+            && attendanceId == n.shiftId + '_' + my
+            && n.createdByUid == request.auth.uid
+            && n.status == 'clocked_in' && n.breakState == 'working' && n.openBreakStartedAt == null
+            && n.revision == 1 && n.employeeEditCount == 0 && n.breakCount == 0 && n.observedBreakMinutesTotal == 0
+            && n.observedClockOutAt == null && n.declaredEndAt == null && n.declaredBreakMinutesTotal == null
+            && n.approvedStartAt == null && n.approvedEndAt == null && n.approvedByUid == null && n.approvedAt == null && n.approvedBreakMinutesTotal == null
+            && !('note' in n) && !('declarationSource' in n)
+            && nearNow(n.createdAt) && n.updatedAt == n.createdAt && n.observedClockInAt == n.createdAt
+            && n.declaredStartAt is int
+            && n.serverCreatedAt == request.time && n.serverUpdatedAt == request.time
+            // server-side ownership binding to the ASSIGNED shift and its frozen snapshot/revision
+            && shift.status == 'assigned' && shift.ansattId == my
+            && n.workDate == shift.workDate
+            && n.plannedShiftRevision == shift.revision
+            && n.plannedSnapshot == { 'startAt': shift.plannedStartAt, 'endAt': shift.plannedEndAt };
+        }
+        function selfUpdateOk(n, o, my) {
+          return o.ansattId == my
+            && ownershipKept(n, o) && observedKept(n, o) && approvalKept(n, o) && stamped(n, o)
+            && (opClockOut(n, o) || opBreakStart(n, o) || opBreakEnd(n, o) || opDeclareBreak(n, o) || opEmployeeEdit(n, o));
+        }
+
+        // ---- admin operations (manual entry, typed correction, approval) — observed facts immutable even for admin ----
+        function admCorrection(n, o) {
+          return o.status in ['clocked_out', 'attested', 'approved']
+            && n.declarationSource == 'manager'
+            && n.status in ['clocked_out', 'attested']
+            && n.breakState == o.breakState && o.breakState == 'working'
+            && changedOnly(n, o, ['declaredStartAt', 'declaredEndAt', 'note', 'declaredBreakMinutesTotal', 'declarationSource', 'status', 'approvedStartAt', 'approvedEndAt', 'approvedByUid', 'approvedAt', 'approvedBreakMinutesTotal', 'revision', 'updatedAt', 'serverUpdatedAt'])
+            // a correction of an approved record returns it to its pre-approval state: approval fields cleared, never set
+            && n.approvedStartAt == null && n.approvedEndAt == null && n.approvedByUid == null && n.approvedAt == null && n.approvedBreakMinutesTotal == null;
+        }
+        function admApprove(n, o) {
+          return o.status in ['clocked_out', 'attested'] && n.status == 'approved'
+            && n.breakState == 'working' && o.breakState == 'working'
+            && n.approvedStartAt is int && n.approvedEndAt is int && n.approvedEndAt >= n.approvedStartAt
+            && n.approvedByUid == request.auth.uid && nearNow(n.approvedAt)
+            && n.approvedBreakMinutesTotal is int && n.approvedBreakMinutesTotal >= 0
+            && changedOnly(n, o, ['approvedStartAt', 'approvedEndAt', 'approvedByUid', 'approvedAt', 'approvedBreakMinutesTotal', 'status', 'revision', 'updatedAt', 'serverUpdatedAt']);
+        }
+        function admCreateOk(n) {
+          return n.status == 'attested' && n.declarationSource == 'manager'
+            && n.observedClockInAt == null && n.observedClockOutAt == null
+            && n.breakState == 'working' && n.openBreakStartedAt == null && n.breakCount == 0 && n.observedBreakMinutesTotal == 0
+            && n.revision == 1 && n.employeeEditCount == 0 && n.createdByUid == request.auth.uid
+            && n.approvedStartAt == null && n.approvedEndAt == null && n.approvedByUid == null && n.approvedAt == null && n.approvedBreakMinutesTotal == null
+            && n.declaredStartAt is int && n.declaredEndAt is int && n.declaredBreakMinutesTotal is int
+            && nearNow(n.createdAt) && n.updatedAt == n.createdAt
+            && n.serverCreatedAt == request.time && n.serverUpdatedAt == request.time;
+        }
+        function admUpdateOk(n, o) {
+          return ownershipKept(n, o) && observedKept(n, o) && stamped(n, o)
+            && (admCorrection(n, o) || admApprove(n, o));
+        }
+        allow get, list: if isSelfActor(tenantId) && resource.data.ansattId == myAnsattId(tenantId);
+        // ordering law (rules expression budget): cheap discriminators first, the document-shape check last
+        allow create: if isSelfActor(tenantId) && request.resource.data.ansattId == myAnsattId(tenantId) && safeId(request.resource.data.shiftId)
+          && attShape(request.resource.data)
+          && selfCreateOk(request.resource.data, myAnsattId(tenantId), get(/databases/$(database)/documents/tenants/$(tenantId)/shifts/$(request.resource.data.shiftId)).data);
+        allow update: if isSelfActor(tenantId) && resource.data.ansattId == myAnsattId(tenantId) && attShape(request.resource.data) && selfUpdateOk(request.resource.data, resource.data, myAnsattId(tenantId));
+        allow get, list: if isEnabledAdminMember(tenantId);
+        allow create: if isEnabledAdminMember(tenantId) && request.resource.data.status == 'attested' && attShape(request.resource.data) && admCreateOk(request.resource.data);
+        allow update: if isEnabledAdminMember(tenantId) && request.resource.data.revision == resource.data.revision + 1 && attShape(request.resource.data) && admUpdateOk(request.resource.data, resource.data);
+        allow delete: if false;
+
+        // events: create-only for everyone; id bound; type/revision/actor/changed bound to the real transition (attFid)
+        match /events/{eventId} {
+          function ev() { return request.resource.data; }
+          function attPath() { return /databases/$(database)/documents/tenants/$(tenantId)/attendance/$(attendanceId); }
+          function evShape(q) {
+            return ev().keys().hasOnly(['eventId', 'type', 'attendanceId', 'revision', 'actorUid', 'actorRole', 'actorAnsattId', 'at', 'reasonCode', 'reasonNote', 'changed'])
+              && ev().keys().hasAll(['eventId', 'type', 'attendanceId', 'revision', 'actorUid', 'actorRole', 'actorAnsattId', 'at', 'reasonCode', 'reasonNote', 'changed'])
+              && ev().eventId == eventId && ev().attendanceId == attendanceId
+              && attendanceId.matches('^[A-Za-z0-9_-]+$')
+              && ev().revision is int && ev().revision >= 1
+              && eventId.size() == attendanceId.size() + 11
+              && eventId.matches('^' + attendanceId + '-rev-0*' + string(ev().revision) + '$')
+              && ev().revision == q.revision
+              && ev().actorUid == request.auth.uid
+              && (ev().reasonCode == null || ev().reasonCode is string) && (ev().reasonNote == null || ev().reasonNote is string)
+              && nearNow(ev().at) && ev().changed is map;
+          }
+          allow get, list: if isEnabledAdminMember(tenantId) || (isSelfActor(tenantId) && get(attPath()).data.ansattId == myAnsattId(tenantId));
+          allow create: if isEnabledMember(tenantId)
+            && evShape(getAfter(attPath()).data)
+            && attFid(ev(), exists(attPath()), exists(attPath()) ? get(attPath()).data : {}, getAfter(attPath()).data, ev().changed,
+                      member(tenantId).accessRole, member(tenantId).ansattId);
+          allow update, delete: if false;
+        }
+      }
+
+      // ---- S4: MIN ANSETTELSE PROJECTION — exact least-privilege shape; employee read own only; admin writes only ----
+      match /employeeSelf/{ansattId} {
+        function pd() { return request.resource.data; }
+        function projShape(d) {
+          return d.keys().hasOnly(['name', 'role', 'employmentType', 'percentage', 'workplace', 'startDate', 'expectedWeeklyHours', 'hasContract', 'derivedAt', 'sourceRevision'])
+            && d.keys().hasAll(['name', 'role', 'employmentType', 'percentage', 'workplace', 'startDate', 'expectedWeeklyHours', 'hasContract', 'derivedAt', 'sourceRevision'])
+            && d.name is string
+            && (d.role == null || d.role is string)
+            && (d.employmentType == null || d.employmentType in ['fast', 'deltid', 'tilkalling', 'midlertidig'])
+            && (d.percentage == null || (d.percentage is number && d.percentage >= 0 && d.percentage <= 100))
+            && (d.workplace == null || d.workplace is string)
+            && (d.startDate == null || (d.startDate is string && d.startDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')))
+            && (d.expectedWeeklyHours == null || (d.expectedWeeklyHours is number && d.expectedWeeklyHours >= 0))
+            && d.hasContract is bool
+            && d.derivedAt == request.time
+            && (d.sourceRevision == null || d.sourceRevision is int);
+        }
+        allow get: if isSelfActor(tenantId) && ansattId == myAnsattId(tenantId);
+        allow get, list: if isEnabledAdminMember(tenantId);
+        allow create, update: if isEnabledAdminMember(tenantId) && projShape(pd());
+        allow delete: if isEnabledAdminMember(tenantId);
+      }
+    }
+  }
+}
