@@ -28,6 +28,54 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 #loading-screen{position:fixed;inset:0;background:var(--primary);z-index:9998;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
 #loading-screen.hidden{display:none}
 #employee-host{display:none;min-height:100vh}#employee-host.active{display:block}.emp-hostbar{display:flex;gap:8px;align-items:center;padding:6px 16px;background:#1b2b20;color:#fff;font-size:12px;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}.emp-hostbar .sp{flex:1}.emp-hostbar .emp-notice{color:#ffd9a8}.emp-hostbtn{background:rgba(255,255,255,.14);border:none;color:#fff;padding:6px 10px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer}
+/* ── WORKFORCE NATIVE SHELL (release 018) ── every rule is scoped to body.wf-open, the class the host sets ONLY while the
+   management workspace is open (authWorkforceShell). The employee surface (Min ansattside) never carries it, so
+   employee-shell.css renders there exactly as before. Sormena header + bottom nav stay; the workspace sits between them. */
+body.wf-open{--bg:#f0efeb;--text:#1a1a1a;--muted:#7a7a7a;--r:12px;--r-sm:9px;--surface:var(--card);--line:var(--border);--line-2:var(--border);--faint:#8f8f8f;--green:var(--primary);--green-deep:var(--primary);--green-line:var(--border);--shadow:var(--sh);font-family:'Sora',sans-serif;background:var(--bg);color:var(--text)}
+body.wf-open #main-app .page,body.wf-open #fabBtn,body.wf-open #hdrAddBtn,body.wf-open #hdrExpBtn{display:none!important}
+body.wf-open .hdr{position:fixed;top:0;left:0;right:0}
+body.wf-open #employee-host{min-height:0;padding-top:var(--wf-hdr,62px);font-family:'Sora',sans-serif}
+body.wf-open #employee-host>header.top,body.wf-open #emp-nav,body.wf-open #emp-host-label,body.wf-open #ld-host-back,body.wf-open #emp-host-back,body.wf-open .emp-hostbar>.emp-hostbtn:not(#ld-host-emp){display:none!important}
+body.wf-open .emp-hostbar{background:transparent;color:var(--warn);padding:8px 16px 0;min-height:0;font-family:inherit;justify-content:flex-end;max-width:var(--wrap);margin:0 auto}
+body.wf-open .emp-hostbar .emp-notice{color:var(--warn)}
+body.wf-open #ld-host-emp{background:#fff;color:var(--primary);border:1.5px solid var(--border);border-radius:7px;padding:7px 12px;font-family:inherit}
+body.wf-open #employee-host .wrap{padding:10px 14px 28px}
+body.wf-open #employee-host .card{border:none;border-radius:var(--r);box-shadow:var(--sh);padding:14px;margin-bottom:10px}
+body.wf-open #employee-host .btn{border-radius:9px;font-weight:600;font-family:inherit}
+body.wf-open #employee-host .btn.primary{background:var(--primary);box-shadow:none;font-size:15px;padding:13px 16px}
+body.wf-open #employee-host .btn.primary:hover{background:var(--primary-l)}
+body.wf-open #employee-host .btn.secondary{color:var(--primary);border:1.5px solid var(--border)}
+/* Ansatte search row: employee-shell.css .btn is display:block;width:100% — inside the flex row that starved the search field to its padding (an empty 30px stub). The action keeps its natural width so the field is usable. */
+body.wf-open #employee-host .vp-search .btn{width:auto;flex:0 0 auto;margin:0;white-space:nowrap}
+body.wf-open #employee-host .vp-search input{margin:0}
+body.wf-open #employee-host .lede-tab{font-weight:600;border-color:var(--border)}
+body.wf-open #employee-host .lede-tab.on{background:var(--primary);border-color:var(--primary);color:#fff}
+body.wf-open #employee-host .plan-head h1{font-size:19px;font-weight:700}
+body.wf-open #employee-host .fs-a4{border-radius:6px;padding:34px 40px 20px;border:1px solid var(--border);box-shadow:0 2px 14px rgba(15,40,32,.10)}
+/* a Sormena sheet (Mer) opened above the workspace keeps the Sormena button language while employee-shell.css is loaded */
+body.wf-open .ov .btn{display:inline-flex;width:auto;min-height:0;border-radius:9px;font-weight:600;border:none;transform:none}
+body.wf-open .ov .btn-g{border:1.5px solid var(--border)}
+body.wf-open .ov .btn-f{width:100%}
+/* PRINT: only the contract pages. Application chrome is REMOVED FROM LAYOUT (display:none), never just hidden. */
+@media print{
+  html.wf-root{background:#fff!important}
+  body.wf-open{padding:0!important;background:#fff!important;min-height:0!important}
+  body.wf-open>:not(#employee-host){display:none!important}
+  body.wf-open #employee-host{padding:0!important;min-height:0!important}
+  body.wf-open .emp-hostbar,body.wf-open #employee-host>header.top,body.wf-open #emp-nav,body.wf-open .lede-tabs{display:none!important}
+  body.wf-open .lede-content>:not(.fs-a4),body.wf-open #emp-root>:not(.lede-frame):not(.fs-a4){display:none!important}
+  body.wf-open #employee-host .wrap{padding:0!important;margin:0!important;max-width:none!important}
+  body.wf-open .lede-frame{margin:0!important}
+  /* The two on-screen sheets are taller than a physical A4 page at readable type size, so print flows as ONE continuous
+     document (no forced sheet break, no double margins, no per-sheet 'Side x av 2' / continuation header); the browser
+     numbers the real pages. Type size is NOT reduced. Tables, the parties box and the signature block never split. */
+  body.wf-open #employee-host .fs-a4{page:fscontract;border:0!important;border-radius:0!important;box-shadow:none!important;margin:0!important;padding:0!important;max-width:none!important;break-after:auto!important;page-break-after:auto!important}
+  body.wf-open #employee-host .fs-a4~.fs-a4 .fs-head,body.wf-open #employee-host .fs-a4~.fs-a4 .fs-cont,body.wf-open #employee-host .fs-foot{display:none!important}
+  body.wf-open #employee-host .fs-rows,body.wf-open #employee-host .fs-parties,body.wf-open #employee-host .fs-signs,body.wf-open #employee-host .fs-row,body.wf-open #employee-host .fs-head{break-inside:avoid;page-break-inside:avoid}
+  body.wf-open #employee-host .fs-sec{break-after:avoid;page-break-after:avoid}
+  body.wf-open #employee-host .fs-cl{orphans:3;widows:3}
+  @page fscontract{size:A4;margin:12mm 12mm 15mm;@bottom-center{content:"Side " counter(page) " av " counter(pages);font-family:'Sora',sans-serif;font-size:8.5pt;color:#7d8c86}}
+}
 .ld-logo{color:#fff;font-size:20px;font-weight:700}.ld-logo span{color:var(--accent)}
 .ld-spin{width:32px;height:32px;border:3px solid rgba(255,255,255,.2);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
 .ld-text{color:rgba(255,255,255,.6);font-size:13px}
@@ -2141,6 +2189,7 @@ document.querySelectorAll('.ov').forEach(ov=>ov.addEventListener('click',e=>{if(
 let currentPage='oversikt';
 const pageTitles={oversikt:'Oversikt',produkter:'Produktregister',leverandorer:'Leverandører',innboks:'Innboks',innkjop:'Innkjøp & Fakturaer',salg:'Salgslogg',svinn:'Svinn & Justering',rapporter:'Rapporter',timeliste:'Timeliste & Ansatte',betalinger:'Bankavstemming',okonomi:'Økonomi',leverandor:'Leverandør',bankkonti:'Bankkonti'};
 function goTo(pg){
+  if(ldHost)authCloseLedelse();   // Workforce open: dispose the workspace (listeners -> 0) BEFORE the Sormena page change
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nb').forEach(b=>b.classList.remove('active'));
   document.getElementById('pg-'+pg).classList.add('active');
@@ -8267,7 +8316,7 @@ function authEmployeeCss(on){let l=document.getElementById('employee-shell-css')
 function authUpdateEmployeeControls(){
   const own=!!(authMembership&&typeof authMembership.ansattId==='string'&&authMembership.ansattId.length>0);
   const admin=!!(currentUser&&currentUser.role==='admin');
-  const wf=document.getElementById('navWorkforceBtn');if(wf)wf.style.display=admin&&ACTIVE_SURFACE==='management'&&!ldHost?'':'none';   // footer "Workforce" = the ONE workforce entrance: opens the management workspace (no employee binding required)
+  const wf=document.getElementById('navWorkforceBtn');if(wf)wf.style.display=admin&&ACTIVE_SURFACE==='management'?'':'none';   // footer "Workforce" = the ONE workforce entrance: opens the management workspace (no employee binding required); it stays in the footer, highlighted, while the workspace is open
   const back=document.getElementById('emp-host-back');if(back)back.style.display=admin&&ACTIVE_SURFACE==='employee'?'':'none';
   const ldBack=document.getElementById('ld-host-back');if(ldBack)ldBack.style.display=ldHost?'':'none';
   const ldEmp=document.getElementById('ld-host-emp');if(ldEmp)ldEmp.style.display=ldHost&&own?'':'none';
@@ -8364,10 +8413,32 @@ function authLedelseAdapterError(gen,e){
   if(code==='PERMISSION_DENIED'){authFailClosed('ACCESS_ERROR',{step:'ledelse-listen',code:'permission-denied'});return}
   showToast('Ledelse: datafeil ('+code+')','err');
 }
+// Native Workforce shell (release 018): the workspace renders BETWEEN the real Sormena header and bottom nav. on=true ->
+// body.wf-open (pages/FAB/header-add hidden by CSS, header fixed, title "Workforce", footer item highlighted); on=false ->
+// the Sormena page that was active before is restored exactly (title + footer highlight from currentPage). No auth/tenant work.
+function authWorkforceShell(on){
+  document.body.classList.toggle('wf-open',!!on);document.documentElement.classList.toggle('wf-root',!!on);
+  const title=document.getElementById('sync-text');
+  document.querySelectorAll('.nb').forEach(b=>b.classList.remove('active'));
+  if(on){
+    const hdr=document.querySelector('#main-app .hdr');
+    if(hdr&&hdr.offsetHeight)document.body.style.setProperty('--wf-hdr',hdr.offsetHeight+'px');
+    const wf=document.getElementById('navWorkforceBtn');if(wf)wf.classList.add('active');
+    if(title)title.textContent='Workforce';
+    window.scrollTo(0,0);
+  }else{
+    document.body.style.removeProperty('--wf-hdr');
+    const pg=currentPage;
+    document.querySelector('.nb[data-pg="'+pg+'"]')?.classList.add('active');
+    if(['leverandorer','svinn','betalinger','bankkonti'].includes(pg))document.querySelector('.nb[data-pg="mer"]')?.classList.add('active');
+    if(title)title.textContent=pageTitles[pg]||pg;
+  }
+}
 // Dispose the Ledelse workspace (listeners -> 0, view detached, host cleared). Never touches the 17 management listeners.
 function authLeaveLedelse(){
   const h=ldHost;ldHost=null;
   if(!h)return;
+  authWorkforceShell(false);
   if(h.view&&typeof h.view.dispose==='function'){try{h.view.dispose()}catch(e){console.error('[host] ledelse view dispose failed',e)}}
   if(h.adapters){
     try{h.adapters.dispose()}catch(e){console.error('[host] ledelse dispose failed',e)}
@@ -8404,7 +8475,7 @@ async function authOpenLedelse(){
   const host=document.getElementById('employee-host');if(host)host.classList.add('active');
   const lab=document.getElementById('emp-host-label');if(lab)lab.textContent='Four Season AS · Ledelse';
   authEmployeeCss(true);
-  hideMainApp();
+  authWorkforceShell(true);   // native shell: Sormena header + bottom nav stay; only the pages/FAB yield to the workspace
   try{ldHost.view=ui.mountLedelseProduction(document.getElementById('emp-root'),{identity:authMembership,expectedTenantId:TENANT_ID,adapters})}
   catch(e){authLeaveLedelse();document.getElementById('main-app').style.display='block';document.getElementById('loading-screen').classList.add('hidden');showToast('Ledelse: '+authSessionErrCode(e),'err');return null}
   document.getElementById('loading-screen').classList.add('hidden');
