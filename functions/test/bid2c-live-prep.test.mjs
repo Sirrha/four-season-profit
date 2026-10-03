@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { installNetGuard, blocked } from './net-guard.mjs';
 import { BANKID_PREPROD, BANKID_PREPROD_RUNTIME, LIVE_CLOUD_WRITES_AUTHORIZED, CREDENTIAL_BYPASS_KEYS, assertAdapterBinding, isLiveSmokeGrant, emulatorEnvKeys } from '../src/preprod-config.mjs';
-import { LIVE_SMOKE_AUTHORIZATION, RELEASE_ID_PATTERN, issueLiveSmokeGrant, assertAuthorizationShape } from '../src/live-smoke-gate.mjs';
+import { LIVE_SMOKE_AUTHORIZATION, CONSUMED_LIVE_SMOKE_RUN_IDS, RELEASE_ID_PATTERN, issueLiveSmokeGrant, assertAuthorizationShape } from '../src/live-smoke-gate.mjs';
 import { adcWellKnownPath, inspectAdcJson, readAdcIdentity, isVerifiedAdcIdentity, ADC_SECRET_FIELDS } from '../src/adc-identity.mjs';
 import { assertSmokeGates, runPreprodSmoke, makeSmokeHandler, classifyDuplicateRefusal } from '../src/preprod-smoke.mjs';
 import { createGcsArtifactStore, classifyStorageWriteError, DUPLICATE_REFUSAL_CLASSES } from '../src/gcs-artifact-store.mjs';
@@ -46,6 +46,24 @@ await t('V01', 'DISABLED BY DEFAULT / BOUNDED WHEN AUTHORIZED: LIVE_CLOUD_WRITES
   else assert.deepEqual({ ...LIVE_SMOKE_AUTHORIZATION }, { authorized: false, releaseId: null, runId: null });
   assert.ok(Object.isFrozen(LIVE_SMOKE_AUTHORIZATION));
   assert.equal(LIVE_CLOUD_WRITES_AUTHORIZED, false);
+  // -017B closure: the historical run ids are consumed forever; none of them (nor any id other than a currently authorized one) can issue a grant or start the runner
+  assert.deepEqual([...CONSUMED_LIVE_SMOKE_RUN_IDS], ['smoke-live0001', 'smoke-live0002']); assert.ok(Object.isFrozen(CONSUMED_LIVE_SMOKE_RUN_IDS));
+  assert.ok(!CONSUMED_LIVE_SMOKE_RUN_IDS.includes(LIVE_SMOKE_AUTHORIZATION.runId), 'a consumed run id is never the authorized one');
+  const HIST = { 'smoke-live0001': 'SIRRHA-CCODE-SORMENA-BANKID-BID2C-FIRST-REAL-PREPROD-SMOKE-EXEC-015', 'smoke-live0002': 'SIRRHA-CCODE-SORMENA-BANKID-BID2C-SECOND-REAL-PREPROD-SMOKE-EXEC-016', 'smoke-live0003': 'SIRRHA-CCODE-TEST-FIXTURE-AUTHORIZATION-000' };
+  for (const [id, rel] of Object.entries(HIST)) {
+    if (id === LIVE_SMOKE_AUTHORIZATION.runId) continue;
+    const envId = Object.assign({}, LIVE, withAdc(impersonated(SA)), { SORMENA_LIVE_SMOKE_RELEASE_ID: rel });
+    assert.equal(code(() => issueLiveSmokeGrant({ env: envId, runId: id, adcIdentity: goodAdc() })), UNAUTH, id);
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'bid2c-closed-'));
+    const rr = await runnerMain({ argv: ['--run-id', id], env: envId, platform: 'win32', evidenceDir: d, log: () => {} });
+    const dd = JSON.parse(fs.readFileSync(rr.evidencePath, 'utf8'));
+    assert.equal(rr.ok, false); assert.equal(dd.refused, UNAUTH, id); assert.equal(dd.network, null, id); assert.deepEqual(fs.readdirSync(d).filter((n) => n.endsWith('.consumed.json')), [], id);
+  }
+  for (const id of CONSUMED_LIVE_SMOKE_RUN_IDS) {   // even a literal that names a consumed run id (with its original release id) is refused by the gate itself
+    const lit = { authorized: true, releaseId: HIST[id], runId: id };
+    assert.equal(code(() => assertAuthorizationShape(lit)), 'LIVE_SMOKE_RUN_ALREADY_CONSUMED', id);
+    assert.equal(code(() => issueLiveSmokeGrant({ env: Object.assign({}, LIVE, { SORMENA_LIVE_SMOKE_RELEASE_ID: HIST[id] }), runId: id, adcIdentity: goodAdc(), authorization: lit })), 'LIVE_SMOKE_RUN_ALREADY_CONSUMED', id);
+  }
   const adc = goodAdc(); assert.equal(adc.ok, true);
   assert.equal(code(() => issueLiveSmokeGrant({ env: LIVE, runId: RUN, adcIdentity: adc })), UNAUTH);
   assert.equal(code(() => assertSmokeGates(LIVE, { runId: RUN, adcIdentity: adc })), UNAUTH);

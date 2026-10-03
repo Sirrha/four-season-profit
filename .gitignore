@@ -13,3 +13,6 @@ scripts/migration/package-lock.json
 
 # Claude Code local session data
 .claude/
+
+# BID-2C live smoke evidence and consumption markers (local runtime evidence, never source)
+live-smoke-evidence/

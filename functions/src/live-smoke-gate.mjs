@@ -15,9 +15,12 @@ import { BANKID_PREPROD, BANKID_PREPROD_RUNTIME, LIVE_CLOUD_WRITES_AUTHORIZED, T
 import { isVerifiedAdcIdentity } from './adc-identity.mjs';
 
 // DEFAULT = NOT AUTHORIZED. The execution release edits this literal (and only this literal) for one run.
-// 2026-10-01: EXEC-015 authorized run smoke-live0001 — CONSUMED 2026-10-03 (FAIL before step A), never to be run again.
-// 2026-10-03: ONE run authorized by SIRRHA-CCODE-SORMENA-BANKID-BID2C-SECOND-REAL-PREPROD-SMOKE-EXEC-016 (run smoke-live0002).
-export const LIVE_SMOKE_AUTHORIZATION = Object.freeze({ authorized: true, releaseId: 'SIRRHA-CCODE-SORMENA-BANKID-BID2C-SECOND-REAL-PREPROD-SMOKE-EXEC-016', runId: 'smoke-live0002' });
+// History (both run ids are CONSUMED and must never be authorized again — enforced by test V01):
+//   smoke-live0001  EXEC-015  2026-10-03  FAIL before step A (network guard refused Firestore's resolved IP)
+//   smoke-live0002  EXEC-016  2026-10-03  PASS (14/14 steps)
+// 2026-10-03: authorization CLOSED by SIRRHA-CCODE-SORMENA-BANKID-POST-SMOKE-AUTHORIZATION-CLOSURE-017B. No run is authorized.
+export const LIVE_SMOKE_AUTHORIZATION = Object.freeze({ authorized: false, releaseId: null, runId: null });
+export const CONSUMED_LIVE_SMOKE_RUN_IDS = Object.freeze(['smoke-live0001', 'smoke-live0002']);
 export const RELEASE_ID_PATTERN = /^SIRRHA-CCODE-[A-Z0-9-]{8,120}$/;
 export const SMOKE_RUN_ID = /^smoke-[a-z0-9]{4,32}$/;
 const refuse = (code, detail) => { throw new TargetRefused(code, detail); };
@@ -29,6 +32,7 @@ export function assertAuthorizationShape(auth) {
   if (a.authorized !== true) refuse('LIVE_CLOUD_WRITES_NOT_AUTHORIZED', 'LIVE_CLOUD_WRITES_AUTHORIZED=false and LIVE_SMOKE_AUTHORIZATION.authorized=false');
   if (typeof a.releaseId !== 'string' || !RELEASE_ID_PATTERN.test(a.releaseId)) refuse('LIVE_SMOKE_AUTHORIZATION_MALFORMED', 'releaseId');
   if (typeof a.runId !== 'string' || !SMOKE_RUN_ID.test(a.runId)) refuse('LIVE_SMOKE_AUTHORIZATION_MALFORMED', 'runId');
+  if (CONSUMED_LIVE_SMOKE_RUN_IDS.includes(a.runId)) refuse('LIVE_SMOKE_RUN_ALREADY_CONSUMED', a.runId + ' is a consumed run id and can never be authorized again');
   return a;
 }
 
