@@ -1,0 +1,13 @@
+rules_version = '2';
+// BID-1 SIGNING STORAGE CANDIDATE — CANDIDATE ONLY, NEVER PUBLISHED, and NOT a production Storage posture.
+// Contract artifacts (source A, signed B, final C) are NEVER directly client-readable or client-writable: the server
+// writes them create-only and mediates every download after a capability check. Every other path is denied in this
+// candidate too — publishing this file as-is would also cut off today's invoice-originals path (tenants/{T}/invoices/**),
+// whose production posture is a separate, still-open decision (repo storage.rules = reconstructed open posture, M7).
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /tenants/{tenantId}/contracts/{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

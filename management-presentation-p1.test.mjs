@@ -197,7 +197,7 @@ t('P1-5', 'planned-only action carries date + shift into the existing panel; she
   assert.ok(viewSrc.includes("'Denne datoen tilhører ' + periodLabel(target) + '. Dagen føres i lønnsgrunnlaget for ' + monthNameOf(target) + '.'"));
   assert.ok(viewSrc.includes("heading.textContent = (c && (c.mode === 'correct' || c.mode === 'live')) ? 'Korriger arbeidstid' : 'Legg til arbeidstid'"));
   assert.ok(shellSrc.includes('function plannedShiftsForPayroll(ansattId)'));
-  assert.ok(shellSrc.includes('shiftsForEmployee(scheduleStore(), FOUR_SEASON_TENANT.tenantId, ansattId, FOUR_SEASON_MANAGER_ACTOR)\n      .map((s) => ({ shiftId: s.shiftId, projection: s.projection, hours: durationHoursOf(s.projection) }))'));
+  assert.ok(shellSrc.includes('shiftsForEmployee(scheduleStore(), MGR.tenantId, ansattId, MGR.actor)\n      .map((s) => ({ shiftId: s.shiftId, projection: s.projection, hours: durationHoursOf(s.projection) }))'));
   const from = (viewSrc.match(/from '\.\/[^']+'/g) || []).map((s) => s.slice(6).replace(/'/g, '')).sort();
   assert.deepEqual(from, ['./employee-shell-core.mjs', './management-payroll-core.mjs'], 'view import fence unchanged');
 });

@@ -46,7 +46,7 @@ function readyEmployee(store, name) {
   const c = applyE(store, { kind: 'createEmployee', name: name || 'Nora', startDate: '2026-09-01', role: 'butikkmedarbeider' });
   applyE(store, { kind: 'updateContact', ansattId: c.ansattId, contact: { address: { street: 'Storgata 99', postalCode: '2815', city: 'Gjøvik' }, birthDate: '1995-03-15' } });
   applyE(store, { kind: 'completeCurrentTerms', ansattId: c.ansattId, terms: {
-    workplace: 'Four Season Gjøvik', employmentType: 'fast', percentage: 60,
+    workplace: 'Four Season Gjøvik', employmentType: 'deltid', employmentForm: 'fast', percentage: 60,
     workingTimeArrangement: 'Dagtid og kveld etter vaktplan', expectedWeeklyHours: 22.5,
     breaksArrangement: '30 minutter ubetalt pause per vakt over 5,5 timer',
     scheduleChangeHandling: 'Vaktplan varsles minst 14 dager før perioden starter',
@@ -196,7 +196,7 @@ t('K12', 'midlertidig employment requires basis + end date; fast does not', () =
   const c = applyE(store2, { kind: 'createEmployee', name: 'Tim', startDate: '2026-09-01', role: 'butikkmedarbeider' });
   applyE(store2, { kind: 'updateContact', ansattId: c.ansattId, contact: { address: { street: 'Storgata 99', postalCode: '2815', city: 'Gjøvik' }, birthDate: '1998-07-01' } });
   applyE(store2, { kind: 'completeCurrentTerms', ansattId: c.ansattId, terms: {
-    workplace: 'Four Season Gjøvik', employmentType: 'midlertidig', percentage: 40,
+    workplace: 'Four Season Gjøvik', employmentType: 'deltid', employmentForm: 'midlertidig', percentage: 40,
     workingTimeArrangement: 'Kveld', expectedWeeklyHours: 15, breaksArrangement: '30 min',
     scheduleChangeHandling: '14 dager', probation: 'Ingen', noticePeriod: '14 dager',
     paymentInterval: 'manedlig', compensation: { model: 'timelonn', hourlyRate: 210 },

@@ -1,0 +1,44 @@
+{
+  "packagerVersion": "sormena-shared-packager/1",
+  "entries": [
+    "management-contract-core.mjs"
+  ],
+  "files": [
+    {
+      "name": "employee-schedule-week.mjs",
+      "source": "employee-schedule-week.mjs",
+      "sha256": "0ba6ed1a95b0e8c9ec4674a3eb93aa91d08a3a80445cefd7d1cc3503e8c704f0",
+      "bytes": 8541
+    },
+    {
+      "name": "employee-shell-core.mjs",
+      "source": "employee-shell-core.mjs",
+      "sha256": "71d1804ff5926c8327a0ae0c1e4b0d750e7418ec0d78524da980537535f2b6b4",
+      "bytes": 67444
+    },
+    {
+      "name": "management-contract-core.mjs",
+      "source": "management-contract-core.mjs",
+      "sha256": "57600d04134ddc8eca60b8e923fd6d826ff8cfbf398e7404b503dc37e05bd18c",
+      "bytes": 30281
+    },
+    {
+      "name": "management-employees-core.mjs",
+      "source": "management-employees-core.mjs",
+      "sha256": "e29067eacc7a8c2e8a72bc994842edfebb2671b4aaa33c7b5abb34b7d4fd4ade",
+      "bytes": 33797
+    },
+    {
+      "name": "management-schedule-core.mjs",
+      "source": "management-schedule-core.mjs",
+      "sha256": "a7d81f21885c1e157371ec8526cd914832cd5c51498d074b5db874691f8c7ad2",
+      "bytes": 19652
+    },
+    {
+      "name": "schedule-core.mjs",
+      "source": "schedule-core.mjs",
+      "sha256": "b6bd2ec61ebcbecf31290c5d8956f985367e347e1560b337e0ed559d0e59760d",
+      "bytes": 22393
+    }
+  ]
+}

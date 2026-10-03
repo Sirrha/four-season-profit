@@ -69,7 +69,7 @@ t('PA1', 'Ledelse is ONE persistent frame with four tabs; switching stays in-fra
   assert.ok(shellSrc.includes('const LG_STATE = { periodId: null, openEmployee: null };'));
   assert.ok(shellSrc.includes("const VP_STATE = { offset: 0, query: '' };"));
   assert.ok(shellSrc.includes('initialPeriodId: LG_STATE.periodId, initialOpenEmployee: LG_STATE.openEmployee'));
-  assert.ok(shellSrc.includes('onStateChange: (s) => { LG_STATE.periodId = s.periodId; LG_STATE.openEmployee = s.openEmployee; }'));
+  assert.ok(shellSrc.includes('onStateChange: (s) => { LG_STATE.periodId = s.periodId; LG_STATE.openEmployee = s.openEmployee; ensurePeriodRange(s.periodId); }'));
   assert.ok(shellSrc.includes('initialOffset: VP_STATE.offset'));
   assert.ok(shellSrc.includes('onOffsetChange: (o) => { VP_STATE.offset = o; }'));
   // the views accept and report that state
@@ -79,7 +79,7 @@ t('PA1', 'Ledelse is ONE persistent frame with four tabs; switching stays in-fra
   // an internal Ansatte → Vaktplan jump switches TAB rather than leaving the workspace
   assert.ok(shellSrc.includes("goLedelse('vaktplan'); }"));
   // capability gating still decides which tabs exist (absence, not dead controls)
-  assert.ok(shellSrc.includes('function ledelseTabs()') && shellSrc.includes('canOpenVaktplan(FOUR_SEASON_MANAGER_ACTOR)') && shellSrc.includes('canViewEmployees(FOUR_SEASON_MANAGER_ACTOR)'));
+  assert.ok(shellSrc.includes('function ledelseTabs()') && shellSrc.includes('canOpenVaktplan(MGR.actor)') && shellSrc.includes('canViewEmployees(MGR.actor)'));
 });
 t('PA2', 'each tab mounts the EXISTING view module — no duplicate truth or parallel calculator', () => {
   // the same renderers the standalone destinations used, mounted into the frame content element

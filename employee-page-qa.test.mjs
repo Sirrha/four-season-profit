@@ -130,7 +130,7 @@ t('QA-C1', 'exactly one "Tilbake til i dag" control on Plan, placed by the shell
   const call = plan.slice(plan.indexOf('renderScheduleView(planRoot, {'), plan.indexOf('});', plan.indexOf('renderScheduleView(planRoot, {')));
   assert.ok(!/onBack/.test(call), 'employee Plan passes no onBack');
   assert.ok(viewSrc.includes("if (typeof onBack === 'function') {"), 'view draws the back control only on request');
-  assert.ok(shellSrc.includes('onBack: () => goVaktplan(),'), 'management Se som ansatt still passes its own back');
+  assert.ok(shellSrc.includes("onBack: () => (MODE === 'management' ? goLedelse('vaktplan') : goVaktplan()),"), 'management Se som ansatt still passes its own back (preview: standalone Vaktplan; production: the Ledelse workspace)');
 });
 
 // ---- QA-D: Min ansettelse hover -------------------------------------------------------------------

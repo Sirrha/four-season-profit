@@ -125,6 +125,63 @@ function makeAdminWriter(ctx) {
 
 }
 
+// ---- shared attendance committer (employee factory + Ledelse management adapters) -------------------------------
+// Body is the accepted employee-factory commit(res, opts), unchanged; free variables bound through `ctx`.
+export function makeAttendanceCommitter(ctx) {
+  const { fs, T, st, evRef, assertLive, rejectMapped } = ctx;
+  return function commit(res, opts) {
+    const op = opts || {};
+    if (!res || res.ok !== true || !res.attendance || !res.event) return Promise.reject(adapterError(ADAPTER_ERROR.CORE_REFUSED, res && res.code));
+    try { assertLive(); } catch (e) { return Promise.reject(e); }
+    const rec = res.attendance;
+    let ref;
+    try { ref = fs.doc(s4Path(T, 'attendance', rec.attendanceId)); } catch (e) { return Promise.reject(e); }
+    if (op.create === true || rec.revision === 1) {
+      const b = fs.batch();
+      b.set(ref, Object.assign({}, rec, { serverCreatedAt: st(), serverUpdatedAt: st() }));
+      b.set(evRef('attendance', rec.attendanceId, res.event), normalizeEvent(res.event));
+      return b.commit().then(() => ({ ok: true, retried: false, attendance: rec, event: res.event })).catch(rejectMapped);
+    }
+    return fs.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap || !snap.exists) throw adapterError(ADAPTER_ERROR.NO_ATTENDANCE);
+      const current = stripServerFields(snap.data);
+      let use = res, retried = false;
+      if (current.revision !== rec.revision - 1) {
+        // stale: the record moved since the UI ran the core. ONE re-run against the server record, then fail visibly.
+        if (typeof op.rerun !== 'function') throw adapterError(ADAPTER_ERROR.STALE_REVISION, String(current.revision));
+        const r2 = op.rerun(current);
+        retried = true;
+        if (!r2 || r2.ok !== true || !r2.attendance || !r2.event) throw adapterError(ADAPTER_ERROR.STALE_REVISION, r2 && r2.code ? r2.code : String(current.revision));
+        if (r2.attendance.revision !== current.revision + 1) throw adapterError(ADAPTER_ERROR.STALE_REVISION, 'rerun');
+        use = r2;
+      }
+      tx.update(ref, Object.assign({}, use.attendance, { serverUpdatedAt: st() }));
+      tx.set(evRef('attendance', use.attendance.attendanceId, use.event), normalizeEvent(use.event));
+      return { ok: true, retried, attendance: use.attendance, event: use.event };
+    }).catch(rejectMapped);
+  };
+
+}
+// ---- shared employeeSelf writer (admin-only projection; derived from the canonical record only) -----------------
+export function makeEmployeeSelfWriter(ctx) {
+  const { fs, T, st, assertLive, rejectMapped } = ctx;
+  return function writeEmployeeSelf(ansattId, employee, opt) {
+    try { assertLive(); } catch (e) { return Promise.reject(e); }
+    const p = projectEmployeeSelf(employee, opt && opt.onDate);
+    if (!p) return Promise.reject(adapterError(ADAPTER_ERROR.PROJECTION_INVALID, 'employee'));
+    const doc = Object.assign({}, p, { derivedAt: null, sourceRevision: opt && Number.isInteger(opt.sourceRevision) ? opt.sourceRevision : null });
+    const v = validateEmployeeSelfDoc(doc);
+    if (!v.ok) return Promise.reject(adapterError(ADAPTER_ERROR.PROJECTION_INVALID, v.code));
+    let ref;
+    try { ref = fs.doc(s4Path(T, 'employeeSelf', ansattId)); } catch (e) { return Promise.reject(e); }
+    const b = fs.batch();
+    b.set(ref, Object.assign({}, doc, { derivedAt: st() }));
+    return b.commit().then(() => ({ ok: true, projection: p })).catch(rejectMapped);
+  };
+
+}
+
 /**
  * createProductionAdapters({ fs, tenantId, membership, isCurrent, nowMs, policy, onError, deps })
  *   fs          injected datastore capability: doc(path)→ref · listen(spec, onDocs, onError)→unsubscribe
@@ -249,38 +306,7 @@ export function createProductionAdapters(options) {
   };
 
   // ---- attendance: reads from the mirror; writes ONLY through commit(res) ----
-  function commit(res, opts) {
-    const op = opts || {};
-    if (!res || res.ok !== true || !res.attendance || !res.event) return Promise.reject(adapterError(ADAPTER_ERROR.CORE_REFUSED, res && res.code));
-    try { assertLive(); } catch (e) { return Promise.reject(e); }
-    const rec = res.attendance;
-    let ref;
-    try { ref = fs.doc(s4Path(T, 'attendance', rec.attendanceId)); } catch (e) { return Promise.reject(e); }
-    if (op.create === true || rec.revision === 1) {
-      const b = fs.batch();
-      b.set(ref, Object.assign({}, rec, { serverCreatedAt: st(), serverUpdatedAt: st() }));
-      b.set(evRef('attendance', rec.attendanceId, res.event), normalizeEvent(res.event));
-      return b.commit().then(() => ({ ok: true, retried: false, attendance: rec, event: res.event })).catch(rejectMapped);
-    }
-    return fs.runTransaction(async (tx) => {
-      const snap = await tx.get(ref);
-      if (!snap || !snap.exists) throw adapterError(ADAPTER_ERROR.NO_ATTENDANCE);
-      const current = stripServerFields(snap.data);
-      let use = res, retried = false;
-      if (current.revision !== rec.revision - 1) {
-        // stale: the record moved since the UI ran the core. ONE re-run against the server record, then fail visibly.
-        if (typeof op.rerun !== 'function') throw adapterError(ADAPTER_ERROR.STALE_REVISION, String(current.revision));
-        const r2 = op.rerun(current);
-        retried = true;
-        if (!r2 || r2.ok !== true || !r2.attendance || !r2.event) throw adapterError(ADAPTER_ERROR.STALE_REVISION, r2 && r2.code ? r2.code : String(current.revision));
-        if (r2.attendance.revision !== current.revision + 1) throw adapterError(ADAPTER_ERROR.STALE_REVISION, 'rerun');
-        use = r2;
-      }
-      tx.update(ref, Object.assign({}, use.attendance, { serverUpdatedAt: st() }));
-      tx.set(evRef('attendance', use.attendance.attendanceId, use.event), normalizeEvent(use.event));
-      return { ok: true, retried, attendance: use.attendance, event: use.event };
-    }).catch(rejectMapped);
-  }
+  const commit = makeAttendanceCommitter({ fs, T, st, evRef, assertLive, rejectMapped });
   const attendanceSeam = {
     get: (id) => attendance.get(id),
     has: (id) => attendance.has(id),
@@ -290,19 +316,7 @@ export function createProductionAdapters(options) {
   };
 
   // ---- employeeSelf: admin-written projection (anti-fork: derived from the canonical record only) ----
-  function writeEmployeeSelf(ansattId, employee, opt) {
-    try { assertLive(); } catch (e) { return Promise.reject(e); }
-    const p = projectEmployeeSelf(employee, opt && opt.onDate);
-    if (!p) return Promise.reject(adapterError(ADAPTER_ERROR.PROJECTION_INVALID, 'employee'));
-    const doc = Object.assign({}, p, { derivedAt: null, sourceRevision: opt && Number.isInteger(opt.sourceRevision) ? opt.sourceRevision : null });
-    const v = validateEmployeeSelfDoc(doc);
-    if (!v.ok) return Promise.reject(adapterError(ADAPTER_ERROR.PROJECTION_INVALID, v.code));
-    let ref;
-    try { ref = fs.doc(s4Path(T, 'employeeSelf', ansattId)); } catch (e) { return Promise.reject(e); }
-    const b = fs.batch();
-    b.set(ref, Object.assign({}, doc, { derivedAt: st() }));
-    return b.commit().then(() => ({ ok: true, projection: p })).catch(rejectMapped);
-  }
+  const writeEmployeeSelf = makeEmployeeSelfWriter({ fs, T, st, assertLive, rejectMapped });
 
   return {
     schedule: { store: () => container, claim, admin },
@@ -331,7 +345,7 @@ export function createManagementScheduleAdapters(options) {
   if (typeof m.uid !== 'string' || !m.uid || m.tenantId !== T || m.accessRole !== 'admin' || m.accessEnabled !== true) throw adapterError(ADAPTER_ERROR.CORE_REFUSED, 'membership');
   const ANS = typeof m.ansattId === 'string' && ID_RE.test(m.ansattId) ? m.ansattId : null;
   const UID = m.uid;
-  const range = o.range || {};
+  let range = o.range || {};
   const WD_RE = /^\d{4}-\d{2}-\d{2}$/;
   if (typeof range.from !== 'string' || typeof range.to !== 'string' || !WD_RE.test(range.from) || !WD_RE.test(range.to) || range.from > range.to) throw adapterError(ADAPTER_ERROR.CORE_REFUSED, 'range');
   const isCurrent = typeof o.isCurrent === 'function' ? o.isCurrent : () => true;
@@ -339,7 +353,7 @@ export function createManagementScheduleAdapters(options) {
   const policy = o.policy;
   const onError = typeof o.onError === 'function' ? o.onError : () => {};
   const people = (Array.isArray(o.people) ? o.people : []).filter((p) => p && typeof p.ansattId === 'string' && ID_RE.test(p.ansattId));
-  const deps = { resolveAssignee: (a) => (people.some((p) => p.ansattId === a) ? { status: 'FOUND', tenantId: T, ansattId: a } : { status: 'NOT_FOUND' }) };
+  const deps = { resolveAssignee: typeof o.resolveAssignee === 'function' ? o.resolveAssignee : (a) => (people.some((p) => p.ansattId === a) ? { status: 'FOUND', tenantId: T, ansattId: a } : { status: 'NOT_FOUND' }) };
   let disposed = false;
   const live = () => !disposed && isCurrent();
   const assertLive = () => { if (disposed) throw adapterError(ADAPTER_ERROR.DISPOSED); if (!isCurrent()) throw adapterError(ADAPTER_ERROR.NOT_CURRENT); };
@@ -352,14 +366,28 @@ export function createManagementScheduleAdapters(options) {
   const watchers = new Set();
   const notify = () => { for (const cb of Array.from(watchers)) { try { cb(); } catch (e) { /* a failing watcher must not break the mirror */ } } };
   let started = false;
-  function start() {
-    assertLive();
-    if (started) return;
-    started = true;
+  function subscribe() {
     const un = fs.listen({ col: s4Path(T, 'shifts'), where: [['workDate', '>=', range.from], ['workDate', '<=', range.to]] },
       (docs) => { if (!live()) return; const next = {}; for (const d of (Array.isArray(docs) ? docs : [])) if (d.exists !== false) next[d.id] = stripServerFields(d.data); container[T] = next; notify(); },
       (err) => { if (!live()) return; onError({ scope: 'shifts', code: mapFsError(err) }); });
     subs.push(typeof un === 'function' ? un : () => {});
+  }
+  function start() {
+    assertLive();
+    if (started) return;
+    started = true;
+    subscribe();
+  }
+  // Re-window the ONE bounded listener (Vaktplan navigation outside the loaded window). Same query law, new bounds;
+  // the mirror is replaced by the next snapshot; nothing else changes.
+  function setRange(next) {
+    assertLive();
+    const n = next || {};
+    if (typeof n.from !== 'string' || typeof n.to !== 'string' || !WD_RE.test(n.from) || !WD_RE.test(n.to) || n.from > n.to) throw adapterError(ADAPTER_ERROR.CORE_REFUSED, 'range');
+    if (n.from === range.from && n.to === range.to) return false;
+    range = { from: n.from, to: n.to };
+    if (started) { for (const un of subs.splice(0)) { try { un(); } catch (e) { /* sweep */ } } subscribe(); }
+    return true;
   }
   function dispose() {
     disposed = true;
@@ -378,7 +406,8 @@ export function createManagementScheduleAdapters(options) {
   return {
     schedule: { store: () => container, admin },
     people: () => people.slice(),
-    start, dispose, listenerCount, onChange,
+    start, dispose, listenerCount, onChange, setRange,
+    currentRange: () => ({ from: range.from, to: range.to }),
     range: Object.freeze({ from: range.from, to: range.to }),
     identity: Object.freeze({ tenantId: T, ansattId: ANS, uid: UID, accessRole: 'admin' }),
   };

@@ -39,7 +39,7 @@ const WD_SHORT = ['Man', 'Tir', 'Ons', 'Tor', 'Fre', 'Lør', 'Søn'];
 const WD_MIN = ['M', 'T', 'O', 'T', 'F', 'L', 'S'];
 const MONTH_NAMES = ['januar', 'februar', 'mars', 'april', 'mai', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'desember'];
 
-export function renderManagementView(root, { store, tenantId, tenantLabel, people, roleLabels, actor, policy, deps, nowMs, timezone, onViewAs, initialQuery, initialOffset, onOffsetChange, applyOperation }) {
+export function renderManagementView(root, { store, tenantId, tenantLabel, people, roleLabels, actor, policy, deps, nowMs, timezone, onViewAs, initialQuery, initialOffset, onOffsetChange, applyOperation, onVisibleRangeChange }) {
   if (!root) return;
   const todayWd = tenantWorkDate(nowMs, timezone);
   const baseMonday = isoWeekMonday(todayWd);
@@ -474,10 +474,23 @@ export function renderManagementView(root, { store, tenantId, tenantLabel, peopl
     return card;
   }
 
+  // Vaktplan bridge: report the visible date window so a production host can re-window its bounded listener.
+  let lastVisible = '';
+  function reportVisible(scope) {
+    if (typeof onVisibleRangeChange !== 'function') return;
+    let from, to;
+    if (scope.kind === 'week') { from = scope.anchorWorkDate; to = addDays(scope.anchorWorkDate, 6); }
+    else { const mm = String(scope.month).padStart(2, '0'); from = scope.year + '-' + mm + '-01'; to = scope.year + '-' + mm + '-' + String(new Date(Date.UTC(scope.year, scope.month, 0)).getUTCDate()).padStart(2, '0'); }
+    const key = from + '..' + to;
+    if (key === lastVisible) return;
+    lastVisible = key;
+    try { onVisibleRangeChange({ from, to }); } catch (e) { /* host concern; never breaks the view */ }
+  }
   function draw() {
     clear(root);
     const filtered = searchPeople(people, query);
     const scope = currentScope();
+    reportVisible(scope);
 
     const head = el('div', { cls: 'plan-head' });
     const ht = el('div');

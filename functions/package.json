@@ -1,0 +1,20 @@
+{
+  "name": "sormena-signing-functions",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BID-1 secure signing foundation (LOCAL/EMULATOR ONLY). Future runtime: Firebase Cloud Functions 2nd gen + Admin SDK + Secret Manager in a SEPARATE non-production project. Not deployable in BID-1: fake WYSIWYS provider only, no secrets, no BankID calls.",
+  "type": "module",
+  "main": "index.mjs",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "test": "node test/run-all.mjs"
+  },
+  "dependencies": {
+    "firebase-admin": "14.5.0",
+    "firebase-functions": "7.4.0",
+    "jose": "6.2.12",
+    "pdf-lib": "1.17.1"
+  }
+}

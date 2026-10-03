@@ -271,7 +271,10 @@ export function manualErrorText(code) {
   return 'Kunne ikke lagre (' + c + ').';
 }
 
-export function renderPayrollView(root, { employeeStore, scheduleStore, attendanceStore, payrollStore, tenantId, actor, operatorName, nowMs, timezone, todayWorkDate, initialPeriodId, initialOpenEmployee, onStateChange, onBack, onOpenEmployee, manualContext, onManualTime, plannedShiftsFor, planningFor }) {
+export function renderPayrollView(root, { employeeStore, scheduleStore, attendanceStore, payrollStore, tenantId, actor, operatorName, nowMs, timezone, todayWorkDate, initialPeriodId, initialOpenEmployee, onStateChange, onBack, onOpenEmployee, manualContext, onManualTime, plannedShiftsFor, planningFor, packageOpsEnabled, packageOpsNote }) {
+  // Ledelse integration: durable package operations (approve / mark sent / corrected version) are only offered when the
+  // host confirms a persistent package store; otherwise the review renders from live data and the actions are blocked honestly.
+  const pkgOps = packageOpsEnabled !== false;
   if (!root) return;
   let periodId = initialPeriodId;
   let openEmployee = initialOpenEmployee || null;   // shell-owned across tab switches
@@ -307,6 +310,7 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
     return 'Kunne ikke lagre (' + code + ').';
   }
   function apply(op, after) {
+    if (!pkgOps) { errMsg = 'Ikke tilgjengelig i produksjon ennå (ingen varig lagring av lønnsgrunnlag-pakker).'; draw(); return; }
     const res = applyPayrollOperation({ store: payrollStore, tenantId, actor, op, pkg: pkgNow(), now: Date.now(), operatorName });
     if (res.ok) { errMsg = ''; if (typeof after === 'function') after(res); } else errMsg = opError(res.code);
     draw();
@@ -646,12 +650,17 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
         reasonCode: st.reasonCode, reasonNote: st.reasonNote,
         shiftId: st.shiftId || null, attendanceId: st.attendanceId || null,
       }) : { ok: false, code: 'NOT_WIRED' };
-      // A refusal never closes the form and never touches the stores: the manager fixes and retries.
-      if (res && res.ok) {
-        manual = null; errMsg = '';
-        jumpTo = (!isCorrect && st.workDate.slice(0, 7) !== periodId) ? st.workDate.slice(0, 7) : null;   // P1 §F: post-save doorway
-      } else { st.err = manualErrorText(res && res.code); }
-      draw();
+      // A refusal never closes the form and never touches the stores: the manager fixes and retries. A production
+      // persistence seam may answer asynchronously (server-confirmed); the form stays until the answer arrives.
+      const settle = (r) => {
+        if (r && r.ok) {
+          manual = null; errMsg = '';
+          jumpTo = (!isCorrect && st.workDate.slice(0, 7) !== periodId) ? st.workDate.slice(0, 7) : null;   // P1 §F: post-save doorway
+        } else { st.err = manualErrorText(r && r.code); }
+        draw();
+      };
+      if (res && typeof res.then === 'function') { saveBtn.disabled = true; res.then(settle, (e) => settle({ ok: false, code: (e && e.code) || 'COMMIT_FAILED' })); }
+      else settle(res);
     });
     acts.appendChild(saveBtn);
     acts.appendChild(btn('Avbryt', 'btn tertiary', () => { manual = null; draw(); }));
@@ -842,7 +851,9 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
     }
     c.appendChild(el('div', { cls: 'vp-err', text: errMsg }));
     const acts = el('div', { cls: 'vp-actions' });
-    if (!approved) {
+    if (!pkgOps) {
+      acts.appendChild(el('div', { cls: 'vp-note', text: packageOpsNote || 'Godkjenning og oversending av lønnsgrunnlag er ikke koblet til produksjon ennå. Tallene over er live; ingenting lagres herfra.' }));
+    } else if (!approved) {
       const note = el('input', { attrs: { type: 'text', placeholder: 'Notat til perioden (valgfritt)', value: noteDraft } });
       note.addEventListener('input', () => { noteDraft = note.value; });
       c.appendChild(note);
@@ -897,4 +908,6 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
   }
 
   draw();
+  // Ledelse integration: live redraw from the production stores.
+  return { redraw: draw };
 }

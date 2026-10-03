@@ -14,8 +14,8 @@ import { isOvernight } from './employee-schedule-week.mjs';
 import {
   employeesOf, employeeOf, startDateOf, currentTermsOf, termsWithRanges, contractStatusOf,
   missingInfoOf, applyEmployeeOperation, plannedHoursForEmployee, upcomingShiftsForEmployee,
-  normalizeAddress,
-  canViewEmployees, canViewCompensation, canEditEmployment, EMPLOYMENT_TYPES, DOC_CATEGORIES,
+  normalizeAddress, correctableTermsPeriodOf,
+  canViewEmployees, canViewCompensation, canEditEmployment, EMPLOYMENT_TYPES, EMPLOYMENT_FORMS, DOC_CATEGORIES,
   PAYMENT_INTERVALS,
 } from './management-employees-core.mjs';
 import {
@@ -54,7 +54,7 @@ const SECTIONS = [
   { key: 'tid', label: 'Tid & vaktplan' },
 ];
 
-export function renderEmployeesView(root, { employeeStore, scheduleStore, tenantId, tenantLabel, roleLabels, actor, contractProfile, payrollStore, nowMs, timezone, onOpenVaktplanFor, onBack }) {
+export function renderEmployeesView(root, { employeeStore, scheduleStore, tenantId, tenantLabel, roleLabels, actor, contractProfile, payrollStore, nowMs, timezone, onOpenVaktplanFor, onBack, applyOperation, applyContract, onCompanyProfileChanged }) {
   if (!root) return;
   const todayWd = tenantWorkDate(nowMs, timezone);
   let page = 'list';           // 'list' | 'new' | 'card' | 'contract' | 'preview'
@@ -65,6 +65,11 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
   let step = 1;                // contract flow step 1..4 (resumable; state lives in the store)
   let previewVersionId = null; // which version the preview page renders (null = live draft)
   let companySetupOpen = false; // Avtaleoppsett editor: collapsed summary by default (UI state only)
+  let arbeidChangeOpen = false;  // Arbeidsforhold: the genuine "Ny periode (endring)" form is collapsed while the ONE initial period still qualifies for completion (UI state only)
+  let arbeidCorrectOpen = false; // Arbeidsforhold: the "Korriger gjeldende arbeidsforhold" form (feilregistrering, same period) is open (UI state only)
+  let freezeConfirm = null;      // Step 4: { contractVersionId, inputs } captured when "Godkjenn og frys versjon" is pressed — the exact content under review (UI state only)
+  let freezeBusy = false;        // a freeze request is in flight: the confirm control is disabled (no double submit)
+  let corrDraft = null;          // transient typed correction values kept across a refused save's redraw; the ONE truth stays the terms
   let companyDraft = null;      // transient unsaved editor values; the ONE truth stays contractProfile
 
   const fmtHM = (t) => fmtTenantHM(t, timezone);
@@ -79,9 +84,21 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     if (code === 'ROLE_REQUIRED') return 'Velg en stilling/rolle.';
     if (code === 'VALIDFROM_INVALID') return 'Oppgi en gyldig «gjelder fra»-dato.';
     if (code === 'TERMS_DUPLICATE_VALIDFROM') return 'Det finnes allerede en periode som gjelder fra denne datoen.';
+    if (typeof code === 'string' && code.startsWith('TERMS_VALUE_ALREADY_SET')) return 'Denne opplysningen er allerede registrert i perioden. Er den feilregistrert, rett den med «Korriger gjeldende arbeidsforhold» under Arbeidsforhold. En reell endring lagres som en ny periode.';
+    if (code === 'CORRECTION_REASON_REQUIRED') return 'Skriv en kort begrunnelse for korrigeringen.';
+    if (code === 'CORRECTION_REASON_TOO_LONG') return 'Begrunnelsen kan være på høyst 200 tegn.';
+    if (code === 'TERMS_CORRECTION_NO_CHANGE') return 'Ingen verdier er endret. Endre verdien som var feilregistrert.';
+    if (code === 'TERMS_CORRECTION_PERIOD_SUPERSEDED' || code === 'TERMS_CORRECTION_PERIOD_UNKNOWN') return 'Bare perioden som gjelder nå kan korrigeres. Tidligere perioder endres aldri.';
+    if (code === 'TERMS_CORRECTION_EMPLOYEE_ENDED') return 'Arbeidsforholdet er avsluttet og kan ikke korrigeres.';
+    if (typeof code === 'string' && code.startsWith('TERMS_CORRECTION_STALE')) return 'Opplysningene er endret i mellomtiden. Åpne korrigeringen på nytt.';
+    if (typeof code === 'string' && code.startsWith('TERMS_CORRECTION_VALUE_REQUIRED')) return 'En korrigering må ha en verdi. Feltet kan ikke tømmes.';
+    if (code === 'EXPECTEDWEEKLYHOURS_INVALID') return 'Avtalt arbeidstid må være et tall over 0 og høyst 168 timer per uke.';
+    if (code === 'TERMS_PERIOD_FROZEN_IN_CONTRACT') return 'Perioden er låst av en frosset avtale. Legg til en ny periode i stedet.';
+    if (code === 'NO_TERMS') return 'Ingenting nytt å fylle ut.';
     if (code === 'COMPENSATION_INVALID') return 'Lønnsgrunnlaget må være et positivt beløp.';
     if (code === 'PERCENTAGE_INVALID') return 'Stillingsprosent må være mellom 1 og 100.';
     if (code === 'EMPLOYMENTTYPE_INVALID') return 'Ugyldig stillingstype.';
+    if (code === 'EMPLOYMENTFORM_INVALID') return 'Ugyldig ansettelsesform.';
     if (code === 'ENDDATE_INVALID') return 'Oppgi en gyldig sluttdato.';
     if (code === 'ALREADY_ENDED') return 'Den ansatte er allerede registrert som sluttet.';
     if (code === 'DOC_NAME_REQUIRED') return 'Dokumentet må ha et navn.';
@@ -93,20 +110,36 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     if (code === 'ADDRESS_POSTALCODE_INVALID') return 'Postnummer må være fire siffer.';
     if (code === 'ADDRESS_CITY_REQUIRED') return 'Poststed må fylles ut.';
     if (code === 'NOT_AUTHORIZED') return 'Du har ikke tilgang til å endre arbeidsforhold.';
+    if (code === 'ALREADY_FROZEN') return 'Denne versjonen er allerede godkjent og frosset.';
+    if (code === 'CONTRACT_INPUTS_CHANGED') return 'Avtalen er endret siden du åpnet godkjenningen. Se gjennom avtalen på nytt før du fryser.';
+    if (code === 'FREEZE_REVIEW_REQUIRED') return 'Åpne godkjenningen på nytt og bekreft versjonen som skal fryses.';
+    if (code === 'NO_DRAFT') return 'Det finnes ikke noe utkast å fryse.';
+    if (code === 'VERSION_UNKNOWN' || code === 'VERSION_NOT_DRAFT') return 'Denne avtaleversjonen er ikke et utkast og kan ikke endres.';
     return 'Kunne ikke lagre (' + code + ').';
   }
+  // Production operation seams (Ledelse integration): a host may supply `applyOperation` / `applyContract`, which
+  // receive the SAME argument objects this view has always handed to the cores and may resolve asynchronously
+  // (one transaction on the canonical ansatte document). Without them the accepted in-memory behaviour is unchanged.
+  const coreErr = (e) => (e && e.coreResult) ? e.coreResult : { ok: false, code: e && e.code ? e.code : 'UNKNOWN' };
   function apply(op, after) {
-    const res = applyEmployeeOperation({ store: employeeStore, tenantId, actor, op, now: Date.now() });
-    if (res.ok) { errMsg = ''; if (typeof after === 'function') after(res); } else { errMsg = opError(res.code); }
-    draw();
+    const settle = (res) => { if (res && res.ok) { errMsg = ''; if (typeof after === 'function') after(res); } else { errMsg = opError(res && res.code ? res.code : 'UNKNOWN'); } draw(); };
+    const run = typeof applyOperation === 'function' ? applyOperation : applyEmployeeOperation;
+    let res; try { res = run({ store: employeeStore, tenantId, actor, op, now: Date.now(), timezone }); } catch (e) { settle(coreErr(e)); return; }
+    if (res && typeof res.then === 'function') res.then(settle, (e) => settle(coreErr(e))); else settle(res);
   }
   function applyC(op, after) {
-    const res = applyContractOperation({ store: employeeStore, tenantId, actor, op, profile: contractProfile, now: Date.now(), onDate: todayWd, roleLabels });
-    if (res.ok) { errMsg = ''; if (typeof after === 'function') after(res); }
-    else if (res.code === 'NOT_READY') errMsg = 'Kan ikke fryses ennå: ' + res.missing.map((m) => m.label).join(', ') + ' mangler.';
-    else if (res.code === 'TERMS_PERIOD_FROZEN_IN_CONTRACT') errMsg = 'Perioden er låst av en frosset avtale. Legg til en ny periode i stedet.';
-    else errMsg = opError(res.code);
-    draw();
+    const settle = (res) => {
+      freezeBusy = false;
+      if (res && (res.code === 'CONTRACT_INPUTS_CHANGED' || res.code === 'ALREADY_FROZEN' || res.code === 'NOT_READY')) freezeConfirm = null;
+      if (res && res.ok) { errMsg = ''; if (typeof after === 'function') after(res); }
+      else if (res && res.code === 'NOT_READY') errMsg = 'Kan ikke fryses ennå: ' + (res.missing || []).map((m) => m.label).join(', ') + ' mangler.';
+      else if (res && res.code === 'TERMS_PERIOD_FROZEN_IN_CONTRACT') errMsg = 'Perioden er låst av en frosset avtale. Legg til en ny periode i stedet.';
+      else errMsg = opError(res && res.code ? res.code : 'UNKNOWN');
+      draw();
+    };
+    const run = typeof applyContract === 'function' ? applyContract : applyContractOperation;
+    let res; try { res = run({ store: employeeStore, tenantId, actor, op, profile: contractProfile, now: Date.now(), onDate: todayWd, roleLabels }); } catch (e) { settle(coreErr(e)); return; }
+    if (res && typeof res.then === 'function') res.then(settle, (e) => settle(coreErr(e))); else settle(res);
   }
   const inputsFor = (e) => contractInputsFor({ employee: e, profile: contractProfile, onDate: todayWd, roleLabels });
   const readinessFor = (e) => contractReadinessOf(inputsFor(e));
@@ -124,6 +157,22 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
   function textInput(value, placeholder, type) {
     return el('input', { attrs: Object.assign({ type: type || 'text' }, value != null ? { value } : {}, placeholder ? { placeholder } : {}) });
   }
+  // ANSETTELSESFORM (terms.employmentForm: fast | midlertidig) is a DISTINCT canonical fact from the employment-scope
+  // field shown as "Stillingstype" (terms.employmentType: deltid …). Neither is ever derived from the other (release -005).
+  const FORM_LABELS = { fast: 'Fast', midlertidig: 'Midlertidig' };
+  const formLabel = (v) => (v ? (FORM_LABELS[v] || capFirst(String(v))) : 'Ikke registrert');
+  const CORR_LABELS = { role: 'Stilling', employmentForm: 'Ansettelsesform', employmentType: 'Stillingstype', percentage: 'Stillingsprosent', compensation: 'Lønnsgrunnlag', expectedWeeklyHours: 'Avtalt arbeidstid', noticePeriod: 'Oppsigelsestid' };
+  const corrValue = (f, v) => {
+    if (v == null) return 'Ikke registrert';
+    if (f === 'expectedWeeklyHours') return fmtH(v);
+    if (f === 'percentage') return v + ' %';
+    if (f === 'role') return roleOf(v);
+    if (f === 'employmentForm') return formLabel(v);
+    if (f === 'compensation') return !canViewCompensation(actor) ? 'Skjult' : (v.model === 'timelonn' ? fmtKr(v.hourlyRate) + ' per time' : fmtKr(v.monthlySalary) + ' per måned');
+    return String(v);
+  };
+  const corrChangeText = (ch) => (CORR_LABELS[ch.field] || ch.field) + ' ' + corrValue(ch.field, ch.before) + ' → ' + corrValue(ch.field, ch.after);
+  const formOptions = (blank) => [{ value: '', label: blank }].concat(EMPLOYMENT_FORMS.map((x) => ({ value: x, label: FORM_LABELS[x] || x })));
   function selectInput(options, value) {
     const s = el('select');
     for (const o of options) {
@@ -183,7 +232,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       if (cs.state === 'mangler') m.push('mangler arbeidsavtale');
       else if (cs.state === 'utkast') m.push('arbeidsavtale er utkast');
       if (m.length) row.appendChild(miss(m));
-      row.addEventListener('click', () => { selectedId = e.ansattId; section = 'oversikt'; page = 'card'; errMsg = ''; draw(); });
+      row.addEventListener('click', () => { selectedId = e.ansattId; section = 'oversikt'; page = 'card'; errMsg = ''; arbeidChangeOpen = false; arbeidCorrectOpen = false; corrDraft = null; draw(); });
       card.appendChild(row);
     }
     root.appendChild(card);
@@ -264,12 +313,13 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       for (const op of ops) {
         const res = applyCompanyContractOperation({ profile: contractProfile, actor, op });
         if (!res.ok) { errMsg = opError(res.code); draw(); return; }
+        if (typeof onCompanyProfileChanged === 'function') { try { onCompanyProfileChanged(contractProfile); } catch (err) { /* host persistence concern */ } }
       }
       errMsg = ''; companySetupOpen = false; companyDraft = null; draw();
     }));
     acts.appendChild(btn('Lukk', 'btn tertiary', () => { companySetupOpen = false; companyDraft = null; errMsg = ''; draw(); }));
     card.appendChild(acts);
-    card.appendChild(el('div', { cls: 'vp-note', text: 'Lagres kun lokalt i denne forhåndsvisningen – ingen produksjonslagring i denne versjonen.' }));
+    card.appendChild(el('div', { cls: 'vp-note', text: typeof onCompanyProfileChanged === 'function' ? 'Lagres som felles avtaleoppsett for virksomheten og gjelder alle ansatte.' : 'Lagres kun lokalt i denne forhåndsvisningen – ingen produksjonslagring i denne versjonen.' }));
     root.appendChild(card);
   }
 
@@ -313,7 +363,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       apply({ kind: 'createEmployee', name: name.value, startDate: start.value, role: role.value }, (res) => {
         // Employee creation SUCCEEDS FIRST; the contract flow only opens afterwards.
         selectedId = res.ansattId; section = 'kontrakt';
-        if (wantContract) { step = 1; page = 'contract'; if (!draftVersionOf(res.employee)) applyContractOperation({ store: employeeStore, tenantId, actor, op: { kind: 'startDraft', ansattId: res.ansattId }, profile: contractProfile, now: Date.now(), onDate: todayWd, roleLabels }); }
+        if (wantContract) { step = 1; page = 'contract'; if (!draftVersionOf(res.employee)) applyC({ kind: 'startDraft', ansattId: res.ansattId }); }
         else page = 'card';
       });
     }));
@@ -367,7 +417,8 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       comp = cur.compensation.model === 'timelonn' ? fmtKr(cur.compensation.hourlyRate) + ' per time' : fmtKr(cur.compensation.monthlySalary) + ' per måned';
     } else if (!canViewCompensation(actor)) comp = 'Skjult';
     card.appendChild(factRow('Lønnsgrunnlag', comp));
-    card.appendChild(factRow('Kontrakt', contractStatusOf(e) === 'finnes' ? 'Registrert' : 'Mangler'));
+    const csO = contractStateOf(e);
+    card.appendChild(factRow('Kontrakt', csO.state === 'frosset' ? csO.label : csO.state === 'utkast' ? 'Utkast pågår' : (contractStatusOf(e) === 'finnes' ? 'Registrert' : 'Mangler')));
     const wkHours = plannedHoursForEmployee(scheduleStore, tenantId, e.ansattId, { kind: 'week', anchorWorkDate: todayWd });
     card.appendChild(factRow('Planlagte timer denne uken', fmtH(wkHours)));
     const up = upcomingShiftsForEmployee(scheduleStore, tenantId, e.ansattId, actor, nowMs, 1);
@@ -380,12 +431,27 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     root.appendChild(card);
   }
 
+  // INITIAL COMPLETION ELIGIBILITY (accepted semantics reused, no new law): eligible iff (1) exactly ONE period exists (the
+  // starting period is the first AND current one; no later period), (2) that period is not referenced by a frozen contract
+  // (the same lock completeCurrentTerms enforces), and (3) at least one completable term is still blank — the same fields the
+  // accepted completeness law (missingInfoOf: stillingstype/arbeidsprosent/lønnsgrunnlag) and the contract template read
+  // (avtalt arbeidstid, oppsigelsestid). Once complete, or once a second period exists, only the genuine-change form is offered.
+  const COMPLETABLE_TERMS = ['employmentType', 'percentage', 'compensation', 'expectedWeeklyHours', 'noticePeriod'];
+  function initialCompletionTarget(e) {
+    if (!e || !Array.isArray(e.terms) || e.terms.length !== 1) return null;
+    const t = e.terms[0];
+    if ((e.contractVersions || []).some((v) => v.status === 'godkjent_frosset' && v.termsPeriodRef === t.validFrom)) return null;
+    const missing = COMPLETABLE_TERMS.filter((f) => t[f] == null);
+    return missing.length ? { terms: t, missing } : null;
+  }
+  function initialCompletionEligible(e) { return initialCompletionTarget(e) !== null; }
   function drawArbeid(e, cur) {
     const card = el('div', { cls: 'card' });
     card.appendChild(el('div', { cls: 'kicker', text: 'Gjeldende arbeidsforhold' }));
     if (cur) {
       card.appendChild(factRow('Gjelder fra', fmtDate(cur.validFrom)));
       card.appendChild(factRow('Stilling', roleOf(cur.role)));
+      card.appendChild(factRow('Ansettelsesform', formLabel(cur.employmentForm)));
       card.appendChild(factRow('Stillingstype', cur.employmentType || 'Ikke registrert'));
       card.appendChild(factRow('Stillingsprosent', cur.percentage != null ? cur.percentage + ' %' : 'Ikke registrert'));
       card.appendChild(factRow('Arbeidssted', cur.workplace || 'Ikke registrert'));
@@ -397,13 +463,135 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     card.appendChild(el('div', { cls: 'vp-note', text: 'Dette er arbeidsforholdet slik det er registrert her – ikke en juridisk fullstendig arbeidsavtale.' }));
     root.appendChild(card);
 
-    if (canEditEmployment(actor) && e.status === 'active') {
+    // ---- INITIAL PERIOD COMPLETION vs GENUINE CHANGE (owner decision 2026-09-27) --------------------------------
+    // A newly created employee has ONE open starting period with blanks. Filling those blanks later COMPLETES that same
+    // period (core op completeCurrentTerms: latest period, blanks only, validFrom untouched, frozen-contract periods
+    // refused, already-set values refused). Only a genuine later change creates period #2 (appendTerms, 'Ny periode').
+    const completion = canEditEmployment(actor) && e.status === 'active' && initialCompletionEligible(e) ? initialCompletionTarget(e) : null;
+    const correctable = canEditEmployment(actor) ? correctableTermsPeriodOf(e) : null;
+    if (completion && !arbeidCorrectOpen) {
+      const t = completion.terms;
+      const form = el('div', { cls: 'card emp-form' });
+      form.appendChild(el('div', { cls: 'kicker', text: 'Fullfør eksisterende arbeidsforhold' }));
+      form.appendChild(el('div', { cls: 'cue-line', text: 'Fyller ut det som mangler i perioden som gjelder fra ' + fmtDate(t.validFrom) + '. Startdatoen beholdes, og det opprettes ingen ny periode. Opplysninger som allerede er registrert, rettes med «Korriger gjeldende arbeidsforhold» hvis de er feilregistrert; en reell endring lagres som en ny periode.' }));
+      const lock = (input) => { input.setAttribute('disabled', 'disabled'); input.setAttribute('aria-disabled', 'true'); return input; };
+      const vf = lock(textInput(fmtDate(t.validFrom), null, 'text'));
+      const role = lock(selectInput(roleOptions(), t.role));
+      const type = selectInput([{ value: '', label: 'Ikke registrert' }].concat(EMPLOYMENT_TYPES.map((x) => ({ value: x, label: x }))), t.employmentType || '');
+      if (t.employmentType) lock(type);
+      const pct = textInput(t.percentage != null ? String(t.percentage) : '', 'f.eks. 60', 'number');
+      if (t.percentage != null) lock(pct);
+      const compModel = selectInput([{ value: '', label: 'Ikke registrert' }, { value: 'timelonn', label: 'Timelønn' }, { value: 'fastlonn', label: 'Fastlønn' }], t.compensation ? t.compensation.model : '');
+      const compVal = textInput(t.compensation ? String(t.compensation.model === 'timelonn' ? t.compensation.hourlyRate : t.compensation.monthlySalary) : '', 'beløp', 'number');
+      if (t.compensation) { lock(compModel); lock(compVal); }
+      const hours = textInput(t.expectedWeeklyHours != null ? String(t.expectedWeeklyHours) : '', 'f.eks. 37.5', 'number');
+      if (t.expectedWeeklyHours != null) lock(hours);
+      const notice = textInput(t.noticePeriod ? t.noticePeriod : '', 'f.eks. 1 måned');
+      if (t.noticePeriod) lock(notice);
+      form.appendChild(field('Gjelder fra (startdato, beholdes)', vf));
+      form.appendChild(field('Stilling', role));
+      form.appendChild(field('Stillingstype', type));
+      form.appendChild(field('Stillingsprosent', pct));
+      form.appendChild(field('Lønnsgrunnlag', compModel));
+      form.appendChild(field('Beløp (kr per time / per måned)', compVal));
+      form.appendChild(field('Avtalt arbeidstid (timer per uke)', hours));
+      form.appendChild(field('Oppsigelsestid', notice));
+      form.appendChild(el('div', { cls: 'vp-err', text: errMsg }));
+      form.appendChild(btn('Fullfør arbeidsforhold', 'btn primary', () => {
+        // ONLY blanks travel: the core refuses to overwrite a set value, so set fields are locked above and never sent.
+        const patch = {};
+        if (t.employmentType == null && type.value) patch.employmentType = type.value;
+        if (t.percentage == null && pct.value !== '') patch.percentage = Number(pct.value);
+        if (t.compensation == null && compModel.value === 'timelonn') patch.compensation = { model: 'timelonn', hourlyRate: Number(compVal.value) };
+        else if (t.compensation == null && compModel.value === 'fastlonn') patch.compensation = { model: 'fastlonn', monthlySalary: Number(compVal.value) };
+        if (t.expectedWeeklyHours == null && hours.value !== '') patch.expectedWeeklyHours = Number(hours.value);
+        if (t.noticePeriod == null && notice.value.trim()) patch.noticePeriod = notice.value.trim();
+        if (!Object.keys(patch).length) { errMsg = opError('NO_TERMS'); draw(); return; }
+        apply({ kind: 'completeCurrentTerms', ansattId: e.ansattId, terms: patch });
+      }));
+      root.appendChild(form);
+      // the genuine-change path stays reachable, but is secondary until the starting period is established
+      if (!arbeidChangeOpen) {
+        const openChange = btn('Registrer en senere endring (ny periode)', 'btn tertiary', () => { arbeidChangeOpen = true; errMsg = ''; draw(); });
+        root.appendChild(openChange);
+      }
+    }
+    // ---- CORRECTION OF A FEILREGISTRERING (release -006) — NOT a change ------------------------------------------------
+    // Rectifies already-registered values of the CURRENT period in place (core op correctCurrentTerms: latest period only,
+    // validFrom/identity untouched, no successor, not referenced by a non-draft contract, reason required, audited in
+    // e360.termsCorrections). A real later change stays "Ny periode (endring)". Only populated terms are offered; blanks
+    // belong to completion. The contract draft stores no term values, so it reads the corrected value on its next render.
+    if (correctable && !arbeidCorrectOpen) {
+      const entry = el('div', { cls: 'card' });
+      entry.appendChild(el('div', { cls: 'cue-line', text: 'Er en registrert verdi i perioden som gjelder nå feil? Rett feilregistreringen uten å lage en ny periode.' }));
+      entry.appendChild(btn('Korriger gjeldende arbeidsforhold', 'btn secondary', () => { arbeidCorrectOpen = true; corrDraft = null; errMsg = ''; draw(); }));
+      root.appendChild(entry);
+    }
+    if (correctable && arbeidCorrectOpen) {
+      const t = correctable;
+      const dv = (k, fallback) => (corrDraft && k in corrDraft ? corrDraft[k] : fallback);
+      const form = el('div', { cls: 'card emp-form' });
+      form.appendChild(el('div', { cls: 'kicker', text: 'Korriger gjeldende arbeidsforhold' }));
+      form.appendChild(el('div', { cls: 'cue-line', text: 'Bare for feilregistrering: retter verdier som ble registrert feil i perioden som gjelder fra ' + fmtDate(t.validFrom) + '. Perioden og startdatoen beholdes, og det opprettes ingen ny periode. Korrigeringen lagres med begrunnelse, tidspunkt og hvem som rettet.' }));
+      form.appendChild(el('div', { cls: 'cue-line', text: 'Er det en reell endring i arbeidsforholdet fra en bestemt dato, skal den registreres som en ny periode i stedet.' }));
+      const vf = textInput(fmtDate(t.validFrom), null, 'text');
+      vf.setAttribute('disabled', 'disabled'); vf.setAttribute('aria-disabled', 'true');
+      const role = selectInput(roleOptions(), dv('role', t.role));
+      const formSel = t.employmentForm ? selectInput(formOptions('').slice(1), dv('employmentForm', t.employmentForm)) : null;
+      const type = t.employmentType ? selectInput(EMPLOYMENT_TYPES.map((x) => ({ value: x, label: x })), dv('employmentType', t.employmentType)) : null;
+      const pct = t.percentage != null ? textInput(dv('percentage', String(t.percentage)), null, 'number') : null;
+      const compModel = t.compensation ? selectInput([{ value: 'timelonn', label: 'Timelønn' }, { value: 'fastlonn', label: 'Fastlønn' }], dv('compModel', t.compensation.model)) : null;
+      const compVal = t.compensation ? textInput(dv('compVal', String(t.compensation.model === 'timelonn' ? t.compensation.hourlyRate : t.compensation.monthlySalary)), null, 'number') : null;
+      const hours = t.expectedWeeklyHours != null ? textInput(dv('expectedWeeklyHours', String(t.expectedWeeklyHours)), null, 'number') : null;
+      const notice = t.noticePeriod ? textInput(dv('noticePeriod', t.noticePeriod), null) : null;
+      const reason = textInput(dv('reason', ''), 'f.eks. Feilregistrert arbeidstid');
+      reason.setAttribute('maxlength', '200');
+      form.appendChild(field('Gjelder fra (beholdes)', vf));
+      form.appendChild(field('Stilling', role));
+      if (formSel) form.appendChild(field('Ansettelsesform', formSel));
+      if (type) form.appendChild(field('Stillingstype', type));
+      if (pct) form.appendChild(field('Stillingsprosent', pct));
+      if (compModel) { form.appendChild(field('Lønnsgrunnlag', compModel)); form.appendChild(field('Beløp (kr per time / per måned)', compVal)); }
+      if (hours) form.appendChild(field('Avtalt arbeidstid (timer per uke)', hours));
+      if (notice) form.appendChild(field('Oppsigelsestid', notice));
+      form.appendChild(field('Begrunnelse (påkrevd)', reason));
+      form.appendChild(el('div', { cls: 'vp-err', text: errMsg }));
+      const acts = el('div', { cls: 'vp-actions' });
+      acts.appendChild(btn('Lagre korrigering', 'btn primary', () => {
+        // ONLY the values that differ travel, each with the value the owner saw (compare-and-set in the core).
+        corrDraft = { role: role.value, reason: reason.value };
+        const next = {};
+        if (role.value !== t.role) next.role = role.value;
+        if (formSel) { corrDraft.employmentForm = formSel.value; if (formSel.value !== t.employmentForm) next.employmentForm = formSel.value; }
+        if (type) { corrDraft.employmentType = type.value; if (type.value !== t.employmentType) next.employmentType = type.value; }
+        if (pct) { corrDraft.percentage = pct.value; const v = pct.value === '' ? null : Number(pct.value); if (v !== t.percentage) next.percentage = v; }
+        if (compModel) {
+          corrDraft.compModel = compModel.value; corrDraft.compVal = compVal.value;
+          const amt = compVal.value === '' ? NaN : Number(compVal.value);
+          const c = compModel.value === 'timelonn' ? { model: 'timelonn', hourlyRate: amt } : { model: 'fastlonn', monthlySalary: amt };
+          const was = t.compensation.model === 'timelonn' ? t.compensation.hourlyRate : t.compensation.monthlySalary;
+          if (c.model !== t.compensation.model || amt !== was) next.compensation = c;
+        }
+        if (hours) { corrDraft.expectedWeeklyHours = hours.value; const v = hours.value === '' ? null : Number(hours.value); if (v !== t.expectedWeeklyHours) next.expectedWeeklyHours = v; }
+        if (notice) { corrDraft.noticePeriod = notice.value; const v = notice.value.trim() || null; if (v !== t.noticePeriod) next.noticePeriod = v; }
+        if (!Object.keys(next).length) { errMsg = opError('TERMS_CORRECTION_NO_CHANGE'); draw(); return; }
+        const expected = {};
+        for (const k of Object.keys(next)) expected[k] = t[k];
+        apply({ kind: 'correctCurrentTerms', ansattId: e.ansattId, periodValidFrom: t.validFrom, reason: reason.value, terms: next, expected }, () => { arbeidCorrectOpen = false; corrDraft = null; });
+      }));
+      acts.appendChild(btn('Avbryt korrigering', 'btn tertiary', () => { arbeidCorrectOpen = false; corrDraft = null; errMsg = ''; draw(); }));
+      form.appendChild(acts);
+      form.appendChild(btn('Dette er en reell endring – registrer ny periode', 'btn tertiary', () => { arbeidCorrectOpen = false; corrDraft = null; arbeidChangeOpen = true; errMsg = ''; draw(); }));
+      root.appendChild(form);
+    }
+    if (canEditEmployment(actor) && e.status === 'active' && (!completion || arbeidChangeOpen) && !arbeidCorrectOpen) {
       const form = el('div', { cls: 'card emp-form' });
       form.appendChild(el('div', { cls: 'kicker', text: 'Ny periode (endring)' }));
       form.appendChild(el('div', { cls: 'cue-line', text: 'En endring lagres som en ny periode. Tidligere perioder endres aldri.' }));
       const vf = textInput(todayWd, null, 'date');
       const role = selectInput(roleOptions(), cur ? cur.role : null);
       const type = selectInput([{ value: '', label: 'Ikke registrert' }].concat(EMPLOYMENT_TYPES.map((x) => ({ value: x, label: x }))), cur && cur.employmentType ? cur.employmentType : '');
+      const formSel = selectInput(formOptions('Ikke registrert'), cur && cur.employmentForm ? cur.employmentForm : '');
       const pct = textInput(cur && cur.percentage != null ? String(cur.percentage) : '', 'f.eks. 60', 'number');
       const compModel = selectInput([{ value: '', label: 'Ikke registrert' }, { value: 'timelonn', label: 'Timelønn' }, { value: 'fastlonn', label: 'Fastlønn' }], cur && cur.compensation ? cur.compensation.model : '');
       const compVal = textInput(cur && cur.compensation ? String(cur.compensation.model === 'timelonn' ? cur.compensation.hourlyRate : cur.compensation.monthlySalary) : '', 'beløp', 'number');
@@ -411,6 +599,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       const notice = textInput(cur && cur.noticePeriod ? cur.noticePeriod : '', 'f.eks. 1 måned');
       form.appendChild(field('Gjelder fra', vf));
       form.appendChild(field('Stilling', role));
+      form.appendChild(field('Ansettelsesform', formSel));
       form.appendChild(field('Stillingstype', type));
       form.appendChild(field('Stillingsprosent', pct));
       form.appendChild(field('Lønnsgrunnlag', compModel));
@@ -421,6 +610,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       form.appendChild(btn('Lagre ny periode', 'btn primary', () => {
         const terms = { validFrom: vf.value, role: role.value };
         terms.employmentType = type.value || null;
+        terms.employmentForm = formSel.value || null;
         terms.percentage = pct.value === '' ? null : Number(pct.value);
         terms.expectedWeeklyHours = hours.value === '' ? null : Number(hours.value);
         terms.noticePeriod = notice.value.trim() || null;
@@ -438,12 +628,17 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       const b = el('div', { cls: 'emp-period' });
       b.appendChild(el('div', { cls: 'rg', text: fmtDate(r.validFrom) + ' – ' + (r.validTo ? fmtDate(r.validTo) : 'løpende') }));
       const bits = [roleOf(r.terms.role)];
+      if (r.terms.employmentForm) bits.push(formLabel(r.terms.employmentForm));
       if (r.terms.employmentType) bits.push(r.terms.employmentType);
       if (r.terms.percentage != null) bits.push(r.terms.percentage + ' %');
       if (canViewCompensation(actor) && r.terms.compensation) {
         bits.push(r.terms.compensation.model === 'timelonn' ? fmtKr(r.terms.compensation.hourlyRate) + '/t' : fmtKr(r.terms.compensation.monthlySalary) + '/mnd');
       }
       b.appendChild(el('div', { cls: 'bits', text: bits.join(' · ') }));
+      // correction audit (release -006): every feilregistrering fix of this period stays visible — never a silent rewrite
+      for (const c of (e.termsCorrections || []).filter((x) => x.periodValidFrom === r.validFrom)) {
+        b.appendChild(el('div', { cls: 'bits emp-corr', text: 'Korrigert ' + fmtDate(tenantWorkDate(c.at, timezone)) + ': ' + c.changes.map(corrChangeText).join('; ') + ' · «' + c.reason + '»' }));
+      }
       hist.appendChild(b);
     }
     root.appendChild(hist);
@@ -468,7 +663,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     labels.forEach((l, i) => {
       const n = i + 1;
       const b = el('button', { cls: 'st' + (step === n ? ' on' : ''), text: n + '. ' + l, attrs: { type: 'button' } });
-      b.addEventListener('click', () => { step = n; errMsg = ''; draw(); });
+      b.addEventListener('click', () => { step = n; errMsg = ''; freezeConfirm = null; draw(); });
       bar.appendChild(b);
     });
     return bar;
@@ -492,7 +687,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     const cur = currentTermsOf(e, todayWd) || e.terms[e.terms.length - 1];
     const rd = readinessFor(e);
     root.appendChild(head('Arbeidsavtale', e.name + ' · ' + rd.label));
-    const back = btn('← Til ansattkortet', 'btn tertiary', () => { page = 'card'; section = 'kontrakt'; errMsg = ''; draw(); });
+    const back = btn('← Til ansattkortet', 'btn tertiary', () => { page = 'card'; section = 'kontrakt'; errMsg = ''; freezeConfirm = null; draw(); });
     back.style.cssText = 'width:auto;padding:4px 0;min-height:0;margin-bottom:10px';
     root.appendChild(back);
     root.appendChild(stepBar(e));
@@ -542,15 +737,20 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
         const anyAddress = street.value.trim() !== '' || postal.value.trim() !== '' || city.value.trim() !== '';
         const patch = { email: email.value.trim() || null, phone: phone.value.trim() || null, birthDate: bd.value || null };
         if (anyAddress) patch.address = { street: street.value, postalCode: postal.value, city: city.value };
-        const res = applyEmployeeOperation({ store: employeeStore, tenantId, actor, op: { kind: 'updateContact', ansattId: e.ansattId, contact: patch }, now: Date.now(), timezone });
-        if (!res.ok) { errMsg = opError(res.code); draw(); return; }
-        saveTerms(e, termsPatchFrom({ workplace: () => (cur && cur.workplace ? '' : wp.value.trim()) }), 2);
+        const wpPatch = termsPatchFrom({ workplace: () => (cur && cur.workplace ? '' : wp.value.trim()) });
+        apply({ kind: 'updateContact', ansattId: e.ansattId, contact: patch }, () => saveTerms(e, wpPatch, 2));
       }));
     } else if (step === 2) {
       card.appendChild(el('div', { cls: 'kicker', text: '2. Arbeidsforhold' }));
-      const type = selectInput([{ value: '', label: 'Velg …' }].concat(EMPLOYMENT_TYPES.map((x) => ({ value: x, label: x }))), cur && cur.employmentType ? cur.employmentType : '');
+      // Ansettelsesform binds to the canonical FORM fact (terms.employmentForm) — never initialised from, nor written to,
+      // the employment-scope field (terms.employmentType: deltid …), which keeps living under Arbeidsforhold.
+      const type = selectInput(formOptions('Velg …'), cur && cur.employmentForm ? cur.employmentForm : '');
       const basis = textInput(cur && cur.employmentBasis ? cur.employmentBasis : '', 'kun ved midlertidig ansettelse');
       const endD = textInput(cur && cur.employmentEndDate ? cur.employmentEndDate : '', null, 'date');
+      // Temporary-only facts are active ONLY while Ansettelsesform = midlertidig; for fast they are disabled, never required
+      // and never sent (so they can never fail validation or be entered as though they applied).
+      const syncTemp = () => { const on = type.value === 'midlertidig'; for (const i of [basis, endD]) { if (on) { i.removeAttribute('disabled'); i.removeAttribute('aria-disabled'); } else { i.setAttribute('disabled', 'disabled'); i.setAttribute('aria-disabled', 'true'); } } };
+      type.addEventListener('change', syncTemp); syncTemp();
       const pct = textInput(cur && cur.percentage != null ? String(cur.percentage) : '', 'f.eks. 60', 'number');
       const wta = textInput(cur && cur.workingTimeArrangement ? cur.workingTimeArrangement : '', 'f.eks. dagtid og kveld etter vaktplan');
       const hrs = textInput(cur && cur.expectedWeeklyHours != null ? String(cur.expectedWeeklyHours) : '', 'f.eks. 22.5', 'number');
@@ -570,7 +770,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       card.appendChild(field('Oppsigelsestid', notice));
       card.appendChild(el('div', { cls: 'vp-err', text: errMsg }));
       card.appendChild(btn('Lagre og fortsett', 'btn primary', () => saveTerms(e, termsPatchFrom({
-        employmentType: () => type.value, employmentBasis: () => basis.value.trim(), employmentEndDate: () => endD.value,
+        employmentForm: () => type.value, employmentBasis: () => (type.value === 'midlertidig' ? basis.value.trim() : ''), employmentEndDate: () => (type.value === 'midlertidig' ? endD.value : ''),
         percentage: () => (pct.value === '' ? '' : Number(pct.value)), workingTimeArrangement: () => wta.value.trim(),
         expectedWeeklyHours: () => (hrs.value === '' ? '' : Number(hrs.value)), breaksArrangement: () => brk.value.trim(),
         scheduleChangeHandling: () => sch.value.trim(), probation: () => prb.value.trim(), noticePeriod: () => notice.value.trim(),
@@ -600,8 +800,13 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       card.appendChild(el('div', { cls: 'vp-err', text: errMsg }));
       const acts = el('div', { cls: 'vp-actions' });
       acts.appendChild(btn('Forhåndsvis avtalen', 'btn secondary', () => { previewVersionId = null; page = 'preview'; errMsg = ''; draw(); }));
-      if (draftVersionOf(e) && rd.ready) {
-        acts.appendChild(btn('Godkjenn og frys versjon', 'btn primary', () => applyC({ kind: 'freezeVersion', ansattId: e.ansattId }, () => { page = 'card'; section = 'kontrakt'; })));
+      // GODKJENN OG FRYS (release -007): pressing the action captures the EXACT agreement inputs now on screen and opens an
+      // in-page confirmation; only "Ja, godkjenn og frys" sends freezeVersion with that version id + reviewed inputs. The core
+      // re-derives completeness and the inputs from the authoritative records inside the transaction and refuses any drift.
+      const draftV = draftVersionOf(e);
+      const confirming = !!(freezeConfirm && draftV && freezeConfirm.contractVersionId === draftV.contractVersionId);
+      if (draftV && rd.ready && !confirming) {
+        acts.appendChild(btn('Godkjenn og frys versjon', 'btn primary', () => { freezeConfirm = { contractVersionId: draftV.contractVersionId, inputs: JSON.parse(JSON.stringify(inputsFor(e))) }; errMsg = ''; draw(); }));
       }
       // Explicit draft-save exposure: the draft already lives in the employee store (resumable,
       // proven) — this action just closes the flow without freezing, keeping the draft.
@@ -609,6 +814,25 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
         acts.appendChild(btn('Lagre utkast og lukk', 'btn tertiary', () => { page = 'card'; section = 'kontrakt'; errMsg = ''; draw(); }));
       }
       card.appendChild(acts);
+      if (confirming && rd.ready) {
+        const cf = el('div', { cls: 'emp-freeze-confirm' });
+        cf.appendChild(el('div', { cls: 'kicker', text: 'Bekreft godkjenning av ' + draftV.contractVersionId }));
+        cf.appendChild(el('div', { cls: 'cue-line', text: 'Denne nøyaktige versjonen låses slik avtalen er vist nå, og kan ikke redigeres etterpå.' }));
+        cf.appendChild(el('div', { cls: 'cue-line', text: 'Senere endringer krever en ny avtaleversjon. Den frosne versjonen endres aldri.' }));
+        cf.appendChild(el('div', { cls: 'cue-line', text: 'Dette signerer IKKE avtalen. Elektronisk signering med BankID kommer senere.' }));
+        const ca = el('div', { cls: 'vp-actions' });
+        const yes = btn('Ja, godkjenn og frys', 'btn primary', () => {
+          if (freezeBusy || !freezeConfirm) return;
+          freezeBusy = true; yes.setAttribute('disabled', 'disabled'); yes.setAttribute('aria-disabled', 'true');
+          const fc = freezeConfirm;
+          applyC({ kind: 'freezeVersion', ansattId: e.ansattId, contractVersionId: fc.contractVersionId, expectedInputs: fc.inputs }, () => { freezeConfirm = null; previewVersionId = null; page = 'card'; section = 'kontrakt'; });
+        });
+        if (freezeBusy) { yes.setAttribute('disabled', 'disabled'); yes.setAttribute('aria-disabled', 'true'); }
+        ca.appendChild(yes);
+        ca.appendChild(btn('Avbryt', 'btn tertiary', () => { freezeConfirm = null; errMsg = ''; draw(); }));
+        cf.appendChild(ca);
+        card.appendChild(cf);
+      }
       card.appendChild(el('div', { cls: 'vp-note', text: 'Elektronisk signering med BankID kommer.' }));
     }
     root.appendChild(card);
@@ -621,7 +845,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     const version = previewVersionId ? contractVersionsOf(e).find((v) => v.contractVersionId === previewVersionId) : null;
     const blocks = blocksForVersion(version, { employee: e, profile: contractProfile, onDate: todayWd, roleLabels });
     root.appendChild(head('Arbeidsavtale', e.name + ' · ' + (version
-      ? 'Frosset versjon ' + version.contractVersionId + ' – historisk og uforanderlig'
+      ? 'Godkjent og frosset versjon ' + version.contractVersionId + ' – ikke signert, historisk og uforanderlig'
       : 'Utkast – redigerbart, ikke frosset')));
     const back = btn('← Tilbake', 'btn tertiary', () => { page = version ? 'card' : 'contract'; if (version) section = 'kontrakt'; errMsg = ''; draw(); });
     back.style.cssText = 'width:auto;padding:4px 0;min-height:0;margin-bottom:10px';
@@ -739,7 +963,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     cc.appendChild(factRow('Status', cs.label));
     if (cs.latest) {
       cc.appendChild(factRow('Siste versjon', cs.latest.contractVersionId + ' · ' + cs.latest.kind));
-      if (cs.latest.frozenAt) cc.appendChild(factRow('Frosset', new Date(cs.latest.frozenAt).toLocaleDateString('nb-NO')));
+      if (cs.latest.frozenAt) cc.appendChild(factRow('Frosset', fmtDate(tenantWorkDate(cs.latest.frozenAt, timezone)) + ' kl. ' + fmtHM(cs.latest.frozenAt)));
       cc.appendChild(factRow('Mal', cs.latest.templateVersion));
     }
     if (cs.state !== 'frosset') cc.appendChild(factRow('Malfelter', rd.label));
@@ -757,7 +981,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       cc.appendChild(el('div', { cls: 'kicker neutral', style: 'margin-top:10px', text: 'Versjonshistorikk' }));
       for (const v of versions.slice().reverse()) {
         const row = el('div', { cls: 'emp-period' });
-        row.appendChild(el('div', { cls: 'rg', text: v.contractVersionId + ' · ' + (v.status === CONTRACT_STATUS.FROZEN ? 'Godkjent og frosset – historisk og uforanderlig' : 'Utkast – redigerbart') }));
+        row.appendChild(el('div', { cls: 'rg', text: v.contractVersionId + ' · ' + (v.status === CONTRACT_STATUS.FROZEN ? 'Godkjent og frosset – ikke signert · historisk og uforanderlig' : 'Utkast – redigerbart') }));
         row.appendChild(el('div', { cls: 'bits', text: [v.kind, 'mal ' + v.templateVersion, v.frozenAt ? new Date(v.frozenAt).toLocaleDateString('nb-NO') : null, v.supersedes ? 'erstatter ' + v.supersedes : null].filter(Boolean).join(' · ') }));
         // Every historical version stays viewable (and printable from the preview) — a frozen
         // version renders from its own snapshot, a draft from live canonical facts.
@@ -884,4 +1108,6 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
   }
 
   draw();
+  // Ledelse integration: a production host redraws from the live employee store when a server snapshot changes it.
+  return { redraw: draw };
 }

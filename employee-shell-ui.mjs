@@ -88,6 +88,37 @@ let VAKTPLAN_PEOPLE = FOUR_SEASON_PEOPLE;
 // receives injected adapters and never touches the fixture stores. No production adapter exists
 // in this build — the seam is the deliverable, not a network path.
 let ADAPTERS = null;
+// ---- Ledelse management identity (Sormena Ledelse production integration). PREVIEW binds the fixture manager actor
+// and fixture tenant; PRODUCTION MANAGEMENT (mountLedelseProduction) binds the ONE resolved admin membership the host
+// supplies — capability-shaped, never a fixture. Every Ledelse surface below reads MGR, never the fixture constants.
+const MGR = { actor: FOUR_SEASON_MANAGER_ACTOR, tenantId: FOUR_SEASON_TENANT.tenantId };
+function managementActorFrom(m) {
+  return Object.freeze({ uid: m.uid, accessRole: 'admin', ansattId: typeof m.ansattId === 'string' && m.ansattId ? m.ansattId : null, accessEnabled: m.accessEnabled === true, tenantId: m.tenantId,
+    canManageSchedule: true, canViewOwnSchedule: false, canViewEmployeeCore: true, canViewEmployeeCompensation: true, canEditEmployment: true });
+}
+// Fail-closed management entry: same identity law as the employee bridge, admin role required.
+function managementEntry(opts) {
+  const m = opts && opts.identity && typeof opts.identity === 'object' ? opts.identity : null;
+  const expected = opts ? opts.expectedTenantId : undefined;
+  if (!m || typeof m.uid !== 'string' || !m.uid) return { kind: 'denied', code: DENIAL.IDENTITY_MISSING };
+  if (typeof expected !== 'string' || !expected) return { kind: 'denied', code: DENIAL.CONFIG_TENANT_MISSING };
+  if (m.tenantId !== expected) return { kind: 'denied', code: DENIAL.IDENTITY_TENANT_MISMATCH };
+  if (m.accessEnabled !== true) return { kind: 'denied', code: DENIAL.IDENTITY_DISABLED };
+  if (m.accessRole !== 'admin') return { kind: 'denied', code: DENIAL.IDENTITY_ROLE_INVALID };
+  return { kind: 'management', membership: m };
+}
+// Management schedule operations -> the accepted admin write seam (same mapping for the standalone door and the workspace).
+function scheduleOpVia(A) {
+  return ({ op }) => {
+    if (!op || typeof op !== 'object') return Promise.resolve({ ok: false, code: 'UNSUPPORTED_OPERATION' });
+    if (op.kind === 'create') return A.create({ workDate: op.workDate, ansattId: op.ansattId == null ? null : op.ansattId, fromHM: op.fromHM, toHM: op.toHM, roleKey: op.roleKey == null ? null : op.roleKey });
+    if (op.kind === 'revise') return A.revise(op.shiftId, { fromHM: op.fromHM, toHM: op.toHM });
+    if (op.kind === 'assign') return A.assign(op.shiftId, op.ansattId == null ? null : op.ansattId);
+    if (op.kind === 'unassign') return A.assign(op.shiftId, null);
+    if (op.kind === 'cancel') return A.cancel(op.shiftId);
+    return Promise.resolve({ ok: false, code: 'UNSUPPORTED_OPERATION' });
+  };
+}
 function scheduleStore() { return ADAPTERS.schedule.store(); }
 function employeeStore() { return ADAPTERS.employees.store(); }
 function createPreviewAdapters() {
@@ -108,12 +139,12 @@ function previewScheduleStore() {
 // employment records); the normal five-person product always projects from employment terms.
 let EMPLOYEE_STORE = null;
 function previewEmployeeStore() {
-  if (!EMPLOYEE_STORE) EMPLOYEE_STORE = seedFourSeasonEmployees(VAKTPLAN_PEOPLE === FOUR_SEASON_PEOPLE ? FOUR_SEASON_PEOPLE : VAKTPLAN_PEOPLE, FOUR_SEASON_TENANT.tenantId);
+  if (!EMPLOYEE_STORE) EMPLOYEE_STORE = seedFourSeasonEmployees(VAKTPLAN_PEOPLE === FOUR_SEASON_PEOPLE ? FOUR_SEASON_PEOPLE : VAKTPLAN_PEOPLE, MGR.tenantId);
   return EMPLOYEE_STORE;
 }
 function vaktplanPeople() {
   scheduleStore();                       // ensure the scale toggle has resolved first
-  return vaktplanPeopleFrom(employeeStore(), FOUR_SEASON_TENANT.tenantId, tenantWorkDate(Date.now(), TZ));
+  return vaktplanPeopleFrom(employeeStore(), MGR.tenantId, tenantWorkDate(Date.now(), TZ));
 }
 // ---- ONE shared payroll-package store for BOTH doorways (Lønnsgrunnlag surface and the
 // Employee 360 Lønn & økonomi projection). Local/demo in-memory only: a hard browser reload
@@ -126,8 +157,8 @@ function payrollStore() {
 // Claimed operator display identity from the existing manager actor — never an auth claim; the
 // package labels it "(uverifisert)" everywhere it is shown.
 function operatorDisplayName() {
-  const emp = employeeStore()[FOUR_SEASON_TENANT.tenantId];
-  const rec = emp && FOUR_SEASON_MANAGER_ACTOR.ansattId ? emp[FOUR_SEASON_MANAGER_ACTOR.ansattId] : null;
+  const emp = employeeStore()[MGR.tenantId];
+  const rec = emp && MGR.actor.ansattId ? emp[MGR.actor.ansattId] : null;
   return rec ? rec.name : null;
 }
 function ownScheduleFor(membership) {
@@ -172,13 +203,17 @@ export function mountEmployeeShell(root, options) {
   // unknown mode is denied (fail closed), preview is only ever entered by naming it, and the
   // production branch never reads DEFAULT_UID, FIXTURE_MEMBERSHIPS or the chooser.
   const opts = options && typeof options === 'object' ? options : {};
-  const MODE = opts.mode === 'preview' || opts.mode === 'production' ? opts.mode : null;
-  const entry = resolveEmployeeEntry({
+  const MODE = opts.mode === 'preview' || opts.mode === 'production' || opts.mode === 'management' ? opts.mode : null;
+  const entry = MODE === 'management' ? managementEntry(opts) : resolveEmployeeEntry({
     mode: opts.mode, identity: opts.identity, expectedTenantId: opts.expectedTenantId,
     preview: MODE === 'preview' ? { memberships: FIXTURE_MEMBERSHIPS, defaultUid: DEFAULT_UID } : undefined,
   });
-  const adapterCheck = MODE === 'production' ? validateAdapters(opts.adapters) : { ok: true, missing: [] };
+  const adapterCheck = MODE === 'production' || MODE === 'management' ? validateAdapters(opts.adapters) : { ok: true, missing: [] };
+  if (MODE === 'management' && adapterCheck.ok && !(opts.adapters.employees && typeof opts.adapters.employees.apply === 'function' && typeof opts.adapters.employees.applyContract === 'function' && typeof opts.adapters.onChange === 'function')) { adapterCheck.ok = false; adapterCheck.missing = adapterCheck.missing.concat(['employees.apply']); }
   ADAPTERS = MODE === 'preview' ? createPreviewAdapters() : (adapterCheck.ok ? opts.adapters : null);
+  // Ledelse identity: production management = the ONE resolved admin membership; preview = the fixture manager actor.
+  if (MODE === 'management') { if (entry.kind === 'management') { MGR.actor = managementActorFrom(entry.membership); MGR.tenantId = entry.membership.tenantId; } }
+  else if (MODE === 'preview') { MGR.actor = FOUR_SEASON_MANAGER_ACTOR; MGR.tenantId = FOUR_SEASON_TENANT.tenantId; }
   attendanceStore = ADAPTERS ? ADAPTERS.attendance : new Map();   // a denied mount renders no data; this Map is inert
   // Display facts (name, roleKey) come from the employee truth boundary. The fixture people list
   // is consulted ONLY in preview (e.g. the ?scale=40 grid set, whose people are not employment records).
@@ -224,12 +259,13 @@ export function mountEmployeeShell(root, options) {
     const nav = document.getElementById('emp-nav'); if (nav) nav.hidden = true;
     const card = el('div', { cls: 'card', style: 'max-width:520px' });
     card.appendChild(el('div', { cls: 'kicker neutral', text: 'Ingen tilgang' }));
-    card.appendChild(el('h2', { text: 'Ansattsiden kan ikke åpnes' }));
+    card.appendChild(el('h2', { text: MODE === 'management' ? 'Ledelse kan ikke åpnes' : 'Ansattsiden kan ikke åpnes' }));
     card.appendChild(el('div', { cls: 'sub', text: denialMessage(code) }));
     root.appendChild(card);
   }
 
   function goChooser() {
+    if (MODE === 'management') return ledelseTabs().length ? goLedelse() : goDenied(DENIAL.IDENTITY_ROLE_INVALID);   // production Ledelse: the workspace is the only destination
     if (MODE !== 'preview') return current ? goToday(current) : goDenied(DENIAL.CHOOSER_PREVIEW_ONLY);   // the chooser is PREVIEW authority only
     clear(root);
     const wrap = el('div', { cls: 'card', style: 'max-width:520px' });
@@ -967,17 +1003,17 @@ export function mountEmployeeShell(root, options) {
   function managerChrome(nmText) {
     const idb = document.getElementById('emp-identity');
     if (idb) {
-      idb.hidden = false; idb.onclick = goChooser;
+      idb.hidden = false; idb.onclick = MODE === 'preview' ? goChooser : null;   // production: the identity is the login, not a switch
       const av = idb.querySelector('.av'), nm = idb.querySelector('.nm');
       if (av) av.textContent = 'L';
       if (nm) nm.textContent = nmText;
-      idb.setAttribute('aria-label', 'Bytt visning');
+      idb.setAttribute('aria-label', MODE === 'preview' ? 'Bytt visning' : 'Innlogget');
     }
     const nav = document.getElementById('emp-nav');
     if (nav) nav.hidden = true;                      // the manager surface has no employee tab bar
   }
   function goVaktplan(prefillName) {
-    if (MODE !== 'preview' || !canOpenVaktplan(FOUR_SEASON_MANAGER_ACTOR)) return goChooser();   // capability routing, fail closed; fixture manager actor is preview-only
+    if (MODE !== 'preview' || !canOpenVaktplan(MGR.actor)) return goChooser();   // capability routing, fail closed; fixture manager actor is preview-only
     clear(root);
     managerChrome('Ledelse');
     // People (incl. planning compensation) are DERIVED from current employment terms — the
@@ -985,13 +1021,13 @@ export function mountEmployeeShell(root, options) {
     // synthetic grid set is used instead, unchanged, purely for the render scale proof.
     const people = SCALE40 ? VAKTPLAN_PEOPLE : vaktplanPeople();
     renderManagementView(root, {
-      store: scheduleStore(), tenantId: FOUR_SEASON_TENANT.tenantId,
-      tenantLabel: tenantLabel(FOUR_SEASON_TENANT.tenantId),
+      store: scheduleStore(), tenantId: MGR.tenantId,
+      tenantLabel: tenantLabel(MGR.tenantId),
       people, roleLabels: ROLE_LABELS,
-      actor: FOUR_SEASON_MANAGER_ACTOR, policy: POLICY,
+      actor: MGR.actor, policy: POLICY,
       deps: {
         resolveAssignee: (ansattId) => people.some((p) => p.ansattId === ansattId)
-          ? { status: 'FOUND', tenantId: FOUR_SEASON_TENANT.tenantId, ansattId }
+          ? { status: 'FOUND', tenantId: MGR.tenantId, ansattId }
           : { status: 'NOT_FOUND' },
         attendanceExistsFor: (shiftId, ansattId) => attendanceStore.has(attendanceIdFor(shiftId, ansattId)),
       },
@@ -1007,17 +1043,23 @@ export function mountEmployeeShell(root, options) {
   // agreement. Local/demo state only — no production persistence in this release.
   let companyContractProfile = null;
   function contractProfile() {
+    if (MODE === 'management') {
+      const p = ADAPTERS && ADAPTERS.contractProfile && typeof ADAPTERS.contractProfile.get === 'function' ? ADAPTERS.contractProfile.get() : null;
+      if (p) return p;
+      if (!companyContractProfile) companyContractProfile = { tenantId: MGR.tenantId, templateVersion: null, employer: {}, representative: {}, signingPlace: null, companyFacts: {} };   // honest empty tenant config (never the fixture)
+      return companyContractProfile;
+    }
     if (!companyContractProfile) companyContractProfile = JSON.parse(JSON.stringify(FOUR_SEASON_CONTRACT_PROFILE));
     return companyContractProfile;
   }
   function goAnsatte() {
-    if (!canViewEmployees(FOUR_SEASON_MANAGER_ACTOR)) return goChooser();
+    if (!canViewEmployees(MGR.actor)) return goChooser();
     clear(root);
     managerChrome('Ledelse');
     renderEmployeesView(root, {
       employeeStore: employeeStore(), scheduleStore: scheduleStore(),
-      tenantId: FOUR_SEASON_TENANT.tenantId, tenantLabel: tenantLabel(FOUR_SEASON_TENANT.tenantId),
-      roleLabels: ROLE_LABELS, actor: FOUR_SEASON_MANAGER_ACTOR,
+      tenantId: MGR.tenantId, tenantLabel: tenantLabel(MGR.tenantId),
+      roleLabels: ROLE_LABELS, actor: MGR.actor,
       contractProfile: contractProfile(),   // tenant config, not rendering literals
       payrollStore: payrollStore(),         // SAME package truth as the Lønnsgrunnlag surface
       nowMs: Date.now(), timezone: TZ,
@@ -1034,12 +1076,33 @@ export function mountEmployeeShell(root, options) {
   let LEDELSE_TAB = 'oversikt';
   const LG_STATE = { periodId: null, openEmployee: null };
   const VP_STATE = { offset: 0, query: '' };
+  // Production Ledelse: the mounted tab redraws from the live adapter mirrors (server snapshots) without losing its own
+  // in-view state; Oversikt is recomposed. Debounced; a disposed workspace never redraws.
+  let LEDELSE_MOUNT = null;
+  let ledelseRedrawTimer = null;
+  function ledelseRedraw() {
+    if (!LEDELSE_MOUNT || !LEDELSE_MOUNT.content || !LEDELSE_MOUNT.content.isConnected || ledelseRedrawTimer) return;
+    ledelseRedrawTimer = setTimeout(() => {
+      ledelseRedrawTimer = null;
+      const m = LEDELSE_MOUNT;
+      if (!m || !m.content || !m.content.isConnected) return;
+      if (m.tab === 'oversikt') { clear(m.content); drawOversikt(m.content); }
+      else if (m.handle && typeof m.handle.redraw === 'function') m.handle.redraw();
+    }, 60);
+  }
+  // Payroll period -> the bounded shifts/attendance read must cover the whole month (widened, never narrowed).
+  function ensurePeriodRange(periodId) {
+    if (MODE !== 'management' || !ADAPTERS || typeof ADAPTERS.ensureRange !== 'function' || !/^\d{4}-\d{2}$/.test(periodId || '')) return;
+    const y = Number(periodId.slice(0, 4)), mo = Number(periodId.slice(5, 7));
+    const last = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+    try { ADAPTERS.ensureRange({ from: periodId + '-01', to: periodId + '-' + String(last).padStart(2, '0') }); } catch (e) { /* host guard */ }
+  }
   function ledelseTabs() {
     const tabs = [];
-    if (MODE !== 'preview') return tabs;   // the Ledelse doorway (fixture manager actor) exists ONLY in the local preview
-    if (canOpenVaktplan(FOUR_SEASON_MANAGER_ACTOR) || canViewEmployees(FOUR_SEASON_MANAGER_ACTOR)) tabs.push({ key: 'oversikt', label: 'Oversikt' });
-    if (canOpenVaktplan(FOUR_SEASON_MANAGER_ACTOR)) tabs.push({ key: 'vaktplan', label: 'Vaktplan' });
-    if (canViewEmployees(FOUR_SEASON_MANAGER_ACTOR)) {
+    if (MODE !== 'preview' && MODE !== 'management') return tabs;   // the Ledelse doorway exists in the local preview and in production management (never on the employee surface)
+    if (canOpenVaktplan(MGR.actor) || canViewEmployees(MGR.actor)) tabs.push({ key: 'oversikt', label: 'Oversikt' });
+    if (canOpenVaktplan(MGR.actor)) tabs.push({ key: 'vaktplan', label: 'Vaktplan' });
+    if (canViewEmployees(MGR.actor)) {
       tabs.push({ key: 'ansatte', label: 'Ansatte' });
       tabs.push({ key: 'lonn', label: 'Lønn & økonomi' });
     }
@@ -1063,13 +1126,16 @@ export function mountEmployeeShell(root, options) {
     const content = el('div', { cls: 'lede-content' });
     frame.appendChild(content);
     root.appendChild(frame);
+    LEDELSE_MOUNT = { tab: LEDELSE_TAB, content, handle: null };
     if (LEDELSE_TAB === 'oversikt') drawOversikt(content);
-    else if (LEDELSE_TAB === 'vaktplan') mountVaktplan(content);
-    else if (LEDELSE_TAB === 'ansatte') mountAnsatte(content);
-    else mountLonnsgrunnlag(content);
-    const exit = el('button', { cls: 'btn tertiary', text: '← Bytt visning', attrs: { type: 'button' } });
-    exit.addEventListener('click', goChooser);
-    root.appendChild(exit);
+    else if (LEDELSE_TAB === 'vaktplan') LEDELSE_MOUNT.handle = mountVaktplan(content);
+    else if (LEDELSE_TAB === 'ansatte') LEDELSE_MOUNT.handle = mountAnsatte(content);
+    else LEDELSE_MOUNT.handle = mountLonnsgrunnlag(content);
+    if (MODE === 'preview') {   // production: the host bar carries «Tilbake til Sormena» / «Min ansattside»
+      const exit = el('button', { cls: 'btn tertiary', text: '← Bytt visning', attrs: { type: 'button' } });
+      exit.addEventListener('click', goChooser);
+      root.appendChild(exit);
+    }
   }
   // ---- OVERSIKT V1 — owner cockpit (Sirrha OVERSIKT-V1-OWNER-COCKPIT-BUILD-RELEASE-001) ------
   // "Hva skjer i virksomheten min, og hva trenger meg?" — attention first, then today, then the
@@ -1079,7 +1145,7 @@ export function mountEmployeeShell(root, options) {
   // Lønn & økonomi's cards use. Nothing on this page sums, stores or infers anything of its own.
   function oversiktFacts() {
     const today = tenantWorkDate(Date.now(), TZ);
-    const T = FOUR_SEASON_TENANT.tenantId;
+    const T = MGR.tenantId;
     const tabs = ledelseTabs().map((t) => t.key);
     const out = { today, tabs, dag: null, lonn: null, ansatte: null };
     if (tabs.includes('vaktplan')) {
@@ -1193,13 +1259,13 @@ export function mountEmployeeShell(root, options) {
     const people = SCALE40 ? VAKTPLAN_PEOPLE : vaktplanPeople();
     const q = VP_STATE.query || '';
     VP_STATE.query = '';
-    renderManagementView(host, {
-      store: scheduleStore(), tenantId: FOUR_SEASON_TENANT.tenantId,
-      tenantLabel: tenantLabel(FOUR_SEASON_TENANT.tenantId), people, roleLabels: ROLE_LABELS,
-      actor: FOUR_SEASON_MANAGER_ACTOR, policy: POLICY,
+    return renderManagementView(host, {
+      store: scheduleStore(), tenantId: MGR.tenantId,
+      tenantLabel: tenantLabel(MGR.tenantId), people, roleLabels: ROLE_LABELS,
+      actor: MGR.actor, policy: POLICY,
       deps: {
         resolveAssignee: (ansattId) => people.some((p) => p.ansattId === ansattId)
-          ? { status: 'FOUND', tenantId: FOUR_SEASON_TENANT.tenantId, ansattId }
+          ? { status: 'FOUND', tenantId: MGR.tenantId, ansattId }
           : { status: 'NOT_FOUND' },
         attendanceExistsFor: (shiftId, ansattId) => attendanceStore.has(attendanceIdFor(shiftId, ansattId)),
       },
@@ -1208,46 +1274,59 @@ export function mountEmployeeShell(root, options) {
       initialQuery: q,
       initialOffset: VP_STATE.offset,
       onOffsetChange: (o) => { VP_STATE.offset = o; },
+      // production: writes through the accepted admin seam (S4 shifts only); navigation widens the bounded read window
+      applyOperation: MODE === 'management' && ADAPTERS.schedule && ADAPTERS.schedule.admin ? scheduleOpVia(ADAPTERS.schedule.admin) : undefined,
+      onVisibleRangeChange: MODE === 'management' && typeof ADAPTERS.ensureRange === 'function' ? (r) => { try { ADAPTERS.ensureRange(r); } catch (e) { /* host guard */ } } : undefined,
     });
   }
   function mountAnsatte(host) {
-    renderEmployeesView(host, {
+    return renderEmployeesView(host, {
       employeeStore: employeeStore(), scheduleStore: scheduleStore(),
-      tenantId: FOUR_SEASON_TENANT.tenantId, tenantLabel: tenantLabel(FOUR_SEASON_TENANT.tenantId),
-      roleLabels: ROLE_LABELS, actor: FOUR_SEASON_MANAGER_ACTOR,
+      tenantId: MGR.tenantId, tenantLabel: tenantLabel(MGR.tenantId),
+      roleLabels: ROLE_LABELS, actor: MGR.actor,
       contractProfile: contractProfile(), payrollStore: payrollStore(),
       nowMs: Date.now(), timezone: TZ,
       // Ledelse-internal jump: stay inside the workspace, switch tab with the name carried over.
       onOpenVaktplanFor: (name) => { VP_STATE.query = typeof name === 'string' ? name : ''; goLedelse('vaktplan'); },
+      // production: every employee/contract operation is ONE transaction on the canonical tenants/{T}/ansatte/{ansattId}
+      // document (accepted cores decide; legacy projections stay in sync); the company profile persists to tenant config.
+      applyOperation: MODE === 'management' ? ({ op }) => ADAPTERS.employees.apply(op) : undefined,
+      applyContract: MODE === 'management' ? ({ op, profile, onDate, roleLabels }) => ADAPTERS.employees.applyContract(op, profile, { onDate, roleLabels }) : undefined,
+      onCompanyProfileChanged: MODE === 'management' && ADAPTERS.contractProfile && typeof ADAPTERS.contractProfile.save === 'function' ? () => { ADAPTERS.contractProfile.save().catch((e) => console.error('[ledelse] contractProfile save failed', e)); } : undefined,
     });
   }
   function mountLonnsgrunnlag(host) {
     const today = tenantWorkDate(Date.now(), TZ);
     if (!LG_STATE.periodId) LG_STATE.periodId = today.slice(0, 7);
-    renderPayrollView(host, {
+    ensurePeriodRange(LG_STATE.periodId);
+    return renderPayrollView(host, {
       employeeStore: employeeStore(), scheduleStore: scheduleStore(), attendanceStore,
       payrollStore: payrollStore(),
-      tenantId: FOUR_SEASON_TENANT.tenantId, actor: FOUR_SEASON_MANAGER_ACTOR,
+      tenantId: MGR.tenantId, actor: MGR.actor,
       operatorName: operatorDisplayName(),
       nowMs: Date.now(), timezone: TZ, todayWorkDate: today,
       initialPeriodId: LG_STATE.periodId, initialOpenEmployee: LG_STATE.openEmployee,
-      onStateChange: (s) => { LG_STATE.periodId = s.periodId; LG_STATE.openEmployee = s.openEmployee; },
+      onStateChange: (s) => { LG_STATE.periodId = s.periodId; LG_STATE.openEmployee = s.openEmployee; ensurePeriodRange(s.periodId); },
       manualContext: manualTimeContext,
       onManualTime: submitManualTime,
       plannedShiftsFor: plannedShiftsForPayroll,   // P1: read-only planned projection for DAGER I PERIODEN
       planningFor: planningEconomyForPeriod,       // P2: labelled planning estimates, view-only
+      // production: payroll-package persistence is NOT built in this release -> approve / send / correct are blocked with
+      // an honest notice; the review itself renders live from attendance + terms + planned shifts.
+      packageOpsEnabled: MODE !== 'management',
+      packageOpsNote: 'Godkjenning og oversending av lønnsgrunnlag er ikke koblet til produksjon ennå. Tallene over er live fra registrert tid; ingenting lagres herfra.',
     });
   }
   // P2: the pure planning-economy projection over the SAME canonical stores (schedule + employment
   // terms). Recomputed on every render, never stored, never part of the payroll package.
   function planningEconomyForPeriod(periodId) {
-    return planningEconomyFor({ employeeStore: employeeStore(), scheduleStore: scheduleStore(), tenantId: FOUR_SEASON_TENANT.tenantId, periodId });
+    return planningEconomyFor({ employeeStore: employeeStore(), scheduleStore: scheduleStore(), tenantId: MGR.tenantId, periodId });
   }
   // P1: the SAME canonical schedule read the manual-time resolver uses (shiftsForEmployee over
   // the one store), plus the core's own planned-hours arithmetic per shift. Read-only; nothing is
   // copied anywhere and the view stores nothing.
   function plannedShiftsForPayroll(ansattId) {
-    return shiftsForEmployee(scheduleStore(), FOUR_SEASON_TENANT.tenantId, ansattId, FOUR_SEASON_MANAGER_ACTOR)
+    return shiftsForEmployee(scheduleStore(), MGR.tenantId, ansattId, MGR.actor)
       .map((s) => ({ shiftId: s.shiftId, projection: s.projection, hours: durationHoursOf(s.projection) }));
   }
 
@@ -1256,7 +1335,7 @@ export function mountEmployeeShell(root, options) {
   // runtime data the payroll projection reads, calls the ACCEPTED foundation operation, and writes
   // the returned canonical record into the SAME attendanceStore the employee surfaces write.
   // No arithmetic, no second store, no second derivation.
-  function manualScope() { return { tenantId: FOUR_SEASON_TENANT.tenantId }; }
+  function manualScope() { return { tenantId: MGR.tenantId }; }
   // The reason contract is READ from the live policy — the UI invents no reason truth.
   function managerReasonCodes() {
     const out = [];
@@ -1273,7 +1352,7 @@ export function mountEmployeeShell(root, options) {
   // core itself uses (management-payroll-core.mjs:170-171). Never a literal, never a re-derivation,
   // never read back from rendered text.
   function employmentOf(ansattId) {
-    const e = employeeOf(employeeStore(), FOUR_SEASON_TENANT.tenantId, ansattId);
+    const e = employeeOf(employeeStore(), MGR.tenantId, ansattId);
     if (!e) return null;
     return { startDate: startDateOf(e), endDate: e.status === 'active' ? null : (e.endedAt || null) };
   }
@@ -1283,7 +1362,7 @@ export function mountEmployeeShell(root, options) {
     return out;
   }
   function manualTimeContext({ ansattId, workDate }) {
-    const shifts = shiftsForEmployee(scheduleStore(), FOUR_SEASON_TENANT.tenantId, ansattId, FOUR_SEASON_MANAGER_ACTOR);
+    const shifts = shiftsForEmployee(scheduleStore(), MGR.tenantId, ansattId, MGR.actor);
     const target = manualTargetFor({ records: recordsForEmployee(ansattId), shifts, workDate });
     const hint =
       target.mode === 'correct' ? 'Dagen finnes allerede. Lagring korrigerer den registreringen.'
@@ -1302,6 +1381,17 @@ export function mountEmployeeShell(root, options) {
       })),
     };
   }
+  // Persist a manager manual entry / correction: production = the accepted attendance commit (REV3 revision law, server
+  // confirms, mirror follows the snapshot); preview = the in-memory Map, exactly as before.
+  function persistManualAttendance(res) {
+    if (attendanceStore && typeof attendanceStore.commit === 'function') {
+      return attendanceStore.commit(res, { create: res.attendance.revision === 1 })
+        .then(() => ({ ok: true }))
+        .catch((e) => ({ ok: false, code: (e && e.code) || 'COMMIT_FAILED' }));
+    }
+    attendanceStore.set(res.attendance.attendanceId, res.attendance);
+    return { ok: true };
+  }
   function submitManualTime(form) {
     const now = Date.now();
     const wd = form.workDate;
@@ -1315,7 +1405,7 @@ export function mountEmployeeShell(root, options) {
     if (declaredBreakMinutesTotal === null) return { ok: false, code: 'DECLARED_BREAK_INVALID' };
     const employment = employmentOf(form.ansattId);
     if (!employment) return { ok: false, code: 'EMPLOYMENT_REQUIRED' };
-    const shifts = shiftsForEmployee(scheduleStore(), FOUR_SEASON_TENANT.tenantId, form.ansattId, FOUR_SEASON_MANAGER_ACTOR);
+    const shifts = shiftsForEmployee(scheduleStore(), MGR.tenantId, form.ansattId, MGR.actor);
     const target = manualTargetFor({ records: recordsForEmployee(form.ansattId), shifts, workDate: wd });
 
     if (target.mode === 'choose_record') return { ok: false, code: 'RECORD_CHOICE_REQUIRED' };
@@ -1327,12 +1417,11 @@ export function mountEmployeeShell(root, options) {
       if (declaredEndAt !== target.record.declaredEndAt) patch.declaredEndAt = declaredEndAt;
       if (declaredBreakMinutesTotal !== target.record.declaredBreakMinutesTotal) patch.declaredBreakMinutesTotal = declaredBreakMinutesTotal;
       const res = managerCorrection({
-        actor: FOUR_SEASON_MANAGER_ACTOR, existing: target.record, patch,
+        actor: MGR.actor, existing: target.record, patch,
         reasonCode: form.reasonCode, reasonNote: form.reasonNote, scope: manualScope(),
       }, now, POLICY);
       if (!res.ok) return { ok: false, code: res.code };
-      attendanceStore.set(res.attendance.attendanceId, res.attendance);   // the ONE canonical store
-      return { ok: true };
+      return persistManualAttendance(res);   // the ONE canonical store
     }
     // ADD: M1 needs an unambiguous real shift; several candidates require an explicit choice.
     let shift = null;
@@ -1345,14 +1434,13 @@ export function mountEmployeeShell(root, options) {
       shift = Object.assign({ shiftId: target.shift.shiftId }, target.shift.projection);
     }
     const res = managerManualEntry({
-      actor: FOUR_SEASON_MANAGER_ACTOR, existing: null, shift,
+      actor: MGR.actor, existing: null, shift,
       ansattId: form.ansattId, workDate: wd,
       declaredStartAt, declaredEndAt, declaredBreakMinutesTotal,
       employment, reasonCode: form.reasonCode, reasonNote: form.reasonNote, scope: manualScope(),
     }, now, POLICY);
     if (!res.ok) return { ok: false, code: res.code };
-    attendanceStore.set(res.attendance.attendanceId, res.attendance);
-    return { ok: true };
+    return persistManualAttendance(res);
   }
 
   // ---- LØNNSGRUNNLAG (Increment 2): monthly payroll INPUT package ----------------------------
@@ -1360,14 +1448,14 @@ export function mountEmployeeShell(root, options) {
   // employee surfaces write, plus canonical employee/terms and the planned schedule for the
   // comparison column only. Local/demo runtime: a hard reload resets package state.
   function goLonnsgrunnlag() {
-    if (!canViewEmployees(FOUR_SEASON_MANAGER_ACTOR)) return goChooser();
+    if (!canViewEmployees(MGR.actor)) return goChooser();
     clear(root);
     managerChrome('Ledelse');
     const today = tenantWorkDate(Date.now(), TZ);
     renderPayrollView(root, {
       employeeStore: employeeStore(), scheduleStore: scheduleStore(), attendanceStore,
       payrollStore: payrollStore(),
-      tenantId: FOUR_SEASON_TENANT.tenantId, actor: FOUR_SEASON_MANAGER_ACTOR,
+      tenantId: MGR.tenantId, actor: MGR.actor,
       operatorName: operatorDisplayName(),          // claimed identity only — labelled unverified
       nowMs: Date.now(), timezone: TZ, todayWorkDate: today,
       initialPeriodId: today.slice(0, 7),
@@ -1377,18 +1465,19 @@ export function mountEmployeeShell(root, options) {
     });
   }
   function goVaktplanViewAs(ansattId) {
-    if (MODE !== 'preview' || !canOpenVaktplan(FOUR_SEASON_MANAGER_ACTOR)) return goChooser();
+    if ((MODE !== 'preview' && MODE !== 'management') || !canOpenVaktplan(MGR.actor)) return goChooser();
     clear(root);
-    const person = VAKTPLAN_PEOPLE.find((p) => p.ansattId === ansattId);
+    LEDELSE_MOUNT = null;
+    const person = (MODE === 'preview' ? VAKTPLAN_PEOPLE.find((p) => p.ansattId === ansattId) : null) || employeeOf(employeeStore(), MGR.tenantId, ansattId);
     managerChrome('Ledelse · ser som ' + (person ? person.name : ansattId));
     // Manager-shaped read of the target employee's shifts from the SAME store; the membership
     // object handed to the read-only schedule view is only the projection target descriptor.
-    const shifts = shiftsForEmployee(scheduleStore(), FOUR_SEASON_TENANT.tenantId, ansattId, FOUR_SEASON_MANAGER_ACTOR);
+    const shifts = shiftsForEmployee(scheduleStore(), MGR.tenantId, ansattId, MGR.actor);
     renderScheduleView(root, {
-      membership: { tenantId: FOUR_SEASON_TENANT.tenantId, ansattId },
-      tenantLabel: tenantLabel(FOUR_SEASON_TENANT.tenantId), shifts,
+      membership: { tenantId: MGR.tenantId, ansattId },
+      tenantLabel: tenantLabel(MGR.tenantId), shifts,
       nowMs: Date.now(), timezone: TZ, roleLabels: ROLE_LABELS,
-      onBack: () => goVaktplan(),
+      onBack: () => (MODE === 'management' ? goLedelse('vaktplan') : goVaktplan()),
     });
   }
 
@@ -1413,6 +1502,15 @@ export function mountEmployeeShell(root, options) {
   // production lands on the ONE validated membership or on the fail-closed panel. Nothing else.
   if (entry.kind === 'preview') route(entry.defaultUid);
   else if (entry.kind === 'production' && adapterCheck.ok) goToday(entry.membership);
+  else if (entry.kind === 'management' && adapterCheck.ok) {
+    // PRODUCTION LEDELSE: ONE workspace, lands on Oversikt; live redraw from the adapter mirrors; disposable by the host.
+    const off = ADAPTERS.onChange(() => ledelseRedraw());
+    goLedelse('oversikt');
+    return {
+      dispose: () => { try { off(); } catch (e) { /* idempotent */ } if (ledelseRedrawTimer) { clearTimeout(ledelseRedrawTimer); ledelseRedrawTimer = null; } LEDELSE_MOUNT = null; clear(root); },
+      actor: MGR.actor, tab: () => LEDELSE_TAB, go: (t) => goLedelse(t),
+    };
+  }
   else goDenied(entry.kind === 'denied' ? entry.code : DENIAL.ADAPTERS_MISSING);
 }
 
@@ -1421,6 +1519,19 @@ export function mountEmployeeShell(root, options) {
 export function mountEmployeePreview(root) { return mountEmployeeShell(root, { mode: 'preview' }); }
 export function mountEmployeeProduction(root, { identity, expectedTenantId, adapters } = {}) {
   return mountEmployeeShell(root, { mode: 'production', identity, expectedTenantId, adapters });
+}
+// PRODUCTION LEDELSE DOOR (Sormena Ledelse production integration): admin-only; identity = the ONE resolved membership;
+// adapters = createManagementAdapters (management-production-adapters.mjs) over the host capability. The accepted Ledelse
+// frame (Oversikt | Vaktplan | Ansatte | Lønn & økonomi) mounts unchanged; every write goes through the adapters.
+export function mountLedelseProduction(root, { identity, expectedTenantId, adapters } = {}) {
+  return mountEmployeeShell(root, { mode: 'management', identity, expectedTenantId, adapters });
+}
+// Tenant company-contract defaults (employer facts, representative, signing place, shared company facts) used ONLY when
+// tenants/{T}/_meta/contractProfile does not exist yet. Real Four Season AS configuration, not fixture people.
+export function tenantContractProfileDefault(tenantId) {
+  const p = JSON.parse(JSON.stringify(FOUR_SEASON_CONTRACT_PROFILE));
+  p.tenantId = tenantId;
+  return p;
 }
 
 // ---- PRODUCTION MANAGEMENT VAKTPLAN DOOR (Vaktplan bridge) ------------------------------------------------
@@ -1451,16 +1562,7 @@ export function mountManagementVaktplan(root, { identity, expectedTenantId, adap
   // Capability-shaped actor DERIVED from the membership (the frozen engine requires accessRole admin for writes).
   const actor = Object.freeze({ uid: m.uid, accessRole: 'admin', ansattId: typeof m.ansattId === 'string' && m.ansattId ? m.ansattId : null, accessEnabled: m.accessEnabled === true, tenantId: m.tenantId,
     canManageSchedule: true, canViewOwnSchedule: false, canViewEmployeeCore: false, canViewEmployeeCompensation: false, canEditEmployment: false });
-  const A = adapters.schedule.admin;
-  const applyOperation = ({ op }) => {
-    if (!op || typeof op !== 'object') return Promise.resolve({ ok: false, code: 'UNSUPPORTED_OPERATION' });
-    if (op.kind === 'create') return A.create({ workDate: op.workDate, ansattId: op.ansattId == null ? null : op.ansattId, fromHM: op.fromHM, toHM: op.toHM, roleKey: op.roleKey == null ? null : op.roleKey });
-    if (op.kind === 'revise') return A.revise(op.shiftId, { fromHM: op.fromHM, toHM: op.toHM });
-    if (op.kind === 'assign') return A.assign(op.shiftId, op.ansattId == null ? null : op.ansattId);
-    if (op.kind === 'unassign') return A.assign(op.shiftId, null);
-    if (op.kind === 'cancel') return A.cancel(op.shiftId);
-    return Promise.resolve({ ok: false, code: 'UNSUPPORTED_OPERATION' });
-  };
+  const applyOperation = scheduleOpVia(adapters.schedule.admin);
   clear(root);
   const handle = renderManagementView(root, {
     store: adapters.schedule.store(), tenantId: m.tenantId, tenantLabel: tenantLabel(m.tenantId),

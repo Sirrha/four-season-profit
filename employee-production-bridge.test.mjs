@@ -66,9 +66,16 @@ t('B2', 'shell: route() and goChooser() refuse outside preview; the identity but
   assert.ok(shellSrc.includes("idb.setAttribute('aria-label', MODE === 'preview' ? 'Bytt ansatt' : 'Innlogget');"));
   assert.ok(!/FIXTURE_USERS|FIXTURE_MEMBERSHIPS|resolveRouting/.test(strip(deniedFn)), 'the denied panel touches no fixture identity');
 });
-t('B3', 'shell: the Ledelse doorway and the fixture manager actor are preview-only', () => {
-  assert.ok(shellSrc.includes("if (MODE !== 'preview') return tabs;"));
-  assert.equal((shellSrc.match(/if \(MODE !== 'preview' \|\| !canOpenVaktplan\(FOUR_SEASON_MANAGER_ACTOR\)\) return goChooser\(\);/g) || []).length, 2);
+t('B3', 'shell: the Ledelse doorway exists in preview and in production MANAGEMENT only; the fixture manager actor never reaches a production path', () => {
+  assert.ok(shellSrc.includes("if (MODE !== 'preview' && MODE !== 'management') return tabs;"), 'tabs gated to preview | management (never the employee surface)');
+  assert.ok(shellSrc.includes("if (MODE !== 'preview' || !canOpenVaktplan(MGR.actor)) return goChooser();"), 'standalone Vaktplan destination stays preview-only');
+  // the fixture manager actor is referenced exactly three times: the import, the MGR default, and the PREVIEW binding
+  assert.equal((shellSrc.match(/FOUR_SEASON_MANAGER_ACTOR/g) || []).length, 3);
+  assert.ok(shellSrc.includes("if (MODE === 'management') { if (entry.kind === 'management') { MGR.actor = managementActorFrom(entry.membership); MGR.tenantId = entry.membership.tenantId; } }"), 'management identity is derived from the ONE resolved membership');
+  assert.ok(shellSrc.includes("else if (MODE === 'preview') { MGR.actor = FOUR_SEASON_MANAGER_ACTOR; MGR.tenantId = FOUR_SEASON_TENANT.tenantId; }"), 'fixture binding is the preview branch only');
+  assert.ok(!/DEFAULT_UID|FIXTURE_MEMBERSHIPS|FIXTURE_USERS/.test(shellSrc.slice(shellSrc.indexOf('function managementEntry('), shellSrc.indexOf('function scheduleOpVia('))), 'management entry reads no fixture');
+  assert.ok(shellSrc.includes("if (m.accessRole !== 'admin') return { kind: 'denied', code: DENIAL.IDENTITY_ROLE_INVALID };"), 'management entry is admin-only');
+  assert.ok(shellSrc.includes("if (MODE === 'management') return ledelseTabs().length ? goLedelse() : goDenied(DENIAL.IDENTITY_ROLE_INVALID);"), 'the chooser is never a management destination');
 });
 
 // ---- C: missing identity fails closed -----------------------------------------------------------
@@ -152,7 +159,8 @@ t('H2', 'shell/page: two structurally distinct doors; the preview page names pre
   assert.ok(shellSrc.includes("return mountEmployeeShell(root, { mode: 'production', identity, expectedTenantId, adapters });"));
   assert.ok(htmlSrc.includes('.then((m) => m.mountEmployeePreview(root))'));
   assert.ok(!htmlSrc.includes('m.mountEmployeeShell(root)'), 'the page no longer calls the generic mount');
-  assert.ok(mountHead.includes("const MODE = opts.mode === 'preview' || opts.mode === 'production' ? opts.mode : null;"));
+  assert.ok(mountHead.includes("const MODE = opts.mode === 'preview' || opts.mode === 'production' || opts.mode === 'management' ? opts.mode : null;"), 'three named modes, no default');
+  assert.ok(shellSrc.includes("export function mountLedelseProduction(root, { identity, expectedTenantId, adapters } = {}) {") && shellSrc.includes("return mountEmployeeShell(root, { mode: 'management', identity, expectedTenantId, adapters });"), 'the production Ledelse door names management explicitly');
   assert.ok(mountHead.includes("ADAPTERS = MODE === 'preview' ? createPreviewAdapters() : (adapterCheck.ok ? opts.adapters : null);"));
   assert.equal((shellSrc.match(/createPreviewAdapters\(\)/g) || []).length, 2, 'declared once, bound once (preview only)');
   assert.ok(htmlSrc.includes("get('emp') === '1'"), 'preview page keeps its explicit ?emp=1 gate');
@@ -203,12 +211,15 @@ t('J1', 'no fetch/XHR/WebSocket/Firestore call shape in runtime modules; the bri
   for (const f of runtimeModules) {
     const s = strip(read('./' + f));
     assert.ok(!netRe.test(s), f + ' contains a network/storage primitive');
-    if (f !== 'employee-production-adapters.mjs') assert.ok(!shapeRe.test(s), f + ' contains a Firestore call shape');
+    if (f !== 'employee-production-adapters.mjs' && f !== 'management-production-adapters.mjs') assert.ok(!shapeRe.test(s), f + ' contains a Firestore call shape');
   }
-  const adapterCode = strip(read('./employee-production-adapters.mjs'));
-  const shapes = adapterCode.match(/\b[A-Za-z_]+\.(doc|runTransaction|batch|listen|serverTimestamp)\(/g) || [];
-  assert.ok(shapes.length > 0 && shapes.every((s) => /^(fs|tx|b)\./.test(s)), 'adapter datastore calls are injected-capability calls only: ' + shapes.filter((s) => !/^(fs|tx|b)\./.test(s)).join(','));
-  assert.ok(!/\.collection\(|onSnapshot\(/.test(adapterCode), 'adapter never touches a Firestore SDK surface directly');
+  // BOTH governed adapter modules (employee + Ledelse management) obey the identical injected-capability law
+  for (const gov of ['employee-production-adapters.mjs', 'management-production-adapters.mjs']) {
+    const adapterCode = strip(read('./' + gov));
+    const shapes = adapterCode.match(/\b[A-Za-z_]+\.(doc|runTransaction|batch|listen|serverTimestamp|newId)\(/g) || [];
+    assert.ok(shapes.length > 0 && shapes.every((s) => /^(fs|tx|b)\./.test(s)), gov + ' datastore calls are injected-capability calls only: ' + shapes.filter((s) => !/^(fs|tx|b)\./.test(s)).join(','));
+    assert.ok(!/\.collection\(|onSnapshot\(|firebase|initializeApp/.test(adapterCode), gov + ' never touches a Firestore SDK surface directly');
+  }
   assert.ok(!/^\s*import\s/m.test(bridgeSrc), 'bridge has no imports');
   assert.deepEqual(JSON.parse(JSON.stringify(ADAPTER_CONTRACT)), { schedule: ['store'], attendance: ['get', 'set', 'has'], employees: ['store'] });
   assert.ok(!/['"`]tenants\/|['"`]memberships['"`]|['"`]ansatte['"`]|['"`]vakter['"`]|['"`]attendance['"`]\s*\)|\.collection\(/.test(strip(bridgeSrc)), 'bridge names no production path literal');
