@@ -21,10 +21,10 @@ import {
 import {
   CONTRACT_STATUS, contractInputsFor, contractReadinessOf, blocksForVersion,
   contractVersionsOf, draftVersionOf, contractStateOf, applyContractOperation,
-  applyCompanyContractOperation,
+  applyCompanyContractOperation, privateFieldsOf, formatContractPrivateField,
 } from './management-contract-core.mjs';
 import { payrollProjectionForEmployee } from './management-payroll-core.mjs';
-import { validatePrivatePatch, formatPrivateField } from './management-private-fields.mjs';   // release 019: pure validation / presentation of the two private fields
+import { validatePrivatePatch, validatePrivateField, formatPrivateField } from './management-private-fields.mjs';   // release 019: pure validation / presentation of the two private fields
 
 function el(tag, opts) {
   const node = document.createElement(tag);
@@ -70,6 +70,11 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
   let arbeidCorrectOpen = false; // Arbeidsforhold: the "Korriger gjeldende arbeidsforhold" form (feilregistrering, same period) is open (UI state only)
   let freezeConfirm = null;      // Step 4: { contractVersionId, inputs } captured when "Godkjenn og frys versjon" is pressed — the exact content under review (UI state only)
   let freezeBusy = false;        // a freeze request is in flight: the confirm control is disabled (no double submit)
+  // PRIVATE CONTRACT FIELDS (release 019B-R2) — the values themselves live on the contract DRAFT (core op setPrivateFields).
+  // `privSeen` is UI state only: the identity (version id + exact field values) of the draft the preview last showed.
+  // While the draft holds a private value, "Godkjenn og frys versjon" is offered only when the draft still equals what was
+  // previewed; any later edit of the two fields changes the identity and requires a new preview.
+  let privSeen = null;
   let corrDraft = null;          // transient typed correction values kept across a refused save's redraw; the ONE truth stays the terms
   let companyDraft = null;      // transient unsaved editor values; the ONE truth stays contractProfile
   // PRIVATE FIELDS (release 019) — UI state only, never persisted. `priv.shown[k]` holds a full value ONLY while the
@@ -126,6 +131,8 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     if (code === 'VERSION_UNKNOWN' || code === 'VERSION_NOT_DRAFT') return 'Denne avtaleversjonen er ikke et utkast og kan ikke endres.';
     if (code === 'PERSONNUMMER_INVALID') return 'Fødselsnummer må være nøyaktig 11 siffer.';
     if (code === 'BANKKONTO_INVALID') return 'Kontonummer må være nøyaktig 11 siffer.';
+    if (code === 'PRIVATE_FIELDS_CHANGED') return 'Fødselsnummer eller kontonummer i avtalen er endret siden gjennomgangen. Åpne forhåndsvisningen og se gjennom avtalen på nytt før du fryser.';
+    if (code === 'PRIVATE_FIELDS_INVALID') return 'Feltene kunne ikke lagres. Prøv igjen.';
     if (code === 'PRIVATE_FIELDS_NO_CHANGE') return 'Ingen ny verdi er skrevet inn. Fyll ut feltet som skal registreres eller erstattes.';
     return 'Kunne ikke lagre (' + code + ').';
   }
@@ -143,6 +150,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     const settle = (res) => {
       freezeBusy = false;
       if (res && (res.code === 'CONTRACT_INPUTS_CHANGED' || res.code === 'ALREADY_FROZEN' || res.code === 'NOT_READY')) freezeConfirm = null;
+      if (res && res.code === 'PRIVATE_FIELDS_CHANGED') { freezeConfirm = null; privSeen = null; }   // a new preview is required
       if (res && res.ok) { errMsg = ''; if (typeof after === 'function') after(res); }
       else if (res && res.code === 'NOT_READY') errMsg = 'Kan ikke fryses ennå: ' + (res.missing || []).map((m) => m.label).join(', ') + ' mangler.';
       else if (res && res.code === 'TERMS_PERIOD_FROZEN_IN_CONTRACT') errMsg = 'Perioden er låst av en frosset avtale. Legg til en ny periode i stedet.';
@@ -153,6 +161,12 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     let res; try { res = run({ store: employeeStore, tenantId, actor, op, profile: contractProfile, now: Date.now(), onDate: todayWd, roleLabels }); } catch (e) { settle(coreErr(e)); return; }
     if (res && typeof res.then === 'function') res.then(settle, (e) => settle(coreErr(e))); else settle(res);
   }
+  const CPRIV = [
+    { key: 'fodselsnummer', label: 'Fødselsnummer', vkey: 'personnummer', short: 'fødselsnummer' },
+    { key: 'bankkonto', label: 'Kontonummer', vkey: 'bankkonto', short: 'kontonummer' },
+  ];
+  const privNames = (pf) => CPRIV.filter((f) => pf[f.key]).map((f) => f.short).join(' og ');
+  const privIdOf = (e) => { const d = draftVersionOf(e); return d ? d.contractVersionId + '|' + JSON.stringify(privateFieldsOf(d)) : ''; };
   const inputsFor = (e) => contractInputsFor({ employee: e, profile: contractProfile, onDate: todayWd, roleLabels });
   const readinessFor = (e) => contractReadinessOf(inputsFor(e));
   function btn(label, cls, onClick) {
@@ -731,26 +745,47 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       card.appendChild(field('E-post (valgfri)', email));
       card.appendChild(field('Telefon (valgfri)', phone));
       card.appendChild(field('Arbeidssted', wp));
-      // SECURITY-DEFERRED design elements: future placement only. Disabled, non-collecting,
-      // never persisted — they activate only after the Login/Security module.
-      const locked = (label) => {
-        const i = textInput('', 'Aktiveres etter sikkerhetsmodul');
-        i.setAttribute('disabled', 'disabled');
-        i.setAttribute('aria-disabled', 'true');
-        const w = field(label, i);
-        w.className = 'emp-locked';
-        return w;
-      };
-      card.appendChild(locked('Fødselsnummer'));
-      card.appendChild(locked('Kontonummer'));
-      card.appendChild(el('div', { cls: 'vp-note', text: 'Arbeidssted lagres i arbeidsforholdet, ikke som en egen kopi på ansattkortet. Fødselsnummer og kontonummer samles ikke inn nå – feltene aktiveres først etter sikkerhetsmodulen.' }));
-      card.appendChild(el('div', { cls: 'vp-err', text: errMsg }));
+      // FØDSELSNUMMER + KONTONUMMER (release 019B-R2): the two formerly locked placeholders are now real, OPTIONAL fields of
+      // THIS contract draft. They show the draft's own values (prefilled once from Person- og lønnsopplysninger when the
+      // version was created), may be edited or cleared, and are saved with "Lagre og fortsett" through the contract
+      // boundary (setPrivateFields) — never onto the employee's master data. Non-empty = part of the agreement; empty =
+      // omitted. The value is set as the input's live value only (no attribute, dataset or title carries it).
+      const draft1 = draftVersionOf(e);
+      const pf1 = privateFieldsOf(draft1);
+      const privIn = {};
+      if (draft1) {
+        for (const f of CPRIV) {
+          const i = textInput(null, '11 siffer (valgfritt)');
+          for (const [a, v] of [['autocomplete', 'off'], ['autocorrect', 'off'], ['autocapitalize', 'off'], ['spellcheck', 'false'], ['inputmode', 'numeric'], ['maxlength', '20'], ['data-lpignore', 'true'], ['data-1p-ignore', 'true']]) i.setAttribute(a, v);
+          i.value = formatContractPrivateField(f.key, pf1[f.key]);
+          privIn[f.key] = i;
+          card.appendChild(field(f.label, i));
+        }
+      }
+      card.appendChild(el('div', { cls: 'vp-note', text: 'Arbeidssted lagres i arbeidsforholdet, ikke som en egen kopi på ansattkortet. Fødselsnummer og kontonummer er valgfrie: de hentes fra Person- og lønnsopplysninger når tilgjengelig, og endringer her gjelder bare denne avtalen. Et tomt felt tas ikke med i avtalen.' }));
+      const err1 = el('div', { cls: 'vp-err', text: errMsg });
+      card.appendChild(err1);
       card.appendChild(btn('Lagre og fortsett', 'btn primary', () => {
+        // private fields first: blank = clear, otherwise exactly 11 digits; a refusal names the field only and keeps the form as typed
+        err1.textContent = '';
+        const privPatch = {};
+        for (const f of CPRIV) {
+          const i = privIn[f.key];
+          if (!i) continue;
+          if (i.value.trim() === '') { if (pf1[f.key]) privPatch[f.key] = ''; continue; }
+          const r = validatePrivateField(f.vkey, i.value);
+          if (!r.ok) { err1.textContent = opError(r.code); return; }
+          if (r.value !== pf1[f.key]) privPatch[f.key] = r.value;
+        }
         const anyAddress = street.value.trim() !== '' || postal.value.trim() !== '' || city.value.trim() !== '';
         const patch = { email: email.value.trim() || null, phone: phone.value.trim() || null, birthDate: bd.value || null };
         if (anyAddress) patch.address = { street: street.value, postalCode: postal.value, city: city.value };
         const wpPatch = termsPatchFrom({ workplace: () => (cur && cur.workplace ? '' : wp.value.trim()) });
-        apply({ kind: 'updateContact', ansattId: e.ansattId, contact: patch }, () => saveTerms(e, wpPatch, 2));
+        const next = () => saveTerms(e, wpPatch, 2);
+        apply({ kind: 'updateContact', ansattId: e.ansattId, contact: patch }, () => {
+          if (Object.keys(privPatch).length) applyC({ kind: 'setPrivateFields', ansattId: e.ansattId, contractVersionId: draft1.contractVersionId, fields: privPatch }, next);
+          else next();
+        });
       }));
     } else if (step === 2) {
       card.appendChild(el('div', { cls: 'kicker', text: '2. Arbeidsforhold' }));
@@ -809,6 +844,14 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       card.appendChild(el('div', { style: 'font-weight:800;font-size:15px', text: rd.label }));
       card.appendChild(el('div', { cls: 'vp-note', text: rd.note }));
       if (rd.missing.length) card.appendChild(miss(rd.missing.map((m) => m.label)));
+      // Private contract fields (release 019B-R2): no controls and no values here — only a note, and the rule that a draft
+      // holding such a value is approved from what the preview showed (same version, same values).
+      const pf4 = privateFieldsOf(draftVersionOf(e));
+      const hasPriv = Object.keys(pf4).length > 0;
+      const previewed = !hasPriv || privSeen === privIdOf(e);
+      if (hasPriv) card.appendChild(el('div', { cls: 'cue-line emp-priv-note', text: previewed
+        ? 'Avtalen inneholder registrerte personopplysninger (' + privNames(pf4) + '), slik de ble vist i forhåndsvisningen.'
+        : 'Avtalen inneholder registrerte personopplysninger (' + privNames(pf4) + '). Kontroller forhåndsvisningen før godkjenning – åpne «Forhåndsvis avtalen».' }));
       card.appendChild(el('div', { cls: 'vp-err', text: errMsg }));
       const acts = el('div', { cls: 'vp-actions' });
       acts.appendChild(btn('Forhåndsvis avtalen', 'btn secondary', () => { previewVersionId = null; page = 'preview'; errMsg = ''; draw(); }));
@@ -817,7 +860,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       // re-derives completeness and the inputs from the authoritative records inside the transaction and refuses any drift.
       const draftV = draftVersionOf(e);
       const confirming = !!(freezeConfirm && draftV && freezeConfirm.contractVersionId === draftV.contractVersionId);
-      if (draftV && rd.ready && !confirming) {
+      if (draftV && rd.ready && !confirming && previewed) {
         acts.appendChild(btn('Godkjenn og frys versjon', 'btn primary', () => { freezeConfirm = { contractVersionId: draftV.contractVersionId, inputs: JSON.parse(JSON.stringify(inputsFor(e))) }; errMsg = ''; draw(); }));
       }
       // Explicit draft-save exposure: the draft already lives in the employee store (resumable,
@@ -862,6 +905,14 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     const back = btn('← Tilbake', 'btn tertiary', () => { page = version ? 'card' : 'contract'; if (version) section = 'kontrakt'; errMsg = ''; draw(); });
     back.style.cssText = 'width:auto;padding:4px 0;min-height:0;margin-bottom:10px';
     root.appendChild(back);
+    // A DRAFT preview with private contract fields records exactly what it showed (release 019B-R2); screen-only notice.
+    if (!version) {
+      const pfP = privateFieldsOf(draftVersionOf(e));
+      if (Object.keys(pfP).length) {
+        privSeen = privIdOf(e);
+        root.appendChild(el('div', { cls: 'vp-note emp-priv-note', text: 'Denne avtalen inneholder ' + privNames(pfP) + '. Kontroller opplysningene under – de låses i avtalen når den fryses.' }));
+      }
+    }
     // Skriv ut / Lagre som PDF — ONE renderer, ONE contract truth: both actions print exactly
     // the rendered pages below via the browser (PDF = the print dialog's "Lagre som PDF").
     // Printing mutates nothing — no freeze, no status change, no second document pipeline.
@@ -994,7 +1045,8 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       for (const v of versions.slice().reverse()) {
         const row = el('div', { cls: 'emp-period' });
         row.appendChild(el('div', { cls: 'rg', text: v.contractVersionId + ' · ' + (v.status === CONTRACT_STATUS.FROZEN ? 'Godkjent og frosset – ikke signert · historisk og uforanderlig' : 'Utkast – redigerbart') }));
-        row.appendChild(el('div', { cls: 'bits', text: [v.kind, 'mal ' + v.templateVersion, v.frozenAt ? new Date(v.frozenAt).toLocaleDateString('nb-NO') : null, v.supersedes ? 'erstatter ' + v.supersedes : null].filter(Boolean).join(' · ') }));
+        const vPriv = privateFieldsOf(v);   // which private fields the version holds — names only, never a value
+        row.appendChild(el('div', { cls: 'bits', text: [v.kind, 'mal ' + v.templateVersion, v.frozenAt ? new Date(v.frozenAt).toLocaleDateString('nb-NO') : null, v.supersedes ? 'erstatter ' + v.supersedes : null, Object.keys(vPriv).length ? 'inneholder ' + privNames(vPriv) : null].filter(Boolean).join(' · ') }));
         // Every historical version stays viewable (and printable from the preview) — a frozen
         // version renders from its own snapshot, a draft from live canonical facts.
         const vb = btn('Vis', 'btn tertiary', () => { previewVersionId = v.status === CONTRACT_STATUS.FROZEN ? v.contractVersionId : null; page = 'preview'; errMsg = ''; draw(); });
@@ -1128,7 +1180,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       const acts = el('div', { cls: 'vp-actions' });
       acts.appendChild(btn('Rediger person- og lønnsopplysninger', 'btn secondary', () => { priv.shown = { personnummer: null, bankkonto: null }; priv.edit = true; priv.draft = { personnummer: '', bankkonto: '' }; priv.err = ''; priv.ok = ''; draw(); }));
       card.appendChild(acts);
-      card.appendChild(el('div', { cls: 'vp-note', text: 'Bare ledelsen ser disse opplysningene. De vises maskert til du velger «Vis», og de er ikke synlige for den ansatte, i ansattlisten, i vaktplanen eller i arbeidsavtalen.' }));
+      card.appendChild(el('div', { cls: 'vp-note', text: 'Bare ledelsen ser disse opplysningene. De vises maskert til du velger «Vis», og de er ikke synlige for den ansatte, i ansattlisten eller i vaktplanen. En ny arbeidsavtale henter dem som forslag i feltene Fødselsnummer og Kontonummer; der kan de endres eller fjernes for den avtalen.' }));
       root.appendChild(card);
       return;
     }

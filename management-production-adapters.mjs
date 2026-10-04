@@ -244,7 +244,11 @@ export function createManagementAdapters(options) {
       const tenant = { [op.ansattId]: normalizeAnsatt(op.ansattId, prev) };
       const now = nowMs();
       const x = extra || {};
-      const res = applyContractOperation({ store: { [T]: tenant }, tenantId: T, actor: adminActor(), op, profile: prof, now, onDate: x.onDate || todayWd(), roleLabels: x.roleLabels, requireReviewedInputs: freeze });
+      // Release 019B-R2: a NEW contract version is prefilled ONCE with the employee's private master values, read from the
+      // SAME transaction read of the employee document. From then on the draft's own fields are the agreement's truth: no
+      // other contract operation reads the master values, and none ever writes them.
+      const privateValues = op.kind === 'startDraft' ? { fodselsnummer: storedDigits('personnummer', privateRaw(prev, 'personnummer')), bankkonto: storedDigits('bankkonto', privateRaw(prev, 'bankkonto')) } : undefined;
+      const res = applyContractOperation({ store: { [T]: tenant }, tenantId: T, actor: adminActor(), op, profile: prof, now, onDate: x.onDate || todayWd(), roleLabels: x.roleLabels, requireReviewedInputs: freeze, privateValues });
       if (!res.ok) { const err = adapterError(ADAPTER_ERROR.CORE_REFUSED, res.code); err.coreResult = res; throw err; }
       const rec = tenant[op.ansattId];
       const write = ansattWriteFor('contract:' + op.kind, rec, prev, now, todayWd());
@@ -257,7 +261,9 @@ export function createManagementAdapters(options) {
   // ---- PRIVATE employee fields (release 019): fødselsnummer + bankkonto --------------------------------------------
   // The EXISTING legacy fields `personnummer` / `bankkonto` on the canonical admin-only ansatte document are the one
   // home (no e360 copy, no migration). They are NOT part of normalizeAnsatt's record, so nothing that reads the Employee
-  // 360 store (list, search, Oversikt, Vaktplan, payroll, contract inputs, employeeSelf) can carry them. Three operations:
+  // 360 store (list, search, Oversikt, Vaktplan, payroll, employeeSelf) can carry them. The ONE exception (release
+  // 019B-R2) is a contract version: applyContract prefills a NEW draft's optional Fødselsnummer / Kontonummer fields from
+  // them once, after which the draft (and later its frozen snapshot) holds its own copy. Three operations:
   //   maskedPrivateEmployeeFields(id)  sync, from the host mirror: { key: { present, regular, masked } } — never a value
   //   readPrivateEmployeeFields(id)    explicit reveal / edit: ONE authoritative read of the document; resolves
   //                                    { personnummer, bankkonto } (11 digits, the stored text if irregular, or null)

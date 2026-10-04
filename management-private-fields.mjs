@@ -2,7 +2,9 @@
 // Pure, import-free. The two values live ONLY on the canonical admin-only document tenants/{T}/ansatte/{ansattId} in the
 // EXISTING legacy fields `personnummer` and `bankkonto` (no parallel e360 copy, no migration, no duplication). They are
 // never part of the normalized Employee 360 record, the employee list, Oversikt, Vaktplan, payroll, the employeeSelf
-// projection, contract inputs / frozen snapshots or anything signing-related.
+// projection or any signing metadata. A contract version may carry its OWN copy (release 019B-R2: management-contract-core
+// OPTIONAL_PRIVATE_FIELDS): a new draft's optional Fødselsnummer / Kontonummer fields are prefilled once from here, are
+// then edited or cleared on the draft only, and a non-empty field is frozen into that version's snapshot.
 // Validation is deliberately STRUCTURAL only (exactly 11 digits): no date / checksum rule that could reject a legitimate
 // D-number, H-number or special account form. Nothing here logs, and no result object ever carries a rejected value.
 

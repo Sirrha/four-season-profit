@@ -19,8 +19,8 @@
     {
       "name": "management-contract-core.mjs",
       "source": "management-contract-core.mjs",
-      "sha256": "57600d04134ddc8eca60b8e923fd6d826ff8cfbf398e7404b503dc37e05bd18c",
-      "bytes": 30281
+      "sha256": "7bfcf9f63bbe8a2dfb6e9ee48b848f10e355608695b9856fe8258fb6fd24fa61",
+      "bytes": 36813
     },
     {
       "name": "management-employees-core.mjs",

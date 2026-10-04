@@ -13,7 +13,7 @@ import { ADAPTER_ERROR } from './employee-production-adapters.mjs';
 import { ETR2A_POLICY as POLICY } from './employee-shell-core.mjs';
 import { employeesOf, employeeOf, vaktplanPeopleFrom, missingInfoOf } from './management-employees-core.mjs';
 import { projectEmployeeSelf, validateEmployeeSelfDoc, EMPLOYEE_SELF_FORBIDDEN } from './employee-self-projection.mjs';
-import { contractInputsFor, renderContractBlocks, TEMPLATE_FIELDS, FUTURE_SECURE_FIELDS } from './management-contract-core.mjs';
+import { contractInputsFor, renderContractBlocks, TEMPLATE_FIELDS, OPTIONAL_PRIVATE_FIELDS } from './management-contract-core.mjs';
 import { FOUR_SEASON_CONTRACT_PROFILE } from './employee-schedule-fixture.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -173,7 +173,7 @@ await t('PF10', 'L. list / search / Oversikt / Vaktplan / payroll inputs carry n
   assert.equal(JSON.stringify(M.employees.store()), snap, 'a private update is invisible to the Employee 360 store');
   M.dispose();
 });
-await t('PF11', 'no employee/contract operation ever writes a private field: ansattWriteFor for every operation kind has neither key; Ny ansatt creates them EMPTY (never invented); updateContact / contract operations on a document that holds values leave them untouched', async () => {
+await t('PF11', 'no employee/contract operation ever writes a private field: ansattWriteFor for every operation kind has neither key; Ny ansatt creates them EMPTY (never invented); updateContact / contract operations on a document that holds values leave them untouched (since release 019B-R2 a NEW contract draft holds its own prefilled copy under contractVersions[].privateFields — the only place in the e360 block)', async () => {
   const rec = normalizeAnsatt(A1, legacyDoc({ personnummer: PNR, bankkonto: KTO }));
   for (const kind of ['createEmployee', 'updateContact', 'appendTerms', 'completeCurrentTerms', 'correctCurrentTerms', 'endEmployee', 'addDocument', 'contract:startDraft', 'contract:freezeVersion']) {
     const w = ansattWriteFor(kind, rec, null, 1, '2026-10-03');
@@ -184,9 +184,12 @@ await t('PF11', 'no employee/contract operation ever writes a private field: ans
   const M = build(F); M.start();
   await M.employees.apply({ kind: 'updateContact', ansattId: A1, contact: { phone: '40000001' } });
   await M.employees.applyContract({ kind: 'startDraft', ansattId: A1 }, M.contractProfile.get() || FOUR_SEASON_CONTRACT_PROFILE, {});
-  for (const w of F.writes) { assert.ok(!('personnummer' in w.data) && !('bankkonto' in w.data)); assert.ok(!hasSecret(JSON.stringify(w.data))); }
+  for (const w of F.writes) { assert.ok(!('personnummer' in w.data) && !('bankkonto' in w.data)); assert.deepEqual(Object.keys(w.data).filter((k) => k !== E360_KEY && k !== 'epost' && k !== 'adresse'), []); }
+  assert.ok(!hasSecret(JSON.stringify(F.writes[0].data)), 'updateContact carries no private value');
   assert.equal(F.docs.get(P(A1)).personnummer, PNR); assert.equal(F.docs.get(P(A1)).bankkonto, KTO);
-  assert.ok(!hasSecret(JSON.stringify(F.docs.get(P(A1))[E360_KEY])), 'the e360 block (incl. the contract draft) holds no private value');
+  const e360 = F.docs.get(P(A1))[E360_KEY];
+  assert.deepEqual(e360.contractVersions[0].privateFields, { fodselsnummer: PNR, bankkonto: KTO }, 'the new draft is prefilled with its own copy');
+  assert.ok(!hasSecret(JSON.stringify(Object.assign({}, e360, { contractVersions: e360.contractVersions.map((v) => Object.assign({}, v, { privateFields: undefined })) }))), 'nowhere else in the e360 block');
   M.dispose();
 });
 await t('PF12', 'M. employeeSelf never contains them: the projection of a record (even one POISONED with both keys) has neither key nor value; both names are in EMPLOYEE_SELF_FORBIDDEN; the validator refuses a document that carries either; the adapter projection writer path is derived from the normalized record only', async () => {
@@ -210,9 +213,9 @@ await t('PF12', 'M. employeeSelf never contains them: the projection of a record
   const empSrc = ['employee-production-adapters.mjs', 'employee-production-bridge.mjs', 'employee-myjob.mjs', 'employee-schedule-view.mjs', 'employee-schedule-week.mjs', 'employee-schedule-month.mjs', 'employee-shell-core.mjs'].map((f) => fs.readFileSync(path.join(HERE, f), 'utf8').replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')).join('\n');
   assert.ok(!/personnummer|bankkonto|privateFields/.test(empSrc), 'the employee self-service modules never name the private fields');
 });
-await t('PF13', 'Q. contract unchanged: contractInputsFor + renderContractBlocks give byte-identical output for the same employee with and without the private values on the document; neither value is a template field (FUTURE_SECURE_FIELDS still collectible:false); a frozen snapshot produced through the adapter holds neither value', async () => {
+await t('PF13', 'Q. contract unchanged: contractInputsFor + renderContractBlocks give byte-identical output for the same employee with and without the private values on the document; neither value is a template field (since release 019B-R2 they are OPTIONAL_PRIVATE_FIELDS of the contract draft — proven in management-contract-private-fields.test.mjs); a frozen snapshot produced through the adapter with both contract fields CLEARED holds neither value', async () => {
   assert.ok(!TEMPLATE_FIELDS.some((f) => /personnummer|bankkonto|fodselsnummer|bankAccount/i.test(f.key)));
-  assert.deepEqual(FUTURE_SECURE_FIELDS.filter((f) => f.key === 'fodselsnummer' || f.key === 'bankAccount').map((f) => [f.secure, f.collectible]), [[true, false], [true, false]]);
+  assert.deepEqual(OPTIONAL_PRIVATE_FIELDS.map((f) => [f.key, f.secure, f.optional]), [['fodselsnummer', true, true], ['bankkonto', true, true]]);
   const e360 = { name: 'Test Ansatt 01', status: 'active', startDate: '2026-08-01', contact: { email: null, phone: '40000000', address: { street: 'Testveien 1', postalCode: '2815', city: 'Gjøvik' }, birthDate: '1995-04-12' }, terms: [{ validFrom: '2026-08-01', role: 'butikkmedarbeider', employmentType: 'deltid', employmentForm: 'fast', percentage: 50, compensation: { model: 'timelonn', hourlyRate: 210 }, workplace: 'Four Season Gjøvik', expectedWeeklyHours: 18.75, workingTimeArrangement: 'Arbeidstid etter vaktplan', probation: 'ingen', noticePeriod: '1 måned', breaksArrangement: '30', scheduleChangeHandling: 'Varsles 14 dager før', paymentInterval: 'manedlig' }], documents: [], contractVersions: [], rev: 3 };
   const profile = JSON.parse(JSON.stringify(FOUR_SEASON_CONTRACT_PROFILE)); profile.companyFacts = { salaryPaymentArrangement: 'Den 15. hver måned', pension: { applies: true, provider: 'Testpensjon' }, occupationalInjuryInsurance: { applies: true, insurer: 'Testforsikring' }, tariffavtale: { applies: false, agreementName: null, parties: null } };
   const render = (d) => { const emp = normalizeAnsatt(A1, d); const inputs = contractInputsFor({ employee: emp, profile, onDate: '2026-10-03', roleLabels: {} }); return JSON.stringify({ inputs, blocks: renderContractBlocks(inputs, {}) }); };
@@ -222,7 +225,9 @@ await t('PF13', 'Q. contract unchanged: contractInputsFor + renderContractBlocks
   const F = makeFakeFs(); F.seed(P(A1), legacyDoc({ [E360_KEY]: e360, personnummer: PNR, bankkonto: KTO })); F.seed('tenants/' + T + '/_meta/contractProfile', profile);
   const M = build(F); M.start(); await M.contractProfile.load();
   const started = await M.employees.applyContract({ kind: 'startDraft', ansattId: A1 }, M.contractProfile.get(), {});
-  const emp = M.employees.store()[T][A1]; const vid = emp.contractVersions[0].contractVersionId;
+  const vid = M.employees.store()[T][A1].contractVersions[0].contractVersionId;
+  await M.employees.applyContract({ kind: 'setPrivateFields', ansattId: A1, contractVersionId: vid, fields: { fodselsnummer: '', bankkonto: '' } }, M.contractProfile.get(), {});
+  const emp = M.employees.store()[T][A1];
   const inputs = contractInputsFor({ employee: emp, profile: M.contractProfile.get(), onDate: undefined, roleLabels: undefined });
   let frozen = null; try { frozen = await M.employees.applyContract({ kind: 'freezeVersion', ansattId: A1, contractVersionId: vid, expectedInputs: JSON.parse(JSON.stringify(inputs)) }, M.contractProfile.get(), {}); } catch (e) { frozen = e; }
   const stored = F.docs.get(P(A1));
@@ -232,15 +237,17 @@ await t('PF13', 'Q. contract unchanged: contractInputsFor + renderContractBlocks
   assert.equal(stored.personnummer, PNR); assert.equal(stored.bankkonto, KTO);
   M.dispose();
 });
-await t('PF14', 'R. signing / BankID input unchanged: no file under functions/ (src, shared, scripts, index) reads either field — the only mentions are the evidence REDACTION key list; the signing packaging manifest lists no private-field module; live smoke authorization stays closed', () => {
+await t('PF14', 'R. signing / BankID input unchanged: no file under functions/ (src, scripts, index) reads either field — the only mention is the evidence REDACTION key list; in functions/shared only the byte-exact packaged contract core names them (release 019B-R2 optional contract fields = document content); the signing packaging manifest lists no private-field module; live smoke authorization stays closed', () => {
   const root = path.join(HERE, 'functions');
   const files = [];
   for (const d of ['src', 'shared', 'scripts']) for (const f of fs.readdirSync(path.join(root, d))) if (/\.mjs$/.test(f)) files.push(path.join(d, f));
   files.push('index.mjs');
   const hits = [];
   for (const f of files) { const src = fs.readFileSync(path.join(root, f), 'utf8'); src.split('\n').forEach((line, i) => { if (/personnummer|bankkonto|management-private-fields|privateFields/.test(line)) hits.push(f.replace(/\\/g, '/') + ':' + (i + 1) + ':' + line.trim().slice(0, 60)); }); }
-  assert.equal(hits.length, 1, JSON.stringify(hits));
-  assert.ok(hits[0].startsWith('src/live-smoke-evidence.mjs:') && hits[0].includes('SECRET_KEYS'), hits[0]);
+  const own = hits.filter((h) => !h.startsWith('shared/management-contract-core.mjs:'));
+  assert.equal(own.length, 1, JSON.stringify(own));
+  assert.ok(own[0].startsWith('src/live-smoke-evidence.mjs:') && own[0].includes('SECRET_KEYS'), own[0]);
+  assert.equal(fs.readFileSync(path.join(root, 'shared', 'management-contract-core.mjs'), 'utf8'), fs.readFileSync(path.join(HERE, 'management-contract-core.mjs'), 'utf8'));
   const manifest = fs.readFileSync(path.join(root, 'shared', 'MANIFEST.json'), 'utf8');
   assert.ok(!/private-fields/.test(manifest));
   const gate = fs.readFileSync(path.join(root, 'src', 'live-smoke-gate.mjs'), 'utf8');

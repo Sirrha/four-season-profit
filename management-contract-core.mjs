@@ -9,8 +9,11 @@
 // version stores only what has no other home — identity, provenance, status — plus, AT FREEZE, a
 // value SNAPSHOT of everything the rendered agreement contains.
 //
-// C1: no fødselsnummer / bank / tax-card / signer identifier is collected, modelled or rendered
-//     as a placeholder — those belong to a later signing boundary. C4: readiness is a TEMPLATE
+// C1: no tax-card / signer identifier is collected, modelled or rendered as a placeholder — those
+//     belong to a later signing boundary. Fødselsnummer and kontonummer (release 019B-R2) are
+//     OPTIONAL CONTRACT FIELDS of the draft version itself (see OPTIONAL_PRIVATE_FIELDS): the two
+//     facts that DO live on the contract version, because they are what THIS agreement says —
+//     non-empty = part of the agreement, empty = omitted. C4: readiness is a TEMPLATE
 //     fact ("alle malfelter utfylt"), never a claim of legal completeness or compliance.
 // FREEZE IS LOAD-BEARING: after freeze the agreement renders from the snapshot only — live terms
 // are never re-dereferenced, so changing employment terms afterwards cannot move a frozen version.
@@ -72,15 +75,44 @@ export const TEMPLATE_FIELDS = Object.freeze([
 ]);
 // Declared future SECURE fields — never collected, never rendered in v1 (C1).
 export const FUTURE_SECURE_FIELDS = Object.freeze([
-  { key: 'fodselsnummer', secure: true, collectible: false },
-  { key: 'bankAccount', secure: true, collectible: false },
   { key: 'taxCard', secure: true, collectible: false },
 ]);
+// OPTIONAL PRIVATE CONTRACT FIELDS (release 019B-R2) — the two formerly declared-only secure fields, now real, optional
+// inputs of the contract draft (step 1: Fødselsnummer, Kontonummer). Never a template requirement (not in
+// TEMPLATE_FIELDS, never part of readiness). The value is stored ON THE DRAFT VERSION (`privateFields`), is prefilled
+// ONCE — when the version is created — from the employee's private master value (`prefillFrom`, handed in by the caller
+// as `privateValues`), and from then on belongs to this agreement only: editing or clearing it never touches the
+// employee's master data, and a later master change never touches the draft. Non-empty = rendered and frozen into the
+// snapshot; empty = omitted entirely.
+export const OPTIONAL_PRIVATE_FIELDS = Object.freeze([
+  { key: 'fodselsnummer', label: 'Fødselsnummer', secure: true, collectible: true, optional: true, prefillFrom: 'personnummer', invalidCode: 'PERSONNUMMER_INVALID' },
+  { key: 'bankkonto', label: 'Bankkonto for lønnsutbetaling', secure: true, collectible: true, optional: true, prefillFrom: 'bankkonto', invalidCode: 'BANKKONTO_INVALID' },
+]);
+const PRIVATE_KEYS = OPTIONAL_PRIVATE_FIELDS.map((f) => f.key);
+const privDigits = (v) => (typeof v === 'string' && /^\d{11}$/.test(v) ? v : null);   // structural only: exactly 11 digits
+// Typed text -> 11 digits: spaces are accepted for both, the customary dots (1234.56.78903) for the account.
+const privNormalize = (key, v) => (key === 'bankkonto' ? v.replace(/[\s.]/g, '') : v.replace(/\s/g, ''));
+// The private values a version carries, as { fodselsnummer?, bankkonto? } (11 digits; absent = empty). A DRAFT reads its
+// own editable fields; a FROZEN version reads its own snapshot. Never the employee's master data.
+export function privateFieldsOf(version) {
+  const src = !version ? null : (version.status === CONTRACT_STATUS.FROZEN ? (version.snapshot && version.snapshot.privateFields) : version.privateFields);
+  const out = {};
+  for (const k of PRIVATE_KEYS) { const d = privDigits(src && src[k]); if (d) out[k] = d; }
+  return out;
+}
+// Readable presentation of the stored 11 digits: DDMMYY 12345 and 1234.56.78903.
+export function formatContractPrivateField(key, digits) {
+  const d = privDigits(digits);
+  if (!d || !PRIVATE_KEYS.includes(key)) return '';
+  return key === 'fodselsnummer' ? d.slice(0, 6) + ' ' + d.slice(6) : d.slice(0, 4) + '.' + d.slice(4, 6) + '.' + d.slice(6);
+}
 
 const PAYMENT_LABELS = { 'manedlig': 'Månedlig', 'hver-14-dag': 'Hver 14. dag' };
 
 // Gather the agreement's inputs BY REFERENCE READ from their canonical homes. Pure; stores
 // nothing. Used for a draft preview and as the value source at freeze.
+// The optional private contract fields come from the employee's current DRAFT version only. With both fields empty (or
+// no draft) the returned object has no privateFields key at all — identical to the inputs before the fields existed.
 export function contractInputsFor({ employee, profile, onDate, roleLabels }) {
   const terms = currentTermsOf(employee, onDate) || employee.terms[employee.terms.length - 1];
   const c = terms && terms.compensation;
@@ -92,7 +124,8 @@ export function contractInputsFor({ employee, profile, onDate, roleLabels }) {
   // closed on it rather than printing an impossible date.
   const addressLine = addressIsComplete(contact.address) ? formatAddress(contact.address) : null;
   const birthDate = isValidBirthDate(contact.birthDate, onDate) ? contact.birthDate : null;
-  return {
+  const privateFields = privateFieldsOf(draftVersionOf(employee));
+  const inputs = {
     person: { name: employee.name, email: contact.email || null, phone: contact.phone || null, address: addressLine, birthDate },
     termsPeriodRef: terms ? terms.validFrom : null,
     startDate: startDateOf(employee),
@@ -115,6 +148,8 @@ export function contractInputsFor({ employee, profile, onDate, roleLabels }) {
     clauses: profile ? profile.clauses.map((x) => ({ key: x.key, title: x.title, text: x.text, version: x.version, bullets: x.bullets ? x.bullets.slice() : null })) : [],
     templateVersion: profile ? profile.templateVersion : null,
   };
+  if (Object.keys(privateFields).length) inputs.privateFields = privateFields;
+  return inputs;
 }
 
 function valueForField(key, inputs) {
@@ -206,6 +241,10 @@ export function renderContractBlocks(inputs, opts) {
   const emp = inputs.employer || {};
   const facts = inputs.companyFacts || {};
   const person = inputs.person || {};
+  // Optional private contract fields (release 019B-R2): rendered ONLY from the inputs / frozen snapshot; an empty field
+  // renders no line at all.
+  const priv = inputs.privateFields || {};
+  const fnr = privDigits(priv.fodselsnummer), konto = privDigits(priv.bankkonto);
   const val = (v, fallback) => (v == null || v === '' ? (fallback || MISSING) : String(v));
   const clause = (key) => inputs.clauses.find((c) => c.key === key) || null;
   const ctext = (key) => { const c = clause(key); return c ? c.text : null; };
@@ -244,10 +283,11 @@ export function renderContractBlocks(inputs, opts) {
       employee: [
         ['Navn', val(person.name)],
         ['Fødselsdato', person.birthDate ? fmtDocDate(person.birthDate) : MISSING],
+      ].concat(fnr ? [['Fødselsnummer', formatContractPrivateField('fodselsnummer', fnr)]] : []).concat([
         ['Adresse', val(person.address)],
         ['Telefon', val(person.phone)],
         ['E-post', val(person.email)],
-      ] },
+      ]) },
     { kind: 'numbered', n: '02', title: 'Ansettelsesforholdet', rows: [
       ['Stilling', val(t.roleLabel || t.role)],
       ['Tiltredelsesdato', inputs.startDate ? fmtDocDate(inputs.startDate) : MISSING],
@@ -273,8 +313,9 @@ export function renderContractBlocks(inputs, opts) {
       ['Lønnsform', t.compensation ? (t.compensation.model === 'timelonn' ? 'Timelønn' : 'Fastlønn') : MISSING],
       ['Lønn ved tiltredelse', comp],
       ['Utbetaling', (pay ? String(pay) : MISSING) + ' – ' + (facts.salaryPaymentArrangement || 'dato/ordning ' + UNCONFIRMED.toLowerCase())],
+    ].concat(konto ? [['Bankkonto for lønnsutbetaling', formatContractPrivateField('bankkonto', konto)]] : []).concat([
       ['Faste tillegg', 'Ikke registrert i denne versjonen'],
-    ], text: ctext('lonn') },
+    ]), text: ctext('lonn') },
     { kind: 'pageBreak' },
     { kind: 'numbered', n: '07', title: 'Ferie og feriepenger', text: ctext('ferie') },
     { kind: 'numbered', n: '08', title: 'Oppsigelse', rows: [
@@ -325,17 +366,23 @@ export function contractStateOf(employee) {
 }
 
 // ---- THE single contract operation boundary ------------------------------------------------
-// Kinds: startDraft | freezeVersion | discardDraft. No kind can produce a sent/signed/cancelled
+// Kinds: startDraft | setPrivateFields | freezeVersion | discardDraft. No kind can produce a sent/signed/cancelled
 // state — those constants exist but no transition writes them (S5 respected by construction).
 // freezeVersion is ONE-WAY (utkast -> godkjent_frosset, same contractVersionId); there is no unfreeze and no op edits
 // a frozen version — a later change is a new version (startDraft after a frozen version = endringsavtale).
 // Order-independent JSON identity of a plain value (JSON semantics: undefined keys drop out), used to compare the
 // reviewed agreement inputs with the freshly derived ones.
+// PRIVATE CONTRACT FIELDS (release 019B-R2): startDraft PREFILLS the new version from `privateValues` (the employee's
+// master { fodselsnummer, bankkonto }, read by the caller) — only structurally valid values, only at creation.
+// setPrivateFields edits the DRAFT's own fields: a blank value clears the field (= omitted from the agreement), any
+// other value must be exactly 11 digits after removing spaces (and dots for the account); the refusal names the field,
+// never the typed text. Nothing here writes or reads the master data afterwards. freezeVersion freezes the draft's
+// values exactly; if they differ from the reviewed inputs the refusal is PRIVATE_FIELDS_CHANGED (no value in it).
 function canonJson(v) {
   const norm = (x) => (Array.isArray(x) ? x.map(norm) : x && typeof x === 'object' ? Object.keys(x).sort().reduce((o, k) => { o[k] = norm(x[k]); return o; }, {}) : x);
   return JSON.stringify(norm(JSON.parse(JSON.stringify(v === undefined ? null : v))));
 }
-export function applyContractOperation({ store, tenantId, actor, op, profile, now, onDate, roleLabels, requireReviewedInputs }) {
+export function applyContractOperation({ store, tenantId, actor, op, profile, now, onDate, roleLabels, requireReviewedInputs, privateValues }) {
   if (!store || typeof store !== 'object') return { ok: false, code: 'NO_STORE' };
   if (typeof tenantId !== 'string' || !tenantId || !Object.prototype.hasOwnProperty.call(store, tenantId)) return { ok: false, code: 'TENANT_UNKNOWN' };
   const tenant = store[tenantId];
@@ -360,17 +407,42 @@ export function applyContractOperation({ store, tenantId, actor, op, profile, no
       termsPeriodRef: null, snapshot: null,
       signedArtifactMeta: null, signingTransaction: null,   // future shapes; unreachable in v1
     };
+    // one-time prefill of the optional private contract fields (key present only when something was prefilled)
+    const prefill = {};
+    for (const k of PRIVATE_KEYS) { const d = privDigits(privateValues && privateValues[k]); if (d) prefill[k] = d; }
+    if (Object.keys(prefill).length) version.privateFields = prefill;
     emp.contractVersions = emp.contractVersions.concat([version]);
     return { ok: true, version };
   }
 
   // Exact-version targeting (release -007): when the caller names the version it reviewed, a frozen (or otherwise
   // non-draft) version is refused deterministically — a retried/double freeze never touches or duplicates it.
-  if ((op.kind === 'freezeVersion' || op.kind === 'discardDraft') && op.contractVersionId != null) {
+  if ((op.kind === 'freezeVersion' || op.kind === 'discardDraft' || op.kind === 'setPrivateFields') && op.contractVersionId != null) {
     const target = emp.contractVersions.find((v) => v.contractVersionId === op.contractVersionId);
     if (!target) return { ok: false, code: 'VERSION_UNKNOWN' };
     if (op.kind === 'freezeVersion' && target.status === CONTRACT_STATUS.FROZEN) return { ok: false, code: 'ALREADY_FROZEN' };
     if (target.status !== CONTRACT_STATUS.DRAFT) return { ok: false, code: 'VERSION_NOT_DRAFT' };
+  }
+
+  if (op.kind === 'setPrivateFields') {
+    const draft = draftVersionOf(emp);
+    if (!draft) return { ok: false, code: 'NO_DRAFT' };
+    if (op.contractVersionId == null || op.contractVersionId !== draft.contractVersionId) return { ok: false, code: 'VERSION_UNKNOWN' };
+    const fields = op.fields;
+    const keys = fields && typeof fields === 'object' && !Array.isArray(fields) ? Object.keys(fields) : [];
+    if (!keys.length || keys.some((k) => !PRIVATE_KEYS.includes(k))) return { ok: false, code: 'PRIVATE_FIELDS_INVALID' };
+    const next = privateFieldsOf(draft);
+    for (const k of keys) {
+      const raw = fields[k];
+      if (raw == null || (typeof raw === 'string' && raw.trim() === '')) { delete next[k]; continue; }   // blank = not part of this agreement
+      const d = typeof raw === 'string' ? privDigits(privNormalize(k, raw)) : null;
+      if (!d) return { ok: false, code: OPTIONAL_PRIVATE_FIELDS.find((f) => f.key === k).invalidCode, field: k };
+      next[k] = d;
+    }
+    const version = Object.assign({}, draft);
+    if (Object.keys(next).length) version.privateFields = next; else delete version.privateFields;
+    emp.contractVersions = emp.contractVersions.map((v) => (v === draft ? version : v));
+    return { ok: true, version };
   }
 
   if (op.kind === 'discardDraft') {
@@ -391,12 +463,19 @@ export function applyContractOperation({ store, tenantId, actor, op, profile, no
     // was opened. The inputs are re-derived here from the authoritative records; any drift since review fails closed.
     // A production boundary passes requireReviewedInputs so a freeze without a named version + reviewed inputs is refused.
     if (requireReviewedInputs && (op.contractVersionId == null || !op.expectedInputs || typeof op.expectedInputs !== 'object')) return { ok: false, code: 'FREEZE_REVIEW_REQUIRED' };
-    if (op.expectedInputs != null && canonJson(inputs) !== canonJson(op.expectedInputs)) return { ok: false, code: 'CONTRACT_INPUTS_CHANGED' };
+    if (op.expectedInputs != null && canonJson(inputs) !== canonJson(op.expectedInputs)) {
+      // Only the private contract fields differ from the review -> their own refusal, with no value in it.
+      const bare = (x) => { const c = JSON.parse(JSON.stringify(x)); if (c && typeof c === 'object') delete c.privateFields; return c; };
+      return { ok: false, code: canonJson(bare(inputs)) === canonJson(bare(op.expectedInputs)) ? 'PRIVATE_FIELDS_CHANGED' : 'CONTRACT_INPUTS_CHANGED' };
+    }
     // FREEZE = copy by value. JSON round-trip guarantees no live reference survives into the
     // snapshot, so later terms/profile edits cannot move this version.
     const snapshot = JSON.parse(JSON.stringify(inputs));
     const prevFrozen = emp.contractVersions.filter((v) => v.status === CONTRACT_STATUS.FROZEN);
-    const frozen = Object.freeze(Object.assign({}, draft, {
+    // The draft's editable private fields live on in the snapshot only (inputs.privateFields); the frozen version keeps
+    // no second, editable-looking copy, so a blank/blank version has exactly the shape it always had.
+    const base = Object.assign({}, draft); delete base.privateFields;
+    const frozen = Object.freeze(Object.assign(base, {
       status: CONTRACT_STATUS.FROZEN, frozenAt: now,
       termsPeriodRef: inputs.termsPeriodRef,
       snapshot: Object.freeze(snapshot),
