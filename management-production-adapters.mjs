@@ -28,6 +28,7 @@ import {
 } from './employee-production-adapters.mjs';
 import { applyEmployeeOperation, normalizeAddress, formatAddress, currentTermsOf } from './management-employees-core.mjs';
 import { applyContractOperation } from './management-contract-core.mjs';
+import { PRIVATE_FIELD_KEYS, validatePrivatePatch, maskPrivateField, storedDigits } from './management-private-fields.mjs';
 
 export const E360_KEY = 'e360';
 export const LEGACY_FIELDS = Object.freeze(['navn', 'stilling', 'timelonn', 'adresse', 'epost', 'bankkonto', 'personnummer', 'notater', 'aktiv', 'opprettet']);
@@ -253,6 +254,54 @@ export function createManagementAdapters(options) {
     }).then(async (r) => { await settled(r.ansattId, writtenRev); return r; }).catch((e) => (e && e.coreResult ? Promise.reject(e) : rejectMapped(e)));
   }
 
+  // ---- PRIVATE employee fields (release 019): fødselsnummer + bankkonto --------------------------------------------
+  // The EXISTING legacy fields `personnummer` / `bankkonto` on the canonical admin-only ansatte document are the one
+  // home (no e360 copy, no migration). They are NOT part of normalizeAnsatt's record, so nothing that reads the Employee
+  // 360 store (list, search, Oversikt, Vaktplan, payroll, contract inputs, employeeSelf) can carry them. Three operations:
+  //   maskedPrivateEmployeeFields(id)  sync, from the host mirror: { key: { present, regular, masked } } — never a value
+  //   readPrivateEmployeeFields(id)    explicit reveal / edit: ONE authoritative read of the document; resolves
+  //                                    { personnummer, bankkonto } (11 digits, the stored text if irregular, or null)
+  //   updatePrivateEmployeeFields(id, patch)  ONE transaction that updates ONLY the provided private keys (validated,
+  //                                    digits only); no e360 / rev / legacy projection is touched. Resolves
+  //                                    { ok, ansattId, fields:[keys] } — never a value. Errors carry codes only.
+  const privateRaw = (d, k) => (d && typeof d[k] === 'string' && d[k].trim() !== '' ? d[k] : null);
+  function maskedPrivateEmployeeFields(ansattId) {
+    const d = (o.readAnsatte() || []).find((x) => x && x.id === ansattId) || null;
+    const out = {};
+    for (const k of PRIVATE_FIELD_KEYS) out[k] = maskPrivateField(k, privateRaw(d, k));
+    return out;
+  }
+  function readPrivateEmployeeFields(ansattId) {
+    try { assertLive(); } catch (e) { return Promise.reject(e); }
+    let ref; try { ref = fs.doc(ansattePath(T, ansattId)); } catch (e) { return Promise.reject(adapterError(ADAPTER_ERROR.CORE_REFUSED, 'EMPLOYEE_UNKNOWN')); }
+    return fs.runTransaction(async (tx) => {
+      const s = await tx.get(ref);
+      if (!s || !s.exists) throw adapterError(ADAPTER_ERROR.CORE_REFUSED, 'EMPLOYEE_UNKNOWN');
+      const out = {};
+      for (const k of PRIVATE_FIELD_KEYS) { const raw = privateRaw(s.data, k); out[k] = raw === null ? null : (storedDigits(k, raw) || raw.trim()); }
+      return out;
+    }).then((r) => { assertLive(); return r; }).catch((e) => (e && e.detail === 'EMPLOYEE_UNKNOWN' ? Promise.reject(e) : rejectMapped(e)));
+  }
+  function updatePrivateEmployeeFields(ansattId, patch) {
+    try { assertLive(); } catch (e) { return Promise.reject(e); }
+    const v = validatePrivatePatch(patch);
+    if (!v.ok) { const err = adapterError(ADAPTER_ERROR.CORE_REFUSED, v.code); err.coreResult = { ok: false, code: v.code, field: v.field }; return Promise.reject(err); }
+    let ref; try { ref = fs.doc(ansattePath(T, ansattId)); } catch (e) { return Promise.reject(adapterError(ADAPTER_ERROR.CORE_REFUSED, 'EMPLOYEE_UNKNOWN')); }
+    const keys = Object.keys(v.write);
+    return fs.runTransaction(async (tx) => {
+      const s = await tx.get(ref);
+      if (!s || !s.exists) throw adapterError(ADAPTER_ERROR.CORE_REFUSED, 'EMPLOYEE_UNKNOWN');
+      tx.update(ref, v.write);   // ONLY the provided private keys — nothing else on the document is written
+      return { ok: true, ansattId, fields: keys };
+    }).then(async (r) => {
+      // wait (bounded) until the host mirror shows the write so the masked view is fresh; no value leaves this closure
+      const t0 = Date.now();
+      await new Promise((res) => { const tick = () => { const d = (o.readAnsatte() || []).find((x) => x && x.id === ansattId); if ((d && keys.every((k) => d[k] === v.write[k])) || Date.now() - t0 > 4000 || !live()) { res(); return; } setTimeout(tick, 40); }; tick(); });
+      notify();
+      return r;
+    }).catch((e) => (e && (e.coreResult || e.detail === 'EMPLOYEE_UNKNOWN') ? Promise.reject(e) : rejectMapped(e)));
+  }
+
   // ---- company contract profile (tenant config document) ----
   let profileObj = null;
   const contractProfile = {
@@ -325,7 +374,7 @@ export function createManagementAdapters(options) {
   return {
     schedule: { store: schedule.schedule.store, admin: schedule.schedule.admin },
     attendance: attendanceSeam,
-    employees: { store: () => employees, refresh, apply: applyEmployee, applyContract, people },
+    employees: { store: () => employees, refresh, apply: applyEmployee, applyContract, people, privateFields: Object.freeze({ masked: maskedPrivateEmployeeFields, read: readPrivateEmployeeFields, update: updatePrivateEmployeeFields }) },
     employeeSelf: { write: writeEmployeeSelf },
     contractProfile,
     start, dispose, listenerCount, onChange, setRange, ensureRange,

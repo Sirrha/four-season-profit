@@ -1293,6 +1293,8 @@ export function mountEmployeeShell(root, options) {
       applyOperation: MODE === 'management' ? ({ op }) => ADAPTERS.employees.apply(op) : undefined,
       applyContract: MODE === 'management' ? ({ op, profile, onDate, roleLabels }) => ADAPTERS.employees.applyContract(op, profile, { onDate, roleLabels }) : undefined,
       onCompanyProfileChanged: MODE === 'management' && ADAPTERS.contractProfile && typeof ADAPTERS.contractProfile.save === 'function' ? () => { ADAPTERS.contractProfile.save().catch((e) => console.error('[ledelse] contractProfile save failed', e)); } : undefined,
+      // release 019: management-only private fields (fødselsnummer / bankkonto) through the dedicated adapter operations; absent in preview
+      privateFields: MODE === 'management' && ADAPTERS.employees && ADAPTERS.employees.privateFields ? ADAPTERS.employees.privateFields : undefined,
     });
   }
   function mountLonnsgrunnlag(host) {

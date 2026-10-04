@@ -24,6 +24,7 @@ import {
   applyCompanyContractOperation,
 } from './management-contract-core.mjs';
 import { payrollProjectionForEmployee } from './management-payroll-core.mjs';
+import { validatePrivatePatch, formatPrivateField } from './management-private-fields.mjs';   // release 019: pure validation / presentation of the two private fields
 
 function el(tag, opts) {
   const node = document.createElement(tag);
@@ -54,7 +55,7 @@ const SECTIONS = [
   { key: 'tid', label: 'Tid & vaktplan' },
 ];
 
-export function renderEmployeesView(root, { employeeStore, scheduleStore, tenantId, tenantLabel, roleLabels, actor, contractProfile, payrollStore, nowMs, timezone, onOpenVaktplanFor, onBack, applyOperation, applyContract, onCompanyProfileChanged }) {
+export function renderEmployeesView(root, { employeeStore, scheduleStore, tenantId, tenantLabel, roleLabels, actor, contractProfile, payrollStore, nowMs, timezone, onOpenVaktplanFor, onBack, applyOperation, applyContract, onCompanyProfileChanged, privateFields }) {
   if (!root) return;
   const todayWd = tenantWorkDate(nowMs, timezone);
   let page = 'list';           // 'list' | 'new' | 'card' | 'contract' | 'preview'
@@ -71,6 +72,14 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
   let freezeBusy = false;        // a freeze request is in flight: the confirm control is disabled (no double submit)
   let corrDraft = null;          // transient typed correction values kept across a refused save's redraw; the ONE truth stays the terms
   let companyDraft = null;      // transient unsaved editor values; the ONE truth stays contractProfile
+  // PRIVATE FIELDS (release 019) — UI state only, never persisted. `priv.shown[k]` holds a full value ONLY while the
+  // manager has pressed «Vis» for that field; `priv.draft` holds typed values ONLY while the edit form is open. Any
+  // navigation (other employee, other section, list, contract, preview) resets everything to masked (privSync in draw);
+  // leaving the Ansatte tab or Workforce discards this closure altogether.
+  const privBlank = () => ({ key: null, shown: { personnummer: null, bankkonto: null }, edit: false, draft: null, busy: false, err: '', ok: '' });
+  let priv = privBlank();
+  const privKeyNow = () => page + '|' + (selectedId || '') + '|' + section;
+  function privSync() { const k = privKeyNow(); if (priv.key !== k) { priv = privBlank(); priv.key = k; } }
 
   const fmtHM = (t) => fmtTenantHM(t, timezone);
   const roleOf = (k) => (roleLabels && k && roleLabels[k] ? roleLabels[k] : k || '–');
@@ -115,6 +124,9 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     if (code === 'FREEZE_REVIEW_REQUIRED') return 'Åpne godkjenningen på nytt og bekreft versjonen som skal fryses.';
     if (code === 'NO_DRAFT') return 'Det finnes ikke noe utkast å fryse.';
     if (code === 'VERSION_UNKNOWN' || code === 'VERSION_NOT_DRAFT') return 'Denne avtaleversjonen er ikke et utkast og kan ikke endres.';
+    if (code === 'PERSONNUMMER_INVALID') return 'Fødselsnummer må være nøyaktig 11 siffer.';
+    if (code === 'BANKKONTO_INVALID') return 'Kontonummer må være nøyaktig 11 siffer.';
+    if (code === 'PRIVATE_FIELDS_NO_CHANGE') return 'Ingen ny verdi er skrevet inn. Fyll ut feltet som skal registreres eller erstattes.';
     return 'Kunne ikke lagre (' + code + ').';
   }
   // Production operation seams (Ledelse integration): a host may supply `applyOperation` / `applyContract`, which
@@ -1068,6 +1080,98 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       pc.appendChild(el('div', { cls: 'vp-note', text: 'Hentet fra den felles månedspakken – ingen egen beregning her.' }));
       root.appendChild(pc);
     }
+    drawPrivate(e);
+  }
+
+  // ---- PERSON- OG LØNNSOPPLYSNINGER (release 019): fødselsnummer + bankkonto, management only -----------------------
+  // Masked by default from the adapter's masked projection (no value reaches this view). «Vis» performs ONE dedicated
+  // read and shows that field until «Skjul» or any navigation. The edit form starts EMPTY (an existing value is never
+  // pre-filled into the page); a blank field is left unchanged; saving remasks and reports a generic message only.
+  // No value is ever placed in an attribute, id, dataset, title, aria label, hidden element, toast, error or log.
+  function drawPrivate(e) {
+    if (!privateFields || !canEditEmployment(actor) || !canViewCompensation(actor)) return;
+    const stale = (k) => priv.key !== k || selectedId !== e.ansattId;
+    const card = el('div', { cls: 'card emp-private' });
+    card.appendChild(el('div', { cls: 'kicker', text: 'Person- og lønnsopplysninger' }));
+    let m = null; try { m = privateFields.masked(e.ansattId); } catch (x) { m = null; }
+    const LABEL = { personnummer: 'Fødselsnummer', bankkonto: 'Bankkonto' };
+    for (const k of ['personnummer', 'bankkonto']) {
+      const info = m && m[k] ? m[k] : { present: false, masked: null, regular: false };
+      const row = el('div', { cls: 'emp-fact' });
+      row.appendChild(el('div', { cls: 'k', text: LABEL[k] }));
+      const v = el('div', { cls: 'v' });
+      const shown = priv.shown[k];
+      v.appendChild(el('span', { cls: 'pv', text: !info.present ? 'Ikke registrert' : (shown != null ? shown : info.masked) }));
+      if (info.present && !priv.edit) {
+        const t = btn(shown != null ? 'Skjul' : 'Vis', 'btn tertiary', () => {
+          if (priv.busy) return;
+          if (priv.shown[k] != null) { priv.shown[k] = null; priv.err = ''; draw(); return; }
+          const key = priv.key; priv.busy = true; priv.err = ''; priv.ok = '';
+          privateFields.read(e.ansattId).then((r) => {
+            if (stale(key)) return;
+            priv.busy = false;
+            priv.shown[k] = r && r[k] != null ? formatPrivateField(k, r[k]) : null;
+            draw();
+          }, () => { if (stale(key)) return; priv.busy = false; priv.err = 'Kunne ikke hente opplysningen. Prøv igjen.'; draw(); });
+        });
+        t.setAttribute('aria-label', (shown != null ? 'Skjul ' : 'Vis ') + LABEL[k].toLowerCase());
+        t.style.cssText = 'display:inline;width:auto;min-height:0;padding:0 0 0 12px;margin:0';
+        v.appendChild(t);
+      }
+      row.appendChild(v);
+      card.appendChild(row);
+      if (info.present && !info.regular) card.appendChild(el('div', { cls: 'vp-note', text: LABEL[k] + ' er registrert i et uvanlig format. Erstatt verdien med 11 siffer.' }));
+    }
+    if (!priv.edit) {
+      card.appendChild(el('div', { cls: 'vp-err', text: priv.err }));
+      if (priv.ok) card.appendChild(el('div', { cls: 'cue-line emp-private-ok', text: priv.ok }));
+      const acts = el('div', { cls: 'vp-actions' });
+      acts.appendChild(btn('Rediger person- og lønnsopplysninger', 'btn secondary', () => { priv.shown = { personnummer: null, bankkonto: null }; priv.edit = true; priv.draft = { personnummer: '', bankkonto: '' }; priv.err = ''; priv.ok = ''; draw(); }));
+      card.appendChild(acts);
+      card.appendChild(el('div', { cls: 'vp-note', text: 'Bare ledelsen ser disse opplysningene. De vises maskert til du velger «Vis», og de er ikke synlige for den ansatte, i ansattlisten, i vaktplanen eller i arbeidsavtalen.' }));
+      root.appendChild(card);
+      return;
+    }
+    const form = el('div', { cls: 'emp-form' });
+    const mk = (k, placeholder) => {
+      const i = textInput(priv.draft[k] || '', placeholder);
+      for (const [a, val] of [['autocomplete', 'off'], ['autocorrect', 'off'], ['autocapitalize', 'off'], ['spellcheck', 'false'], ['inputmode', 'numeric'], ['maxlength', '20'], ['data-lpignore', 'true'], ['data-1p-ignore', 'true']]) i.setAttribute(a, val);
+      i.addEventListener('input', () => { priv.draft[k] = i.value; });
+      return i;
+    };
+    const fPnr = mk('personnummer', '11 siffer');
+    const fKto = mk('bankkonto', '11 siffer');
+    form.appendChild(field('Fødselsnummer (11 siffer)', fPnr));
+    if (m && m.personnummer.present) form.appendChild(el('div', { cls: 'vp-note', text: 'Et fødselsnummer er allerede registrert. La feltet stå tomt for å beholde det – en ny verdi erstatter det.' }));
+    form.appendChild(field('Bankkonto (11 siffer)', fKto));
+    if (m && m.bankkonto.present) form.appendChild(el('div', { cls: 'vp-note', text: 'Et kontonummer er allerede registrert. La feltet stå tomt for å beholde det – en ny verdi erstatter det.' }));
+    form.appendChild(el('div', { cls: 'vp-err', text: priv.err }));
+    const acts = el('div', { cls: 'vp-actions' });
+    const save = btn('Lagre', 'btn primary', () => {
+      if (priv.busy) return;
+      const patch = {};
+      if (fPnr.value.trim() !== '') patch.personnummer = fPnr.value;
+      if (fKto.value.trim() !== '') patch.bankkonto = fKto.value;
+      const chk = validatePrivatePatch(patch);
+      if (!chk.ok) { priv.err = opError(chk.code); draw(); return; }
+      const key = priv.key; priv.busy = true; priv.err = ''; save.disabled = true;
+      privateFields.update(e.ansattId, patch).then(() => {
+        if (stale(key)) return;
+        priv = privBlank(); priv.key = key; priv.ok = 'Person- og lønnsopplysninger er lagret.';
+        draw();
+      }, (x) => {
+        if (stale(key)) return;
+        priv.busy = false;
+        const c = x && x.coreResult && x.coreResult.code ? x.coreResult.code : null;
+        priv.err = c ? opError(c) : 'Kunne ikke lagre. Prøv igjen.';
+        draw();
+      });
+    });
+    acts.appendChild(save);
+    acts.appendChild(btn('Avbryt', 'btn tertiary', () => { const key = priv.key; priv = privBlank(); priv.key = key; draw(); }));
+    form.appendChild(acts);
+    card.appendChild(form);
+    root.appendChild(card);
   }
 
   function drawTid(e) {
@@ -1094,6 +1198,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
   }
 
   function draw() {
+    privSync();   // release 019: any navigation remasks the private fields
     clear(root);
     if (!canViewEmployees(actor)) {
       root.appendChild(el('div', { cls: 'card', text: 'Du har ikke tilgang til ansattopplysninger.' }));
