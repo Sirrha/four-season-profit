@@ -42,7 +42,11 @@ const MANAGER_REASON_LABELS = Object.freeze({
 // ---- Demo identities / memberships (Four Season; Maria is the default review identity) ----
 export const FIXTURE_USERS = FOUR_SEASON_PEOPLE.map((p) => ({ uid: p.uid, label: p.name }));
 export const FIXTURE_MEMBERSHIPS = FOUR_SEASON_MEMBERSHIPS;
-export const TENANT_LABELS = { [FOUR_SEASON_TENANT.tenantId]: FOUR_SEASON_TENANT.label };
+// DISPLAY ONLY: the shop name people read for a tenant. The production tenant id (four-season-as) maps to the shop's own
+// name so the technical id is never shown; it stays unchanged in every path, membership and data operation.
+export const TENANT_LABELS = { [FOUR_SEASON_TENANT.tenantId]: FOUR_SEASON_TENANT.label, 'four-season-as': '4Seasons ferske varer' };
+// Neutral identity shown when the employee's own projection (employeeSelf) has no name yet — never an id, uid or e-mail.
+export const EMPLOYEE_NAME_FALLBACK = 'Ansatt';
 const DEFAULT_UID = 'uid-maria';   // PREVIEW ONLY — the production entry never reads this (employee-production-bridge.mjs)
 function tenantLabel(t) { return Object.prototype.hasOwnProperty.call(TENANT_LABELS, t) ? TENANT_LABELS[t] : t; }
 
@@ -327,8 +331,10 @@ export function mountEmployeeShell(root, options) {
     if (idb) {
       idb.hidden = false; idb.onclick = MODE === 'preview' ? goChooser : null;   // production: the identity is the login, not a switch
       const av = idb.querySelector('.av'), nm = idb.querySelector('.nm');
-      if (av) av.textContent = person ? person.name.charAt(0) : '?';
-      if (nm) nm.textContent = person ? person.name : '';
+      // The header identity is the employee's OWN name from personFor (production: the own employeeSelf projection only).
+      const shown = person && typeof person.name === 'string' && person.name.trim() ? person.name.trim() : EMPLOYEE_NAME_FALLBACK;
+      if (av) av.textContent = shown.charAt(0).toUpperCase();
+      if (nm) nm.textContent = shown;
       idb.setAttribute('aria-label', MODE === 'preview' ? 'Bytt ansatt' : 'Innlogget');
     }
     const nav = document.getElementById('emp-nav');

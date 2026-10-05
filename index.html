@@ -27,7 +27,7 @@ body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);font-s
 /* ── LOADING ── */
 #loading-screen{position:fixed;inset:0;background:var(--primary);z-index:9998;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
 #loading-screen.hidden{display:none}
-#employee-host{display:none;min-height:100vh}#employee-host.active{display:block}.emp-hostbar{display:flex;gap:8px;align-items:center;padding:6px 16px;background:#1b2b20;color:#fff;font-size:12px;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}.emp-hostbar .sp{flex:1}.emp-hostbar .emp-notice{color:#ffd9a8}.emp-hostbtn{background:rgba(255,255,255,.14);border:none;color:#fff;padding:6px 10px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer}
+#employee-host{display:none;min-height:100vh}#employee-host.active{display:block}.emp-hostbar{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;align-items:center;padding:6px max(16px,calc((100% - var(--wrap,1120px))/2 + 16px));background:#1b2b20;color:#fff;font-size:12px;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}.emp-hostbar .sp{flex:1}#emp-host-label{white-space:nowrap}.emp-hostbar .emp-notice{color:#ffd9a8}.emp-hostbtn{background:rgba(255,255,255,.14);border:none;color:#fff;padding:6px 10px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer}
 /* ── WORKFORCE NATIVE SHELL (release 018) ── every rule is scoped to body.wf-open, the class the host sets ONLY while the
    management workspace is open (authWorkforceShell). The employee surface (Min ansattside) never carries it, so
    employee-shell.css renders there exactly as before. Sormena header + bottom nav stay; the workspace sits between them. */
@@ -707,7 +707,7 @@ select.fi:focus{background-color:#fff}
      (#emp-identity, #emp-nav, #emp-root); the shell is mounted ONLY by authEnterEmployeeSurface through the bridge door.
 ══════════════════════════════════════ -->
 <div id="employee-host">
-  <div class="emp-hostbar"><span id="emp-host-label">Four Season AS · ansatt</span><span class="sp"></span><span id="emp-host-notice" class="emp-notice"></span><button type="button" class="emp-hostbtn" id="ld-host-emp" style="display:none" onclick="authLedelseToMinAnsattside()">Min ansattside</button><button type="button" class="emp-hostbtn" id="ld-host-back" style="display:none" onclick="authCloseLedelse()">Tilbake til Sormena</button><button type="button" class="emp-hostbtn" id="emp-host-back" style="display:none" onclick="authReturnToManagement()">Tilbake til Sormena</button><button type="button" class="emp-hostbtn" onclick="logoutUser()">Logg ut</button></div>
+  <div class="emp-hostbar"><span id="emp-host-label">4Seasons ferske varer · ansatt</span><span class="sp"></span><span id="emp-host-notice" class="emp-notice"></span><button type="button" class="emp-hostbtn" id="ld-host-emp" style="display:none" onclick="authLedelseToMinAnsattside()">Min ansattside</button><button type="button" class="emp-hostbtn" id="ld-host-back" style="display:none" onclick="authCloseLedelse()">Tilbake til Sormena</button><button type="button" class="emp-hostbtn" id="emp-host-back" style="display:none" onclick="authReturnToManagement()">Tilbake til Sormena</button><button type="button" class="emp-hostbtn" onclick="logoutUser()">Logg ut</button></div>
   <header class="top"><div class="top-in">
     <div class="brand"><span class="mark" aria-hidden="true"></span>Sormena</div>
     <button id="emp-identity" class="idbtn" type="button" hidden><span class="av"></span><span class="nm"></span></button>
@@ -8236,7 +8236,9 @@ async function authResolveMembership(user){
     if(eligible.length===0)return authSettle(gen,'NO_ACCESS',{step:'r1',memberships:list.length});
     if(eligible.length>1)return authSettle(gen,'ACCESS_ERROR',{step:'r1',code:'membership-ambiguous'});
     const chosen=eligible[0];
-    const name=await authResolveDisplayName(user,chosen.ansattId);
+    // An employee identity never asks for the ansatte master document to obtain a name (admin-only data): its display name
+    // comes from the own employeeSelf projection inside the employee surface; here it is the neutral label, never the e-mail.
+    const name=chosen.accessRole==='admin'?await authResolveDisplayName(user,chosen.ansattId):'Ansatt';
     if(gen!==authGeneration||authAttemptSettled)return null;
     let g;
     try{g=await authGenerationBarrier(user.uid)}catch(e){return authSettle(gen,'ACCESS_ERROR',{step:'generation',code:authSessionErrCode(e)})}
@@ -8446,7 +8448,7 @@ function authLeaveLedelse(){
   }
   const root=document.getElementById('emp-root');if(root)while(root.firstChild)root.removeChild(root.firstChild);
   const idb=document.getElementById('emp-identity');if(idb){idb.hidden=true;idb.onclick=null}
-  const lab=document.getElementById('emp-host-label');if(lab)lab.textContent='Four Season AS · ansatt';
+  const lab=document.getElementById('emp-host-label');if(lab)lab.textContent='4Seasons ferske varer · ansatt';
   if(!empHost){const host=document.getElementById('employee-host');if(host)host.classList.remove('active');authEmployeeCss(false)}
 }
 // Footer control "Workforce": admin, management active, not already open. Same membership object, no re-auth. Opens the management workspace.
