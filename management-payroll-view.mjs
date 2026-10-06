@@ -247,6 +247,7 @@ export function manualErrorText(code) {
   if (c === 'OEKT_PAAGAAR') return 'Økten pågår fortsatt. Vent til dagen er stemplet ut, eller korriger den registrerte dagen i stedet.';
   if (c === 'ATTESTERT_AV_LEDELSE') return 'Dagen er allerede ført av ledelsen. Bruk Korriger på den dagen.';
   if (c === 'ATTENDANCE_EXISTS') return 'Det finnes allerede en registrering denne dagen. Bruk Korriger i stedet for å legge til på nytt.';
+  if (c === 'INITIAL_REGISTRATION_REQUIRED') return 'Registrer arbeidsforholdet først.';
   if (c === 'EMPLOYMENT_REQUIRED') return 'Mangler arbeidsforhold for denne ansatte. Dagen kan ikke føres.';
   if (c === 'BEFORE_EMPLOYMENT_START') return 'Datoen er før ansettelsen startet.';
   if (c === 'AFTER_EMPLOYMENT_END') return 'Datoen er etter at ansettelsen ble avsluttet.';
@@ -549,6 +550,10 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
         shiftSel.addEventListener('change', () => { st.shiftId = shiftSel.value; });
       }
       clear(hintBox);
+      // Blocked by the resolver (employment not registered AND the date would be a NEW day): shown at once, Save disabled;
+      // a submit is refused by the same code anyway. A date that targets an EXISTING record is not blocked (Korriger law).
+      if (c && c.blocked) { hintBox.appendChild(el('div', { cls: 'mt-notice warn mt-blocked', text: c.hint })); if (saveBtn) saveBtn.disabled = true; return; }
+      if (saveBtn) saveBtn.disabled = false;
       // No resolver sentence is ever uttered for an incomplete date: the UI may not claim
       // "Ingen vakt" (or any other verdict) about a day it has not been given.
       const notice = scheduleNotice(c);

@@ -66,19 +66,35 @@ await t('Z04', 'identity independence at the adapter seam: a bound admin members
     M.dispose();
   }
 });
-await t('Z05', 'REAL canonical document regression: a just-created legacy-skeleton employee (opprettet today, timelønn 0, no wage basis) IS counted — 1 row, coverage "0 av 1", missing-basis exclusion, "Startet i perioden" warn -> "1 se over", actionCount 1 (the owner-observed state is the true state for a real record)', () => {
+await t('Z05', 'just-created employee, no wage basis (deliberately changed: this test asserted "Startet i perioden" from the OLD-REGISTER creation date of a record with no registered employment). (a) Old-register skeleton created today, no registered employment: IS counted — 1 row, coverage "0 av 1", missing-basis exclusion — but its employment start is UNKNOWN: no "Startet i perioden", employmentStartedInPeriod null, the creation date is nowhere in the row, warnCount 0. (b) The same employee with a REGISTERED employment starting today (what "Ny ansatt" stores): the original behaviour — "Startet i perioden" warn -> "1 se over", actionCount 1, employmentStartedInPeriod = the registered date', () => {
   const doc = { navn: 'text', stilling: 'butikkmedarbeider', timelonn: 0, adresse: '', epost: '', bankkonto: '', personnummer: '', notater: '', aktiv: true, opprettet: new Date().toISOString() };
-  const rec = normalizeAnsatt('LSsfVDtxzZEjc7V9f6oz', doc);
+  const unreg = normalizeAnsatt('LSsfVDtxzZEjc7V9f6oz', doc);
+  const fu = facts({ [T]: { [unreg.ansattId]: unreg } });
+  assert.equal(fu.pkg.rows.length, 1);
+  assert.equal(fu.planning.estimate.totalCount, 1); assert.equal(fu.planning.estimate.coveredCount, 0);
+  assert.equal(fu.planning.estimate.coverageLine, 'estimatet dekker 0 av 1 ansatte (timelønn)');
+  assert.equal(fu.planning.estimate.exclusions[0].reason, 'mangler_lonnsbasis');
+  assert.ok(!fu.pkg.rows[0].exceptions.some((x) => x.code === 'startet_i_perioden'), 'no start warning from the old-register creation date');
+  assert.equal(fu.pkg.rows[0].payload.employmentStartedInPeriod, null); assert.ok(!JSON.stringify(fu.pkg.rows[0]).includes(doc.opprettet.slice(0, 10)), 'the creation date is not in the row');
+  assert.equal(fu.mf.warnCount, 0); assert.equal(fu.mf.actionCount, 0);
+  const rec = normalizeAnsatt('LSsfVDtxzZEjc7V9f6oz', Object.assign({}, doc, { e360: { name: 'text', status: 'active', startDate: today, contact: { email: null, phone: null, address: null, birthDate: null }, terms: [{ validFrom: today, role: 'butikkmedarbeider' }], documents: [], contractVersions: [], rev: 1 } }));
   const f = facts({ [T]: { [rec.ansattId]: rec } });
   assert.equal(f.pkg.rows.length, 1);
   assert.equal(f.planning.estimate.totalCount, 1); assert.equal(f.planning.estimate.coveredCount, 0);
   assert.equal(f.planning.estimate.coverageLine, 'estimatet dekker 0 av 1 ansatte (timelønn)');
   assert.equal(f.planning.estimate.exclusions[0].reason, 'mangler_lonnsbasis');
-  assert.ok(f.pkg.rows[0].exceptions.some((x) => x.code === 'startet_i_perioden' && x.severity === 'warn'));
+  assert.ok(f.pkg.rows[0].exceptions.some((x) => x.code === 'startet_i_perioden' && x.severity === 'warn' && x.detail === today));
+  assert.equal(f.pkg.rows[0].payload.employmentStartedInPeriod, today);
   assert.equal(f.mf.warnCount, 1); assert.equal(f.mf.actionCount, 1); assert.deepEqual(f.mf.actionParts, ['1 se over']);
 });
-await t('Z06', 'REAL canonical document with a wage basis and an earlier start: counted and covered (1 av 1), no warn, actionCount 0 — accepted behaviour unchanged', () => {
-  const rec = normalizeAnsatt('Kx9mQ2vT7pLa4RcW1nZb', { navn: 'Mr Testperson', stilling: 'butikkmedarbeider', timelonn: 210, aktiv: true, opprettet: '2026-01-05T08:00:00.000Z' });
+await t('Z06', 'wage basis and an earlier start (deliberately changed: this test used an OLD-REGISTER record — no stored employment — as a "real wage basis"). (a) Old-register record with old timelønn 210 and NO registered employment: counted as an employee but NOT covered — "0 av 1", exclusion mangler_lonnsbasis, estimate 0 (the old wage is never a planning basis). (b) The same employee WITH a registered employment (timelønn 210, start 2026-01-05): counted and covered (1 av 1), no warn, actionCount 0 — accepted behaviour unchanged', () => {
+  const legacy = { navn: 'Mr Testperson', stilling: 'butikkmedarbeider', timelonn: 210, aktiv: true, opprettet: '2026-01-05T08:00:00.000Z' };
+  const unreg = normalizeAnsatt('Kx9mQ2vT7pLa4RcW1nZb', legacy);
+  const fu = facts({ [T]: { [unreg.ansattId]: unreg } });
+  assert.equal(fu.pkg.rows.length, 1); assert.equal(fu.planning.estimate.coverageLine, 'estimatet dekker 0 av 1 ansatte (timelønn)');
+  assert.equal(fu.planning.estimate.exclusions[0].reason, 'mangler_lonnsbasis'); assert.equal(fu.planning.estimate.kr, 0); assert.equal(fu.planning.employees[0].basis, 'mangler');
+  assert.equal(fu.pkg.rows[0].payload.compensation, null); assert.equal(fu.pkg.rows[0].payload.compensationMissing, true); assert.ok(!/210/.test(JSON.stringify(fu.pkg.rows[0].payload)), 'the old wage is not in the payroll row either');
+  const rec = normalizeAnsatt('Kx9mQ2vT7pLa4RcW1nZb', Object.assign({}, legacy, { e360: { name: 'Mr Testperson', status: 'active', startDate: '2026-01-05', contact: { email: null, phone: null, address: null, birthDate: null }, terms: [{ validFrom: '2026-01-05', role: 'butikkmedarbeider', compensation: { model: 'timelonn', hourlyRate: 210 } }], documents: [], contractVersions: [], rev: 1 } }));
   const f = facts({ [T]: { [rec.ansattId]: rec } });
   assert.equal(f.pkg.rows.length, 1); assert.equal(f.planning.estimate.coverageLine, 'estimatet dekker 1 av 1 ansatte (timelønn)');
   assert.equal(f.mf.warnCount, 0); assert.equal(f.mf.actionCount, 0); assert.equal(f.rollup.chip.key, 'klar');

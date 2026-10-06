@@ -61,6 +61,8 @@ export function renderManagementView(root, { store, tenantId, tenantLabel, peopl
 
   const fmtHM = (t) => fmtTenantHM(t, timezone);
   const roleOf = (k) => (roleLabels && k && roleLabels[k] ? roleLabels[k] : null);
+  // an employee whose employment is not registered yet has no role: one neutral label instead of any old-register title
+  const roleLineOf = (person) => (person && person.unregistered === true ? 'Arbeidsforhold ikke registrert' : roleOf(person ? person.roleKey : null));
   const personOf = (id) => (people || []).find((p) => p.ansattId === id) || null;
   const chipText = (s) => fmtHM(s.projection.plannedStartAt) + '–' + fmtHM(s.projection.plannedEndAt) + (s.overnight ? ' +1d' : '');
   const validHM = (v) => /^\d{2}:\d{2}$/.test(v || '');
@@ -208,7 +210,7 @@ export function renderManagementView(root, { store, tenantId, tenantLabel, peopl
   function empCell(person) {
     const emp = el('div', { cls: 'vp-emp' });
     emp.appendChild(el('div', { cls: 'nm', text: person.name }));
-    const rl = roleOf(person.roleKey);
+    const rl = roleLineOf(person);
     if (rl) emp.appendChild(el('div', { cls: 'rl', text: rl }));
     if (typeof onViewAs === 'function') {
       const as = el('button', { cls: 'as', text: 'Se som ansatt', attrs: { type: 'button', 'aria-label': 'Se som ' + person.name } });
@@ -303,7 +305,7 @@ export function renderManagementView(root, { store, tenantId, tenantLabel, peopl
       const row = el('div', { cls: 'vp-drow' });
       const nm = el('div');
       nm.appendChild(el('div', { cls: 'nm', text: r.person.name }));
-      const rl = roleOf(r.person.roleKey);
+      const rl = roleLineOf(r.person);
       if (rl) nm.appendChild(el('div', { cls: 'rl', text: rl }));
       row.appendChild(nm);
       const sh = el('div', { cls: 'shifts' });

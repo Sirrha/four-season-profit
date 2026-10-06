@@ -228,10 +228,14 @@ await t('P11', 'admin cancel is blocked by existing attendance for the assignee 
   F.seed('tenants/four-season-as/attendance/' + attendanceIdFor(c1.shiftId, 'a1'), { attendanceId: attendanceIdFor(c1.shiftId, 'a1'), ansattId: 'a1', revision: 1 });
   await assert.rejects(A.schedule.admin.cancel(c1.shiftId), (e) => /ATTENDANCE/.test(e.code));
 });
-await t('P12', 'employeeSelf: admin write derives the exact projection from the canonical record (never wage/contact/notes); the employee mirror rebuilds the shell shape from the PATH id', async () => {
+await t('P12', 'employeeSelf: REFUSED with zero writes while the canonical ansatte document has no stored employment baseline (closeout law); with it, admin write derives the exact projection from the canonical record (never wage/contact/notes); the employee mirror rebuilds the shell shape from the PATH id', async () => {
   const F = makeFakeFs(); const ADM = build(F, memb('adm', 'admin'));
   const store = seedFourSeasonEmployees(FOUR_SEASON_PEOPLE, T);
   const e = employeeOf(store, T, 'ans-maria');
+  const w0 = F.writes.length;
+  await assert.rejects(ADM.employeeSelf.write('ans-maria', e, { onDate: today, sourceRevision: 7 }), (x) => x.code === ADAPTER_ERROR.CORE_REFUSED && /INITIAL_REGISTRATION_REQUIRED/.test(x.message) && x.coreResult && x.coreResult.code === 'INITIAL_REGISTRATION_REQUIRED');
+  assert.equal(F.writes.length, w0, 'zero writes'); assert.ok(!F.docs.has('tenants/four-season-as/employeeSelf/ans-maria'));
+  F.docs.set('tenants/four-season-as/ansatte/ans-maria', { navn: 'Maria', e360: { startDate: e.terms[0].validFrom, terms: JSON.parse(JSON.stringify(e.terms)) } });   // the stored baseline the writer reads
   const r = await ADM.employeeSelf.write('ans-maria', e, { onDate: today, sourceRevision: 7 });
   assert.equal(r.ok, true);
   const d = F.docs.get('tenants/four-season-as/employeeSelf/ans-maria');

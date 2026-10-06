@@ -390,6 +390,10 @@ export function applyContractOperation({ store, tenantId, actor, op, profile, no
   if (!op || typeof op !== 'object') return { ok: false, code: 'NO_OPERATION' };
   const emp = typeof op.ansattId === 'string' && Object.prototype.hasOwnProperty.call(tenant, op.ansattId) ? tenant[op.ansattId] : null;
   if (!emp) return { ok: false, code: 'EMPLOYEE_UNKNOWN' };
+  // HARD LAW (initial-registration hardening): no contract operation of any kind for an employee whose employment has no
+  // stored baseline (old-register record). A contract version would be built on — and its write would store — the period
+  // that is only derived from old-register fields. First registration must happen first.
+  if (emp.legacy && emp.legacy.hasE360 === false) return { ok: false, code: 'INITIAL_REGISTRATION_REQUIRED' };
   if (!Array.isArray(emp.contractVersions)) emp.contractVersions = [];
 
   if (op.kind === 'startDraft') {

@@ -47,6 +47,16 @@ export const EMPLOYMENT_FORMS = ['fast', 'midlertidig'];
 export const PAYMENT_INTERVALS = ['manedlig', 'hver-14-dag'];
 const DOC_FIELDS = ['name', 'category', 'date', 'source', 'note'];
 export const DOC_CATEGORIES = ['kontrakt', 'tillegg', 'attest', 'annet'];
+// The canonical baseline an admin must state explicitly at FIRST REGISTRATION of an old-register employee (start date is
+// required separately). Other terms fields may be given too; none is ever inherited from the old register.
+export const INITIAL_REGISTRATION_REQUIRED = Object.freeze(['role', 'employmentForm', 'employmentType', 'percentage', 'compensation', 'expectedWeeklyHours', 'workplace', 'noticePeriod']);
+// True while an employee has NO stored employment baseline: its single period is only DERIVED from the old register and
+// is orientation, never history. (Records without the old-register marker — preview fixtures, new employees — are false.)
+export function lacksEmploymentBaseline(employee) { return !!(employee && employee.legacy && employee.legacy.hasE360 === false); }
+// True while first registration is the next step: no stored baseline AND the employee is active.
+export function needsInitialRegistration(employee) { return lacksEmploymentBaseline(employee) && employee.status === 'active'; }
+// The one stable refusal of every operation that is not the first registration, for an employee without a stored baseline.
+export const INITIAL_REGISTRATION_REQUIRED_CODE = 'INITIAL_REGISTRATION_REQUIRED';
 // address + birthDate are owner-approved canonical person facts (Identity/Company-facts
 // refinement). Sensitive identifiers (fødselsnummer, kontonummer) are NOT contact fields and
 // stay rejected — they activate only after a later Login/Security gate.
@@ -176,6 +186,10 @@ export function employeeOf(store, tenantId, ansattId) {
 // ---- pure derivations -----------------------------------------------------------------------
 // Start date IS the first terms period's validFrom (single truth, C1).
 export function startDateOf(employee) { return employee.terms[0].validFrom; }
+// The REGISTERED employment start, or null while the employment is not registered: for an old-register employee the first
+// period is only derived and its date is the old record's creation date — never an employment start. Payroll and the
+// planning month estimate use this (membership, "Startet i perioden", payload), so that date decides nothing there.
+export function registeredStartDateOf(employee) { return lacksEmploymentBaseline(employee) ? null : startDateOf(employee); }
 // Current terms = latest validFrom on/before onDate; null when onDate precedes the first period.
 export function currentTermsOf(employee, onDate) {
   let cur = null;
@@ -209,6 +223,9 @@ export function hasApprovedContractVersion(employee) {
 }
 // Vaktplan planning-compensation PROJECTION of the CURRENT terms (derived, never stored twice).
 export function compensationProjectionOf(employee, onDate) {
+  // Before first registration the only "terms" are derived from the old register: its hourly wage is unconfirmed
+  // orientation, never a planning input. No projection -> Vaktplan's established unknown state ("mangler lønnsgrunnlag").
+  if (lacksEmploymentBaseline(employee)) return null;
   const t = currentTermsOf(employee, onDate);
   const c = t && t.compensation;
   if (c && c.model === 'timelonn' && Number.isFinite(c.hourlyRate) && c.hourlyRate > 0) return { model: 'timelonn', plannedHourlyRate: c.hourlyRate };
@@ -220,7 +237,11 @@ export function compensationProjectionOf(employee, onDate) {
 export function vaktplanPeopleFrom(store, tenantId, onDate) {
   return employeesOf(store, tenantId).filter((e) => e.status === 'active').map((e) => {
     const t = currentTermsOf(e, onDate) || e.terms[0];
-    const person = { ansattId: e.ansattId, name: e.name, roleKey: t ? t.role : null };
+    // Before first registration the old-register title is not a role: roleKey null + `unregistered` (display shows the
+    // neutral label). The person stays assignable; a shift created for them stores roleKey null, never the old title.
+    const unreg = lacksEmploymentBaseline(e);
+    const person = { ansattId: e.ansattId, name: e.name, roleKey: unreg ? null : (t ? t.role : null) };
+    if (unreg) person.unregistered = true;
     const comp = compensationProjectionOf(e, onDate);
     if (comp) person.compensation = comp;
     return person;
@@ -328,6 +349,12 @@ export function applyEmployeeOperation({ store, tenantId, actor, op, now, timezo
   const emp = typeof ansattId === 'string' && Object.prototype.hasOwnProperty.call(tenant, ansattId) ? tenant[ansattId] : null;
   if (!emp) return { ok: false, code: 'EMPLOYEE_UNKNOWN' };
 
+  // HARD LAW (initial-registration hardening): for an employee without a stored employment baseline the ONLY operation
+  // is registerInitialEmployment. Every other kind — contact, completion, correction, new period, end, documents, and any
+  // kind added later — is refused here, because persisting its result would store the derived old-register period as
+  // history. Checked before any kind-specific code, so no kind can reach a mutation.
+  if (lacksEmploymentBaseline(emp) && op.kind !== 'registerInitialEmployment') return { ok: false, code: INITIAL_REGISTRATION_REQUIRED_CODE };
+
   if (op.kind === 'updateContact') {
     const patch = op.contact;
     if (!patch || typeof patch !== 'object') return { ok: false, code: 'NO_PATCH' };
@@ -355,6 +382,39 @@ export function applyEmployeeOperation({ store, tenantId, actor, op, now, timezo
       emp.contact[k] = (patch[k] === '' ? null : patch[k]);
     }
     return { ok: true, ansattId, employee: emp };            // terms history untouched (tested)
+  }
+
+  if (op.kind === 'registerInitialEmployment') {
+    // FIRST REGISTRATION of an employee that so far exists only in the old register (record marker legacy.hasE360 === false:
+    // its single period is DERIVED at read time from old bootstrap fields and has never been stored as employment history).
+    // The admin states the REAL start date and the REAL employment facts explicitly; nothing is taken over from the derived
+    // period. Result: exactly ONE stored period, validFrom = the submitted start date. One-time: once a stored baseline
+    // exists this operation is refused and completion / correction / new-period laws apply. Not an append, not a completion.
+    if (!emp.legacy || emp.legacy.hasE360 !== false) return { ok: false, code: 'INITIAL_REGISTRATION_NOT_AVAILABLE' };
+    if (emp.status !== 'active') return { ok: false, code: 'INITIAL_REGISTRATION_INACTIVE' };
+    if ((emp.contractVersions || []).length || (emp.documents || []).length || (emp.termsCorrections || []).length) return { ok: false, code: 'INITIAL_REGISTRATION_NOT_AVAILABLE' };
+    const sd = op.startDate;
+    const realDate = typeof sd === 'string' && WD_RE.test(sd) && !Number.isNaN(Date.parse(sd + 'T12:00:00Z')) && new Date(sd + 'T12:00:00Z').toISOString().slice(0, 10) === sd;
+    if (!realDate || sd < BIRTHDATE_FLOOR) return { ok: false, code: 'STARTDATE_INVALID' };
+    if (todayWd && sd > todayWd) return { ok: false, code: 'STARTDATE_FUTURE' };   // the person is already an active employee
+    const input = op.terms;
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, code: 'NO_TERMS' };
+    const bad = keysOutside(input, TERMS_FIELDS.filter((f) => f !== 'validFrom'));
+    if (bad) return { ok: false, code: 'TERMS_FIELD_NOT_ALLOWED:' + bad };
+    const blankIn = (f) => input[f] == null || input[f] === '';
+    for (const f of INITIAL_REGISTRATION_REQUIRED) if (blankIn(f)) return { ok: false, code: 'INITIAL_TERMS_REQUIRED:' + f };
+    for (const f of Object.keys(input)) {
+      if (blankIn(f)) continue;
+      const problem = termsValueProblem(f, input[f]);
+      if (problem) return { ok: false, code: problem };
+    }
+    const snap = {};
+    for (const f of TERMS_FIELDS) snap[f] = (f in input) && !blankIn(f) ? (f === 'compensation' ? Object.assign({}, input[f]) : input[f]) : null;
+    snap.validFrom = sd;
+    const rec = freezeTerms(snap);
+    emp.terms = [rec];                                                    // exactly one period; the derived one is not kept
+    emp.legacy = Object.freeze(Object.assign({}, emp.legacy, { hasE360: true }));
+    return { ok: true, ansattId, terms: rec, employee: emp };
   }
 
   if (op.kind === 'appendTerms') {

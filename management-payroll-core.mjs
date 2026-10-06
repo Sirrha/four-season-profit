@@ -22,7 +22,7 @@
 
 import { daySummaryFor } from './employee-shell-core.mjs';
 import {
-  employeesOf, employeeOf, startDateOf, currentTermsOf, plannedHoursForEmployee,
+  employeesOf, employeeOf, registeredStartDateOf, currentTermsOf, plannedHoursForEmployee, lacksEmploymentBaseline,
 } from './management-employees-core.mjs';
 
 export const PACKAGE_STATUS = Object.freeze({ DRAFT: 'utkast', APPROVED: 'godkjent', SENT: 'sendt', SUPERSEDED: 'erstattet' });
@@ -167,13 +167,20 @@ export function buildPayrollPackage({ employeeStore, scheduleStore, attendanceSt
   const scope = periodScope(periodId);
   const rows = [];
   for (const e of employeesOf(employeeStore, tenantId)) {
-    const started = startDateOf(e);
+    // Employment start = the REGISTERED start only. For an employee whose employment is not registered it is unknown
+    // (null): the old-register creation date never excludes them from a period, never raises "Startet i perioden" and
+    // never enters the payload or a frozen snapshot (employmentStartedInPeriod stays null).
+    const started = registeredStartDateOf(e);
     const ended = e.status === 'active' ? null : (e.endedAt || null);
     // Every employee employed at ANY point in the period appears — nobody is silently omitted.
     if (started && started > bounds.last) continue;
     if (ended && ended < bounds.first) continue;
     const terms = currentTermsOf(e, bounds.last) || currentTermsOf(e, bounds.first) || (e.terms && e.terms[e.terms.length - 1]) || null;
-    const compensation = compensationOfTerms(terms);
+    // An employee whose employment is not registered yet has NO compensation basis: the only "terms" are derived from the
+    // old register and its hourly wage is unconfirmed. It never enters the row, the accountant payload or a frozen
+    // snapshot; the row carries the existing missing-basis state (compensation null, compensationMissing true), and the
+    // existing law decides the rest (declared hours without a basis = hard block, so approval is refused).
+    const compensation = lacksEmploymentBaseline(e) ? null : compensationOfTerms(terms);
     const fixedSalary = !!(compensation && compensation.model === 'fastlonn');
 
     const records = attendanceRecordsFor(attendanceStore, e.ansattId, periodId);

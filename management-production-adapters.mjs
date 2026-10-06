@@ -26,7 +26,7 @@ import {
   createManagementScheduleAdapters, makeAttendanceCommitter, makeEmployeeSelfWriter,
   validateFsCapability, adapterError, mapFsError, ADAPTER_ERROR, s4Path, stripServerFields,
 } from './employee-production-adapters.mjs';
-import { applyEmployeeOperation, normalizeAddress, formatAddress, currentTermsOf } from './management-employees-core.mjs';
+import { applyEmployeeOperation, normalizeAddress, formatAddress, currentTermsOf, lacksEmploymentBaseline } from './management-employees-core.mjs';
 import { applyContractOperation } from './management-contract-core.mjs';
 import { PRIVATE_FIELD_KEYS, validatePrivatePatch, maskPrivateField, storedDigits } from './management-private-fields.mjs';
 
@@ -107,7 +107,9 @@ export function ansattWriteFor(kind, rec, prev, nowMs, todayWd) {
   if (Array.isArray(rec.termsCorrections) && rec.termsCorrections.length) e360.termsCorrections = clone(rec.termsCorrections);
   const out = { [E360_KEY]: e360 };
   const t = currentTermsOf(rec, todayWd) || rec.terms[rec.terms.length - 1];
-  const touchesTerms = kind === 'createEmployee' || kind === 'appendTerms' || kind === 'completeCurrentTerms' || kind === 'correctCurrentTerms';
+  // registerInitialEmployment (first registration of an old-register employee) follows the same projection law: the
+  // legacy current fields mirror the canonical terms the admin just submitted; `opprettet` is never written.
+  const touchesTerms = kind === 'createEmployee' || kind === 'appendTerms' || kind === 'completeCurrentTerms' || kind === 'correctCurrentTerms' || kind === 'registerInitialEmployment';
   if (kind === 'createEmployee' || kind === 'updateContact') {
     out.epost = rec.contact.email || '';
     const a = rec.contact.address;
@@ -169,7 +171,9 @@ export function createManagementAdapters(options) {
 
   // ---- employees: canonical ansatte -> Employee 360 read store (host mirror, no second listener) ----
   const employees = { [T]: {} };
-  const people = () => Object.keys(employees[T]).map((k) => employees[T][k]).filter((e) => e.status === 'active').map((e) => ({ ansattId: e.ansattId, name: e.name, roleKey: (currentTermsOf(e, todayWd()) || e.terms[0]).role || null }));
+  const people = () => Object.keys(employees[T]).map((k) => employees[T][k]).filter((e) => e.status === 'active').map((e) => (lacksEmploymentBaseline(e)
+    ? { ansattId: e.ansattId, name: e.name, roleKey: null, unregistered: true }   // old-register title is not a role (see vaktplanPeopleFrom)
+    : { ansattId: e.ansattId, name: e.name, roleKey: (currentTermsOf(e, todayWd()) || e.terms[0]).role || null }));
   function refresh() {
     const next = {};
     for (const d of (o.readAnsatte() || [])) {
@@ -193,6 +197,18 @@ export function createManagementAdapters(options) {
       tick();
     });
   }
+  // PERSISTENCE INVARIANT (initial-registration hardening), independent of the cores' own guards: a document WITHOUT a
+  // stored employment block may receive that block from exactly ONE operation kind, registerInitialEmployment. It is
+  // evaluated on the RAW document read inside the transaction, before the core runs and again immediately before the
+  // write, so neither a stale mirror nor a direct adapter call nor a future operation kind can serialize the period that
+  // normalizeAnsatt only derives from the old register.
+  const rawHasBaseline = (raw) => !!(raw && raw[E360_KEY] && typeof raw[E360_KEY] === 'object');
+  function refuseWithoutBaseline(raw, kind) {
+    if (rawHasBaseline(raw) || kind === 'registerInitialEmployment') return;
+    const err = adapterError(ADAPTER_ERROR.CORE_REFUSED, 'INITIAL_REGISTRATION_REQUIRED');
+    err.coreResult = { ok: false, code: 'INITIAL_REGISTRATION_REQUIRED' };
+    throw err;
+  }
   function applyEmployee(op) {
     try { assertLive(); } catch (e) { return Promise.reject(e); }
     if (!op || typeof op !== 'object') return Promise.reject(adapterError(ADAPTER_ERROR.CORE_REFUSED, 'NO_OPERATION'));
@@ -207,6 +223,7 @@ export function createManagementAdapters(options) {
         const s = await tx.get(ref);
         if (!s || !s.exists) throw adapterError(ADAPTER_ERROR.CORE_REFUSED, 'EMPLOYEE_UNKNOWN');
         prev = s.data;
+        refuseWithoutBaseline(prev, op.kind);
       }
       const tenant = {}; if (prev) tenant[id] = normalizeAnsatt(id, prev);
       const now = nowMs();
@@ -216,7 +233,7 @@ export function createManagementAdapters(options) {
       const write = ansattWriteFor(op.kind, rec, prev, now, todayWd());
       writtenRev = write[E360_KEY].rev;
       const ref = fs.doc(ansattePath(T, id));
-      if (isCreate) tx.set(ref, Object.assign(legacySkeleton(now), write)); else tx.update(ref, write);
+      if (isCreate) tx.set(ref, Object.assign(legacySkeleton(now), write)); else { refuseWithoutBaseline(prev, op.kind); tx.update(ref, write); }
       return { ok: true, ansattId: id, employee: rec, kind: op.kind };
     }).then(async (r) => { await settled(r.ansattId, writtenRev); return r; }).catch((e) => (e && e.coreResult ? Promise.reject(e) : rejectMapped(e)));
   }
@@ -236,6 +253,7 @@ export function createManagementAdapters(options) {
       const s = await tx.get(ref);
       if (!s || !s.exists) throw adapterError(ADAPTER_ERROR.CORE_REFUSED, 'EMPLOYEE_UNKNOWN');
       const prev = s.data;
+      refuseWithoutBaseline(prev, 'contract:' + op.kind);   // no contract operation before first registration
       // FREEZE reads the AUTHORITATIVE tenant profile inside the same transaction (release -007): the browser's in-memory
       // profile is never the snapshot source, and the core refuses any drift from the reviewed inputs.
       const freeze = op.kind === 'freezeVersion';
@@ -253,6 +271,7 @@ export function createManagementAdapters(options) {
       const rec = tenant[op.ansattId];
       const write = ansattWriteFor('contract:' + op.kind, rec, prev, now, todayWd());
       writtenRev = write[E360_KEY].rev;
+      refuseWithoutBaseline(prev, 'contract:' + op.kind);
       tx.update(ref, write);
       return Object.assign({}, res, { ansattId: op.ansattId, employee: rec });
     }).then(async (r) => { await settled(r.ansattId, writtenRev); return r; }).catch((e) => (e && e.coreResult ? Promise.reject(e) : rejectMapped(e)));

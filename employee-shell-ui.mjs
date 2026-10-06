@@ -21,10 +21,10 @@ import { ownShiftsForMembership, todayShiftOf, nextUpcomingShift, isOvernight, h
 import { renderScheduleView } from './employee-schedule-view.mjs';
 import { renderManagementView } from './management-schedule-view.mjs';
 import { canOpenVaktplan, openShiftsOf, isEligible, applyScheduleOperation, shiftsForEmployee, managerWeekFor, durationHoursOf } from './management-schedule-core.mjs';
-import { seedFourSeasonEmployees, vaktplanPeopleFrom, canViewEmployees, employeesOf, employeeOf, startDateOf, missingInfoOf, currentTermsOf, contractStatusOf } from './management-employees-core.mjs';
+import { seedFourSeasonEmployees, vaktplanPeopleFrom, canViewEmployees, employeesOf, employeeOf, startDateOf, registeredStartDateOf, lacksEmploymentBaseline, missingInfoOf, currentTermsOf, contractStatusOf } from './management-employees-core.mjs';
 import { minAnsettelseFra, SCOPE_LINE } from './employee-myjob.mjs';   // Employee Page V1: pure, import-free presentation of the employee's own employment facts
 import { renderEmployeesView } from './management-employees-view.mjs';
-import { renderPayrollView, packageRollupOf, manualTargetFor, monthFactsOf, fmtH, fmtKr } from './management-payroll-view.mjs';
+import { renderPayrollView, packageRollupOf, manualTargetFor, manualErrorText, monthFactsOf, fmtH, fmtKr } from './management-payroll-view.mjs';
 import { planningEconomyFor } from './management-planning-economy.mjs';   // P2: pure planning projection (never stored)
 import { dagensBildeFra, ansattFaktaFra, oppmerksomhetFra, EMPTY_ATTENTION } from './management-oversikt.mjs';   // Oversikt V1: pure, import-free composition
 import { createPayrollStore, buildPayrollPackage, versionsOf, periodLabel } from './management-payroll-core.mjs';
@@ -223,7 +223,7 @@ export function mountEmployeeShell(root, options) {
   // is consulted ONLY in preview (e.g. the ?scale=40 grid set, whose people are not employment records).
   function personFor(membership) {
     const e = ADAPTERS ? employeeOf(employeeStore(), membership.tenantId, membership.ansattId) : null;
-    if (e) { const t = currentTermsOf(e, tenantWorkDate(Date.now(), TZ)); return { ansattId: e.ansattId, name: e.name, roleKey: t ? t.role : null }; }
+    if (e) { const t = currentTermsOf(e, tenantWorkDate(Date.now(), TZ)); return { ansattId: e.ansattId, name: e.name, roleKey: t && !(e.legacy && e.legacy.hasE360 === false) ? t.role : null }; }
     return MODE === 'preview' ? (FOUR_SEASON_PEOPLE.find((p) => p.ansattId === membership.ansattId) || null) : null;
   }
   function resolveAssigneeIn(tenantId, ansattId) {
@@ -1356,13 +1356,25 @@ export function mountEmployeeShell(root, options) {
     return out;
   }
   // CANONICAL EMPLOYMENT (binding caller rule): sourced from the management-employees-core
-  // projection at the call site — startDateOf() and the same status/endedAt expression the payroll
-  // core itself uses (management-payroll-core.mjs:170-171). Never a literal, never a re-derivation,
-  // never read back from rendered text.
+  // projection at the call site — registeredStartDateOf() and the same status/endedAt expression the
+  // payroll core itself uses. Never a literal, never a re-derivation, never read back from rendered
+  // text. The start is the REGISTERED start only: for an employee whose employment is not registered
+  // it is null (the old-register creation date is never an employment bound), so the engine itself
+  // answers EMPLOYMENT_REQUIRED if the gate below were ever bypassed.
   function employmentOf(ansattId) {
     const e = employeeOf(employeeStore(), MGR.tenantId, ansattId);
     if (!e) return null;
-    return { startDate: startDateOf(e), endDate: e.status === 'active' ? null : (e.endedAt || null) };
+    return { startDate: registeredStartDateOf(e), endDate: e.status === 'active' ? null : (e.endedAt || null) };
+  }
+  // MANAGER MANUAL TIME GATE (fail closed, Sirrha ruling 2026-10-06): no NEW manager-entered day for an employee whose
+  // employment is not registered yet. Decided on the employee alone — never on the chosen day — so the refusal is
+  // identical before, on and after any old-register date, and nothing is compared against such a date.
+  // NOT gated: "Korriger" of an ALREADY-EXISTING attendance record (e.g. a live clocked day). That path never reads an
+  // employment window, cannot create a day and cannot retarget identity/workDate (managerCorrection whitelists only
+  // declared times/break/note). Employee live clock-in / clock-out / breaks do not pass through here at all.
+  function manualBlockOf(ansattId) {
+    const e = employeeOf(employeeStore(), MGR.tenantId, ansattId);
+    return e && lacksEmploymentBaseline(e) ? 'INITIAL_REGISTRATION_REQUIRED' : null;
   }
   function recordsForEmployee(ansattId) {
     const out = [];
@@ -1372,6 +1384,9 @@ export function mountEmployeeShell(root, options) {
   function manualTimeContext({ ansattId, workDate }) {
     const shifts = shiftsForEmployee(scheduleStore(), MGR.tenantId, ansattId, MGR.actor);
     const target = manualTargetFor({ records: recordsForEmployee(ansattId), shifts, workDate });
+    const block = manualBlockOf(ansattId);
+    const toExisting = target.mode === 'correct' || target.mode === 'live' || target.mode === 'choose_record';   // never a new day
+    if (block && !toExisting) return { mode: 'blocked', blocked: true, code: block, reasonCodes: [], hint: manualErrorText(block), candidates: [] };
     const hint =
       target.mode === 'correct' ? 'Dagen finnes allerede. Lagring korrigerer den registreringen.'
       : target.mode === 'live' ? 'Økten pågår. Du kan ikke legge til en ny dag mens den løper.'
@@ -1431,6 +1446,10 @@ export function mountEmployeeShell(root, options) {
       if (!res.ok) return { ok: false, code: res.code };
       return persistManualAttendance(res);   // the ONE canonical store
     }
+    // ADD a NEW day: refused outright for an employee whose employment is not registered — before any shift resolution,
+    // before the engine sees a window (the window above carries no start date for them anyway). Same code for every day.
+    const block = manualBlockOf(form.ansattId);
+    if (block) return { ok: false, code: block };
     // ADD: M1 needs an unambiguous real shift; several candidates require an explicit choice.
     let shift = null;
     if (target.mode === 'choose') {
@@ -1566,7 +1585,7 @@ export function mountManagementVaktplan(root, { identity, expectedTenantId, adap
   if (m.accessRole !== 'admin') return denied(DENIAL.IDENTITY_ROLE_INVALID);
   if (!adapters || !adapters.schedule || typeof adapters.schedule.store !== 'function' || !adapters.schedule.admin) return denied(DENIAL.ADAPTERS_MISSING);
   const list = (Array.isArray(people) ? people : []).filter((p) => p && typeof p.ansattId === 'string' && p.ansattId && typeof p.name === 'string' && p.name)
-    .map((p) => ({ ansattId: p.ansattId, name: p.name, roleKey: typeof p.roleKey === 'string' && p.roleKey ? p.roleKey : null }));
+    .map((p) => (p.unregistered === true ? { ansattId: p.ansattId, name: p.name, roleKey: null, unregistered: true } : { ansattId: p.ansattId, name: p.name, roleKey: typeof p.roleKey === 'string' && p.roleKey ? p.roleKey : null }));
   // Capability-shaped actor DERIVED from the membership (the frozen engine requires accessRole admin for writes).
   const actor = Object.freeze({ uid: m.uid, accessRole: 'admin', ansattId: typeof m.ansattId === 'string' && m.ansattId ? m.ansattId : null, accessEnabled: m.accessEnabled === true, tenantId: m.tenantId,
     canManageSchedule: true, canViewOwnSchedule: false, canViewEmployeeCore: false, canViewEmployeeCompensation: false, canEditEmployment: false });

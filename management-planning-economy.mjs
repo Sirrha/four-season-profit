@@ -16,7 +16,7 @@
 // is planned hours × applicable hourly rate by workDate (S-P2a).
 
 import { tenantShiftsOf, durationHoursOf, scopeDaysOf } from './management-schedule-core.mjs';
-import { employeesOf, currentTermsOf, plannedHoursForEmployee } from './management-employees-core.mjs';
+import { employeesOf, currentTermsOf, plannedHoursForEmployee, lacksEmploymentBaseline, registeredStartDateOf } from './management-employees-core.mjs';
 
 export const FIXED_SALARY_NOTE = 'fastlønn — inngår ikke i timebasert estimat';
 export const MISSING_BASIS_NOTE = 'kan ikke beregnes — mangler lønnsbasis';
@@ -32,6 +32,7 @@ export function coverageLineOf(covered, total) {
 // Hourly rate in effect on a workDate for one employee, from the time-bounded terms — or null
 // when the employee is not hourly on that date or has no compensation basis there. Never guessed.
 export function hourlyRateOn(employee, workDate) {
+  if (lacksEmploymentBaseline(employee)) return null;   // old-register wage is not a rate (employment not registered yet)
   const t = currentTermsOf(employee, workDate);
   const c = t && t.compensation;
   if (!c || c.model !== 'timelonn' || !Number.isFinite(c.hourlyRate) || c.hourlyRate <= 0) return null;
@@ -41,6 +42,9 @@ export function hourlyRateOn(employee, workDate) {
 // Basis of an employee for the period (for naming exclusions): 'timelonn' | 'fastlonn' | 'mangler',
 // read from the terms in effect on the period's last day (else first day, else latest).
 function basisFor(employee, firstDay, lastDay) {
+  // An employee whose employment is not registered yet has NO compensation basis: the period derived from the old
+  // register (and its hourly wage) is never used for an estimate. Named as the existing exclusion "mangler lønnsbasis".
+  if (lacksEmploymentBaseline(employee)) return 'mangler';
   const t = currentTermsOf(employee, lastDay) || currentTermsOf(employee, firstDay) || (employee.terms && employee.terms[employee.terms.length - 1]) || null;
   const c = t && t.compensation;
   if (!c) return 'mangler';
@@ -62,7 +66,7 @@ export function planningEconomyFor({ employeeStore, scheduleStore, tenantId, per
   const exclusions = [];
   for (const e of employeesOf(employeeStore, tenantId)) {
     // Same inclusion as the payroll package: employed at ANY point in the period.
-    const started = e.terms && e.terms[0] ? e.terms[0].validFrom : null;
+    const started = e.terms && e.terms[0] ? registeredStartDateOf(e) : null;   // unknown (never the old-register creation date) while unregistered
     const ended = e.status === 'active' ? null : (e.endedAt || null);
     if (started && started > lastDay) continue;
     if (ended && ended < firstDay) continue;

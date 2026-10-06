@@ -164,20 +164,44 @@ export function makeAttendanceCommitter(ctx) {
 
 }
 // ---- shared employeeSelf writer (admin-only projection; derived from the canonical record only) -----------------
+// FAIL-CLOSED LAW (initial-registration closeout): nothing is projected to employeeSelf for an employee whose real
+// employment baseline has not been registered. Two independent checks, both at this writer (the only employeeSelf
+// persistence path), never only in a caller or the UI:
+//   (1) the supplied record carries the old-register marker (legacy.hasE360 === false) -> refused before any read;
+//   (2) the RAW canonical ansatte document is read INSIDE the write transaction: no stored employment block (or no period
+//       in it) -> refused; and the projected start date must be the stored one, so a stale / hand-built record cannot
+//       project the period that is only derived from the old register (its creation date) even after someone else has
+//       registered the employment.
+// A refusal writes nothing anywhere. Refusal: CORE_REFUSED:INITIAL_REGISTRATION_REQUIRED (+ coreResult), the same stable
+// code the employee and contract operations use; a start-date mismatch is PROJECTION_INVALID:sourceMismatch.
+function baselineRequiredError() {
+  const err = adapterError(ADAPTER_ERROR.CORE_REFUSED, 'INITIAL_REGISTRATION_REQUIRED');
+  err.coreResult = { ok: false, code: 'INITIAL_REGISTRATION_REQUIRED' };
+  return err;
+}
 export function makeEmployeeSelfWriter(ctx) {
   const { fs, T, st, assertLive, rejectMapped } = ctx;
   return function writeEmployeeSelf(ansattId, employee, opt) {
     try { assertLive(); } catch (e) { return Promise.reject(e); }
+    if (employee && employee.legacy && employee.legacy.hasE360 === false) return Promise.reject(baselineRequiredError());
+    if (employee && typeof employee.ansattId === 'string' && employee.ansattId !== ansattId) return Promise.reject(adapterError(ADAPTER_ERROR.PROJECTION_INVALID, 'ansattId'));
     const p = projectEmployeeSelf(employee, opt && opt.onDate);
     if (!p) return Promise.reject(adapterError(ADAPTER_ERROR.PROJECTION_INVALID, 'employee'));
     const doc = Object.assign({}, p, { derivedAt: null, sourceRevision: opt && Number.isInteger(opt.sourceRevision) ? opt.sourceRevision : null });
     const v = validateEmployeeSelfDoc(doc);
     if (!v.ok) return Promise.reject(adapterError(ADAPTER_ERROR.PROJECTION_INVALID, v.code));
-    let ref;
-    try { ref = fs.doc(s4Path(T, 'employeeSelf', ansattId)); } catch (e) { return Promise.reject(e); }
-    const b = fs.batch();
-    b.set(ref, Object.assign({}, doc, { derivedAt: st() }));
-    return b.commit().then(() => ({ ok: true, projection: p })).catch(rejectMapped);
+    let ref, src;
+    try { ref = fs.doc(s4Path(T, 'employeeSelf', ansattId)); src = fs.doc('tenants/' + T + '/ansatte/' + ansattId); } catch (e) { return Promise.reject(e); }
+    return fs.runTransaction(async (tx) => {
+      const s = await tx.get(src);
+      const raw = s && s.exists ? s.data : null;
+      const base = raw && raw.e360 && typeof raw.e360 === 'object' ? raw.e360 : null;
+      if (!base || !Array.isArray(base.terms) || base.terms.length === 0) throw baselineRequiredError();
+      const storedStart = typeof base.startDate === 'string' && base.startDate ? base.startDate : (base.terms[0] && base.terms[0].validFrom) || null;
+      if (p.startDate !== storedStart) throw adapterError(ADAPTER_ERROR.PROJECTION_INVALID, 'sourceMismatch');
+      tx.set(ref, Object.assign({}, doc, { derivedAt: st() }));
+      return { ok: true, projection: p };
+    }).catch(rejectMapped);
   };
 
 }

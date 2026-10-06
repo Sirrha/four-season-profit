@@ -11,7 +11,8 @@
 import assert from 'node:assert/strict';
 import { manualTargetFor, manualErrorText, nbDateFromIso, isoFromNbDate } from './management-payroll-view.mjs';
 import { managerManualEntry, managerCorrection, daySummaryFor, ETR2A_POLICY, attendanceIdFor, manualAttendanceIdFor, tenantLocalHMToUtcMs } from './employee-shell-core.mjs';
-import { seedFourSeasonEmployees, employeeOf, startDateOf } from './management-employees-core.mjs';
+import { seedFourSeasonEmployees, employeeOf, startDateOf, registeredStartDateOf } from './management-employees-core.mjs';
+import fs from 'node:fs';
 import { FOUR_SEASON_PEOPLE, FOUR_SEASON_TENANT } from './employee-schedule-fixture.mjs';
 
 let passed = 0, failed = 0;
@@ -87,9 +88,13 @@ t('U8', 'employment injection matches the canonical employees projection exactly
   const store = seedFourSeasonEmployees(FOUR_SEASON_PEOPLE, T);
   const e = employeeOf(store, T, FOUR_SEASON_PEOPLE[0].ansattId);
   assert.ok(e, 'canonical employee record resolves');
-  // THE caller rule: startDate is startDateOf(), endDate is the same status/endedAt expression the
-  // payroll core itself uses. Not a literal, not a second derivation.
-  const employment = { startDate: startDateOf(e), endDate: e.status === 'active' ? null : (e.endedAt || null) };
+  // THE caller rule (changed deliberately: it was startDateOf(), which for an old-register employee is the old record's
+  // creation date): startDate is registeredStartDateOf() — the registered start, null while unregistered — and endDate
+  // is the same status/endedAt expression the payroll core itself uses. Not a literal, not a second derivation.
+  const employment = { startDate: registeredStartDateOf(e), endDate: e.status === 'active' ? null : (e.endedAt || null) };
+  assert.equal(registeredStartDateOf(e), startDateOf(e), 'a registered / fixture employee: identical to before');
+  const ui = fs.readFileSync(new URL('./employee-shell-ui.mjs', import.meta.url), 'utf8');
+  assert.ok(ui.includes("return { startDate: registeredStartDateOf(e), endDate: e.status === 'active' ? null : (e.endedAt || null) };"), 'the shell uses exactly this rule');
   assert.equal(employment.startDate, e.terms[0].validFrom);
   assert.equal(employment.endDate, null);
   assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(employment.startDate));

@@ -19,14 +19,14 @@
     {
       "name": "management-contract-core.mjs",
       "source": "management-contract-core.mjs",
-      "sha256": "7bfcf9f63bbe8a2dfb6e9ee48b848f10e355608695b9856fe8258fb6fd24fa61",
-      "bytes": 36813
+      "sha256": "2867ed17250f45685933ebec2a41c3c881f04e45ec0da1fc81c60c54666faab7",
+      "bytes": 37262
     },
     {
       "name": "management-employees-core.mjs",
       "source": "management-employees-core.mjs",
-      "sha256": "e29067eacc7a8c2e8a72bc994842edfebb2671b4aaa33c7b5abb34b7d4fd4ade",
-      "bytes": 33797
+      "sha256": "02b929c4336c451dd9a7be3ffa9de9d774e9cf0f098ab72a2cd061b4f2d3f7a3",
+      "bytes": 39412
     },
     {
       "name": "management-schedule-core.mjs",

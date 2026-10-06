@@ -182,10 +182,18 @@ await t('PF11', 'no employee/contract operation ever writes a private field: ans
   const sk = legacySkeleton(1); assert.equal(sk.personnummer, ''); assert.equal(sk.bankkonto, '');
   const F = makeFakeFs(); F.seed(P(A1), legacyDoc({ personnummer: PNR, bankkonto: KTO }));
   const M = build(F); M.start();
+  // initial-registration hardening: on an old-register document both operations are refused with ZERO writes until the
+  // employment has been registered; the first write is therefore the registration itself (e360 + accepted projections).
+  for (const p of [M.employees.apply({ kind: 'updateContact', ansattId: A1, contact: { phone: '40000001' } }), M.employees.applyContract({ kind: 'startDraft', ansattId: A1 }, FOUR_SEASON_CONTRACT_PROFILE, {})]) await assert.rejects(p, (e) => /INITIAL_REGISTRATION_REQUIRED/.test(e.message));
+  assert.equal(F.writes.length, 0);
+  await M.employees.apply({ kind: 'registerInitialEmployment', ansattId: A1, startDate: '2026-06-01', terms: { role: 'butikkmedarbeider', employmentForm: 'fast', employmentType: 'fast', percentage: 100, compensation: { model: 'timelonn', hourlyRate: 210 }, expectedWeeklyHours: 37.5, workplace: '4Seasons ferske varer', noticePeriod: '1 måned' } });
   await M.employees.apply({ kind: 'updateContact', ansattId: A1, contact: { phone: '40000001' } });
   await M.employees.applyContract({ kind: 'startDraft', ansattId: A1 }, M.contractProfile.get() || FOUR_SEASON_CONTRACT_PROFILE, {});
-  for (const w of F.writes) { assert.ok(!('personnummer' in w.data) && !('bankkonto' in w.data)); assert.deepEqual(Object.keys(w.data).filter((k) => k !== E360_KEY && k !== 'epost' && k !== 'adresse'), []); }
-  assert.ok(!hasSecret(JSON.stringify(F.writes[0].data)), 'updateContact carries no private value');
+  assert.equal(F.writes.length, 3);
+  for (const w of F.writes) assert.ok(!('personnummer' in w.data) && !('bankkonto' in w.data));
+  for (const w of F.writes.slice(1)) assert.deepEqual(Object.keys(w.data).filter((k) => k !== E360_KEY && k !== 'epost' && k !== 'adresse'), []);
+  assert.ok(!hasSecret(JSON.stringify(F.writes[0].data)), 'first registration carries no private value');
+  assert.ok(!hasSecret(JSON.stringify(F.writes[1].data)), 'updateContact carries no private value');
   assert.equal(F.docs.get(P(A1)).personnummer, PNR); assert.equal(F.docs.get(P(A1)).bankkonto, KTO);
   const e360 = F.docs.get(P(A1))[E360_KEY];
   assert.deepEqual(e360.contractVersions[0].privateFields, { fodselsnummer: PNR, bankkonto: KTO }, 'the new draft is prefilled with its own copy');
@@ -205,9 +213,13 @@ await t('PF12', 'M. employeeSelf never contains them: the projection of a record
   for (const k of ['personnummer', 'bankkonto']) { const v = validateEmployeeSelfDoc(Object.assign({}, doc, { [k]: k === 'personnummer' ? PNR : KTO })); assert.equal(v.ok, false, k + ' accepted by the employeeSelf validator'); }
   const F = makeFakeFs(); F.seed(P(A1), legacyDoc({ personnummer: PNR, bankkonto: KTO }));
   const M = build(F); M.start();
+  // closeout law: no projection before first registration (zero writes); the adapter test therefore registers first
+  await assert.rejects(M.employeeSelf.write(A1, M.employees.store()[T][A1], { onDate: '2026-10-03', sourceRevision: 1 }), (e) => /INITIAL_REGISTRATION_REQUIRED/.test(e.message));
+  assert.equal(F.writes.length, 0);
+  await M.employees.apply({ kind: 'registerInitialEmployment', ansattId: A1, startDate: '2026-06-01', terms: { role: 'butikkmedarbeider', employmentForm: 'fast', employmentType: 'fast', percentage: 100, compensation: { model: 'timelonn', hourlyRate: 210 }, expectedWeeklyHours: 37.5, workplace: '4Seasons ferske varer', noticePeriod: '1 måned' } });
   const wr = await M.employeeSelf.write(A1, M.employees.store()[T][A1], { onDate: '2026-10-03', sourceRevision: 1 });
-  assert.equal(wr.ok, true); assert.equal(F.writes.length, 1); assert.equal(F.writes[0].path, 'tenants/' + T + '/employeeSelf/' + A1);
-  assert.deepEqual(Object.keys(F.writes[0].data).sort(), ['derivedAt', 'employmentType', 'expectedWeeklyHours', 'hasContract', 'name', 'percentage', 'role', 'sourceRevision', 'startDate', 'workplace']);
+  assert.equal(wr.ok, true); assert.equal(F.writes.length, 2); assert.equal(F.writes[1].path, 'tenants/' + T + '/employeeSelf/' + A1);
+  assert.deepEqual(Object.keys(F.writes[1].data).sort(), ['derivedAt', 'employmentType', 'expectedWeeklyHours', 'hasContract', 'name', 'percentage', 'role', 'sourceRevision', 'startDate', 'workplace']);
   for (const w of F.writes) assert.ok(!hasSecret(JSON.stringify(w.data)) && !/personnummer|bankkonto/.test(JSON.stringify(w.data)), w.path);
   M.dispose();
   const empSrc = ['employee-production-adapters.mjs', 'employee-production-bridge.mjs', 'employee-myjob.mjs', 'employee-schedule-view.mjs', 'employee-schedule-week.mjs', 'employee-schedule-month.mjs', 'employee-shell-core.mjs'].map((f) => fs.readFileSync(path.join(HERE, f), 'utf8').replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')).join('\n');

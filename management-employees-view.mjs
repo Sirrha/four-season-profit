@@ -14,7 +14,7 @@ import { isOvernight } from './employee-schedule-week.mjs';
 import {
   employeesOf, employeeOf, startDateOf, currentTermsOf, termsWithRanges, contractStatusOf,
   missingInfoOf, applyEmployeeOperation, plannedHoursForEmployee, upcomingShiftsForEmployee,
-  normalizeAddress, correctableTermsPeriodOf,
+  normalizeAddress, correctableTermsPeriodOf, needsInitialRegistration, lacksEmploymentBaseline,
   canViewEmployees, canViewCompensation, canEditEmployment, EMPLOYMENT_TYPES, EMPLOYMENT_FORMS, DOC_CATEGORIES,
   PAYMENT_INTERVALS,
 } from './management-employees-core.mjs';
@@ -76,6 +76,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
   // previewed; any later edit of the two fields changes the identity and requires a new preview.
   let privSeen = null;
   let corrDraft = null;          // transient typed correction values kept across a refused save's redraw; the ONE truth stays the terms
+  let regDraft = null;           // first registration: { id, v } typed values kept across a refused save's redraw (UI state only, never persisted)
   let companyDraft = null;      // transient unsaved editor values; the ONE truth stays contractProfile
   // PRIVATE FIELDS (release 019) — UI state only, never persisted. `priv.shown[k]` holds a full value ONLY while the
   // manager has pressed «Vis» for that field; `priv.draft` holds typed values ONLY while the edit form is open. Any
@@ -92,7 +93,19 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
   const fmtH = (h) => h.toLocaleString('nb-NO', { maximumFractionDigits: 2 }) + ' t';
   const monthScope = () => ({ kind: 'month', year: Number(todayWd.slice(0, 4)), month: Number(todayWd.slice(5, 7)) });
 
+  // Before first registration the old register's title / wage are UNCONFIRMED orientation, never shown as current truth:
+  // header, list and summaries use this neutral label instead of the derived role.
+  const UNREGISTERED_LABEL = 'Arbeidsforhold ikke registrert';
+  const roleLineOf = (e, t) => (lacksEmploymentBaseline(e) ? UNREGISTERED_LABEL : roleOf(t ? t.role : null));
+  const FIRST_REG_LABELS = { role: 'Stilling', employmentForm: 'Ansettelsesform', employmentType: 'Stillingstype', percentage: 'Stillingsprosent', compensation: 'Lønnsgrunnlag', expectedWeeklyHours: 'Avtalt arbeidstid', workplace: 'Arbeidssted', noticePeriod: 'Oppsigelsestid' };
   function opError(code) {
+    if (code === 'INITIAL_REGISTRATION_REQUIRED') return 'Arbeidsforholdet må registreres først. Gå til «Arbeidsforhold» og velg «Registrer arbeidsforhold».';
+    if (code === 'INITIAL_REGISTRATION_NOT_AVAILABLE') return 'Arbeidsforholdet er allerede registrert. Bruk fullføring, korrigering eller ny periode.';
+    if (code === 'INITIAL_REGISTRATION_INACTIVE') return 'Den ansatte er ikke aktiv. Arbeidsforhold kan bare opprettes for aktive ansatte.';
+    if (code === 'STARTDATE_FUTURE') return 'Faktisk startdato kan ikke være fram i tid.';
+    if (typeof code === 'string' && code.startsWith('INITIAL_TERMS_REQUIRED:')) return (FIRST_REG_LABELS[code.slice(23)] || 'Opplysningen') + ' må fylles ut for å opprette arbeidsforholdet.';
+    if (code === 'PAYMENTINTERVAL_INVALID') return 'Ugyldig utbetalingsintervall.';
+    if (typeof code === 'string' && code.startsWith('TERMS_VALUE_INVALID')) return 'En av opplysningene har ugyldig verdi.';
     if (code === 'NAME_REQUIRED') return 'Navn må fylles ut.';
     if (code === 'STARTDATE_INVALID') return 'Oppgi en gyldig startdato.';
     if (code === 'ROLE_REQUIRED') return 'Velg en stilling/rolle.';
@@ -249,11 +262,12 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       top.appendChild(el('div', { cls: 'nm', text: e.name }));
       top.appendChild(el('span', { cls: 'st' + (e.status === 'active' ? ' on' : ''), text: e.status === 'active' ? 'Aktiv' : 'Sluttet' }));
       row.appendChild(top);
-      const bits = [roleOf(t ? t.role : null)];
+      const bits = [roleLineOf(e, t)];
       if (t && t.employmentType) bits.push(t.employmentType);
       if (t && t.percentage != null) bits.push(t.percentage + ' %');
       row.appendChild(el('div', { cls: 'sub', text: bits.join(' · ') }));
       const m = missingInfoOf(e, todayWd).slice();
+      if (needsInitialRegistration(e)) m.unshift('registrer arbeidsforhold');
       const cs = contractStateOf(e);
       if (cs.state === 'mangler') m.push('mangler arbeidsavtale');
       else if (cs.state === 'utkast') m.push('arbeidsavtale er utkast');
@@ -403,7 +417,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     const e = employeeOf(employeeStore, tenantId, selectedId);
     if (!e) { page = 'list'; return drawList(); }
     const cur = currentTermsOf(e, todayWd) || e.terms[e.terms.length - 1];
-    root.appendChild(head(e.name, roleOf(cur ? cur.role : null) + ' · ' + (e.status === 'active' ? 'Aktiv' : 'Sluttet ' + fmtDate(e.endedAt))));
+    root.appendChild(head(e.name, roleLineOf(e, cur) + ' · ' + (e.status === 'active' ? 'Aktiv' : 'Sluttet ' + fmtDate(e.endedAt))));
     const back = btn('← Alle ansatte', 'btn tertiary', () => { page = 'list'; errMsg = ''; draw(); });
     back.style.cssText = 'width:auto;padding:4px 0;min-height:0;margin-bottom:10px';
     root.appendChild(back);
@@ -434,12 +448,13 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     const card = el('div', { cls: 'card' });
     card.appendChild(el('div', { cls: 'kicker', text: 'Oversikt' }));
     card.appendChild(factRow('Status', e.status === 'active' ? 'Aktiv' : 'Sluttet ' + fmtDate(e.endedAt)));
-    card.appendChild(factRow('Stilling', roleOf(cur ? cur.role : null)));
+    const unreg = lacksEmploymentBaseline(e);   // old-register values are not shown as current facts
+    card.appendChild(factRow('Stilling', unreg ? 'Ikke registrert' : roleOf(cur ? cur.role : null)));
     card.appendChild(factRow('Stillingstype', cur && cur.employmentType ? cur.employmentType : 'Ikke registrert'));
     card.appendChild(factRow('Stillingsprosent', cur && cur.percentage != null ? cur.percentage + ' %' : 'Ikke registrert'));
-    card.appendChild(factRow('Startdato', fmtDate(startDateOf(e))));
+    card.appendChild(factRow('Startdato', unreg ? 'Ikke registrert' : fmtDate(startDateOf(e))));   // an old-register date is never shown as the employment start
     let comp = 'Ikke registrert';
-    if (canViewCompensation(actor) && cur && cur.compensation) {
+    if (canViewCompensation(actor) && cur && cur.compensation && !unreg) {
       comp = cur.compensation.model === 'timelonn' ? fmtKr(cur.compensation.hourlyRate) + ' per time' : fmtKr(cur.compensation.monthlySalary) + ' per måned';
     } else if (!canViewCompensation(actor)) comp = 'Skjult';
     card.appendChild(factRow('Lønnsgrunnlag', comp));
@@ -453,6 +468,9 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       : 'Ingen planlagte vakter'));
     const m = missingInfoOf(e, todayWd);
     if (m.length) { card.appendChild(el('div', { cls: 'cue-line', text: 'Mangler informasjon:' })); card.appendChild(miss(m)); }
+    // Contact details are stored with the employment, so they cannot be saved before it is registered: say so here instead
+    // of offering an editor that could only be refused (the only contact editor is step 1 of the contract flow, withheld too).
+    if (unreg && canEditEmployment(actor)) card.appendChild(el('div', { cls: 'cue-line emp-contact-gate', text: 'Registrer arbeidsforholdet først. Kontaktopplysninger kan oppdateres etterpå.' }));
     card.appendChild(el('div', { cls: 'vp-note', text: 'Fravær, ferie og tilgang kommer senere.' }));
     root.appendChild(card);
   }
@@ -471,7 +489,76 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     return missing.length ? { terms: t, missing } : null;
   }
   function initialCompletionEligible(e) { return initialCompletionTarget(e) !== null; }
+  // ---- REGISTRER ARBEIDSFORHOLD — first registration of an employee from the old register -----------------------------
+  // Shown INSTEAD of the ordinary Arbeidsforhold editors while an active employee has no stored employment baseline. The
+  // admin states the real start date and the real facts explicitly; every field starts EMPTY (nothing is prefilled from
+  // the old register — its values are shown once, as labelled orientation only). Nothing is written by opening the screen;
+  // "Opprett arbeidsforhold" sends ONE operation (registerInitialEmployment). Afterwards the ordinary editors take over.
+  function drawFirstRegistration(e) {
+    const hint = e.terms[0] || {};
+    const card = el('div', { cls: 'card emp-firstreg-state' });
+    card.appendChild(el('div', { cls: 'kicker', text: 'Gjeldende arbeidsforhold' }));
+    card.appendChild(el('div', { style: 'font-weight:800;font-size:15px', text: 'Arbeidsforholdet er ikke registrert ennå' }));
+    card.appendChild(el('div', { cls: 'cue-line', text: e.name + ' kommer fra det gamle ansattregisteret, og arbeidsforholdet har ennå ikke fått noen historikk her.' + (e.status === 'active' ? '' : ' Den ansatte er ikke aktiv, så arbeidsforhold kan ikke opprettes her.') }));
+    const bits = [];
+    if (hint.role) bits.push('stilling «' + hint.role + '»');
+    if (canViewCompensation(actor) && hint.compensation && hint.compensation.model === 'timelonn') bits.push('timelønn ' + fmtKr(hint.compensation.hourlyRate));
+    const opp = e.legacy && typeof e.legacy.opprettet === 'string' && /^\d{4}-\d{2}-\d{2}/.test(e.legacy.opprettet) ? e.legacy.opprettet.slice(0, 10) : null;
+    if (opp) bits.push('lagt inn i gammelt system ' + fmtDate(opp));
+    if (bits.length) card.appendChild(el('div', { cls: 'vp-note emp-legacy-hint', text: 'Ubekreftede opplysninger fra gammelt register – kun til orientering: ' + bits.join(' · ') + '. De er ikke arbeidsforholdets historikk.' }));
+    root.appendChild(card);
+    if (!canEditEmployment(actor) || !needsInitialRegistration(e)) return;   // an inactive old-register employee sees the status only
+    const d = regDraft && regDraft.id === e.ansattId ? regDraft.v : {};
+    const form = el('div', { cls: 'card emp-form emp-firstreg' });
+    form.appendChild(el('div', { cls: 'kicker', text: 'Registrer arbeidsforhold' }));
+    form.appendChild(el('div', { cls: 'cue-line', text: 'Oppgi den faktiske datoen arbeidsforholdet startet og vilkårene som gjelder. Datoen den ansatte ble lagt inn i det gamle systemet brukes ikke som startdato.' }));
+    const pick = (list, blank) => [{ value: '', label: blank }].concat(list);
+    const start = textInput(d.start || '', null, 'date'); start.setAttribute('max', todayWd);
+    const role = selectInput(pick(roleOptions(), 'Velg …'), d.role || '');
+    const formSel = selectInput(formOptions('Velg …'), d.form || '');
+    const type = selectInput(pick(EMPLOYMENT_TYPES.map((x) => ({ value: x, label: x })), 'Velg …'), d.type || '');
+    const pct = textInput(d.pct || '', 'f.eks. 60', 'number');
+    const compModel = selectInput([{ value: '', label: 'Velg …' }, { value: 'timelonn', label: 'Timelønn' }, { value: 'fastlonn', label: 'Fastlønn' }], d.compModel || '');
+    const compVal = textInput(d.compVal || '', 'beløp', 'number');
+    const hours = textInput(d.hours || '', 'f.eks. 37.5', 'number');
+    const wp = textInput(d.wp || '', 'f.eks. 4Seasons ferske varer');
+    const notice = textInput(d.notice || '', 'f.eks. 1 måned');
+    const wta = textInput(d.wta || '', 'valgfritt – f.eks. dagtid og kveld etter vaktplan');
+    const prb = textInput(d.prb || '', 'valgfritt – f.eks. 6 måneder / ingen');
+    const interval = selectInput([{ value: '', label: 'Ikke registrert' }].concat(PAYMENT_INTERVALS.map((x) => ({ value: x, label: x === 'manedlig' ? 'Månedlig' : 'Hver 14. dag' }))), d.interval || '');
+    form.appendChild(field('Faktisk startdato', start));
+    form.appendChild(field('Stilling', role));
+    form.appendChild(field('Ansettelsesform', formSel));
+    form.appendChild(field('Stillingstype', type));
+    form.appendChild(field('Stillingsprosent', pct));
+    form.appendChild(field('Lønnsgrunnlag', compModel));
+    form.appendChild(field('Beløp (kr per time / per måned)', compVal));
+    form.appendChild(field('Avtalt arbeidstid (timer per uke)', hours));
+    form.appendChild(field('Arbeidssted', wp));
+    form.appendChild(field('Oppsigelsestid', notice));
+    form.appendChild(field('Arbeidstidsordning (valgfritt)', wta));
+    form.appendChild(field('Prøvetid (valgfritt)', prb));
+    form.appendChild(field('Utbetalingsintervall (valgfritt)', interval));
+    form.appendChild(el('div', { cls: 'vp-note', text: 'Det opprettes én periode som gjelder fra startdatoen. Senere endringer registreres som nye perioder.' }));
+    form.appendChild(el('div', { cls: 'vp-err', text: errMsg }));
+    form.appendChild(btn('Opprett arbeidsforhold', 'btn primary', () => {
+      regDraft = { id: e.ansattId, v: { start: start.value, role: role.value, form: formSel.value, type: type.value, pct: pct.value, compModel: compModel.value, compVal: compVal.value, hours: hours.value, wp: wp.value, notice: notice.value, wta: wta.value, prb: prb.value, interval: interval.value } };
+      const terms = {
+        role: role.value || null, employmentForm: formSel.value || null, employmentType: type.value || null,
+        percentage: pct.value === '' ? null : Number(pct.value), expectedWeeklyHours: hours.value === '' ? null : Number(hours.value),
+        workplace: wp.value.trim() || null, noticePeriod: notice.value.trim() || null,
+        compensation: compModel.value === 'timelonn' ? { model: 'timelonn', hourlyRate: Number(compVal.value) } : compModel.value === 'fastlonn' ? { model: 'fastlonn', monthlySalary: Number(compVal.value) } : null,
+      };
+      if (wta.value.trim()) terms.workingTimeArrangement = wta.value.trim();
+      if (prb.value.trim()) terms.probation = prb.value.trim();
+      if (interval.value) terms.paymentInterval = interval.value;
+      apply({ kind: 'registerInitialEmployment', ansattId: e.ansattId, startDate: start.value, terms }, () => { regDraft = null; });
+    }));
+    root.appendChild(form);
+    root.appendChild(el('div', { cls: 'vp-note', text: 'Fullføring, korrigering, ny periode, arbeidsavtale og avslutning blir tilgjengelig når arbeidsforholdet er opprettet.' }));
+  }
   function drawArbeid(e, cur) {
+    if (lacksEmploymentBaseline(e)) return drawFirstRegistration(e);   // no derived period, completion, correction, new period or end before a real baseline exists
     const card = el('div', { cls: 'card' });
     card.appendChild(el('div', { cls: 'kicker', text: 'Gjeldende arbeidsforhold' }));
     if (cur) {
@@ -711,6 +798,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     const e = employeeOf(employeeStore, tenantId, selectedId);
     if (!e) { page = 'list'; return drawList(); }
     const cur = currentTermsOf(e, todayWd) || e.terms[e.terms.length - 1];
+    if (lacksEmploymentBaseline(e)) { page = 'card'; section = 'arbeid'; return drawCard(); }   // the contract flow (incl. its contact step) is never drawn before first registration
     const rd = readinessFor(e);
     root.appendChild(head('Arbeidsavtale', e.name + ' · ' + rd.label));
     const back = btn('← Til ansattkortet', 'btn tertiary', () => { page = 'card'; section = 'kontrakt'; errMsg = ''; freezeConfirm = null; draw(); });
@@ -1032,7 +1120,8 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     if (cs.state !== 'frosset') cc.appendChild(factRow('Malfelter', rd.label));
     const acts = el('div', { cls: 'vp-actions' });
     if (canEditEmployment(actor) && e.status === 'active') {
-      if (cs.state === 'mangler') acts.appendChild(btn('Fullfør arbeidsavtale', 'btn primary', () => applyC({ kind: 'startDraft', ansattId: e.ansattId }, () => { step = 1; page = 'contract'; })));
+      if (needsInitialRegistration(e)) cc.appendChild(el('div', { cls: 'cue-line emp-firstreg-gate', text: 'Registrer arbeidsforholdet under «Arbeidsforhold» før arbeidsavtalen opprettes.' }));   // a contract draft would store the old-register period
+      else if (cs.state === 'mangler') acts.appendChild(btn('Fullfør arbeidsavtale', 'btn primary', () => applyC({ kind: 'startDraft', ansattId: e.ansattId }, () => { step = 1; page = 'contract'; })));
       else if (cs.draft) acts.appendChild(btn('Fortsett utkast', 'btn primary', () => { step = 1; page = 'contract'; errMsg = ''; draw(); }));
       else if (cs.state === 'frosset') acts.appendChild(btn('Ny endringsavtale', 'btn secondary', () => applyC({ kind: 'startDraft', ansattId: e.ansattId }, () => { step = 1; page = 'contract'; })));
     }
@@ -1074,7 +1163,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     card.appendChild(el('div', { cls: 'vp-note', text: 'Kun opplysninger om dokumentene registreres her. Selve filene lagres ikke i denne versjonen – ingen opplasting, nedlasting eller visning.' }));
     root.appendChild(card);
 
-    if (canEditEmployment(actor)) {
+    if (canEditEmployment(actor) && !lacksEmploymentBaseline(e)) {
       const form = el('div', { cls: 'card emp-form' });
       form.appendChild(el('div', { cls: 'kicker neutral', text: 'Registrer dokumentopplysning' }));
       const nm = textInput('', 'f.eks. Arbeidskontrakt');
@@ -1098,7 +1187,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       card.appendChild(el('div', { style: 'color:var(--muted);font-size:14px', text: 'Du har ikke tilgang til lønnsopplysninger.' }));
       root.appendChild(card); return;
     }
-    const c = cur && cur.compensation;
+    const c = lacksEmploymentBaseline(e) ? null : (cur && cur.compensation);   // an old-register wage is orientation (shown under Arbeidsforhold), not the lønnsgrunnlag
     card.appendChild(el('div', { cls: 'kicker neutral', text: 'Lønnsgrunnlag (arbeidsforhold)' }));
     if (c) {
       card.appendChild(factRow('Modell', c.model === 'timelonn' ? 'Timelønn' : 'Fastlønn'));

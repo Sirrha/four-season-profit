@@ -49,6 +49,13 @@ const legacyDoc = (over) => Object.assign({ navn: 'Mr Testperson', stilling: 'bu
 const build = (F, extra) => createManagementAdapters(Object.assign({ fs: F.api, tenantId: T, membership: ADM, range: RANGE, readAnsatte: F.readAnsatte, defaultContractProfile: FOUR_SEASON_CONTRACT_PROFILE, policy: POLICY }, extra || {}));
 const onlyAllowed = (F) => F.writes.every((p) => /^tenants\/four-season-as\/(ansatte|shifts|attendance|employeeSelf|_meta)\//.test(p));
 
+const REG_START = '2026-06-01';
+const REG_TERMS = () => ({ role: 'butikkmedarbeider', employmentForm: 'fast', employmentType: 'fast', percentage: 100, compensation: { model: 'timelonn', hourlyRate: 210 }, expectedWeeklyHours: 37.5, workplace: '4Seasons ferske varer', noticePeriod: '1 måned' });
+// Initial-registration hardening: an old-register document has no stored baseline, so every ordinary operation is refused
+// with zero writes until registerInitialEmployment has run. The ordinary-operation tests below register first.
+const refusedBeforeRegistration = async (F, p) => { const n = F.writes.length; const before = JSON.stringify(Array.from(F.docs.entries())); await assert.rejects(p, (e) => e.code === ADAPTER_ERROR.CORE_REFUSED && /INITIAL_REGISTRATION_REQUIRED/.test(e.message) && e.coreResult && e.coreResult.code === 'INITIAL_REGISTRATION_REQUIRED'); assert.equal(F.writes.length, n, 'zero writes on refusal'); assert.equal(JSON.stringify(Array.from(F.docs.entries())), before, 'no document changed'); };
+const registerFirst = (M, id) => M.employees.apply({ kind: 'registerInitialEmployment', ansattId: id, startDate: REG_START, terms: REG_TERMS() });
+
 await t('M01', 'factory: admin-only membership, range, newId + readAnsatte capability required (fail closed)', () => {
   const F = makeFakeFs();
   assert.throws(() => build(F, { membership: { ...ADM, accessRole: 'employee' } }), (e) => e.code === ADAPTER_ERROR.CORE_REFUSED);
@@ -90,13 +97,18 @@ await t('M04', 'start: employee store rebuilt from the host mirror (no second li
   assert.ok(changes >= 1);
   M.dispose(); assert.equal(M.listenerCount(), 0); assert.equal(F.state.unsubscribed, 2); assert.deepEqual(M.employees.store()[T], {});
 });
-await t('M05', 'updateContact: ONE transaction on the canonical ansatte document — e360 block (rev 1) + legacy epost/adresse synced; untouched legacy fields (bankkonto, personnummer, notater, navn) not rewritten; store reflects the persisted state', async () => {
+await t('M05', 'updateContact: REFUSED with zero writes before first registration; after it ONE transaction on the canonical ansatte document — e360 block (rev 2) + legacy epost/adresse synced; untouched legacy fields (bankkonto, personnummer, notater, navn) not rewritten; store reflects the persisted state', async () => {
   const F = makeFakeFs(); F.seed(ansattePath(T, LEG), legacyDoc()); const M = build(F); M.start();
-  const r = await M.employees.apply({ kind: 'updateContact', ansattId: LEG, contact: { email: 'ny@example.test', phone: '40000000', address: { street: 'Nyveien 2', postalCode: '2816', city: 'Gjøvik' } } });
+  const contactOp = () => ({ kind: 'updateContact', ansattId: LEG, contact: { email: 'ny@example.test', phone: '40000000', address: { street: 'Nyveien 2', postalCode: '2816', city: 'Gjøvik' } } });
+  await refusedBeforeRegistration(F, M.employees.apply(contactOp()));
+  assert.ok(!(E360_KEY in F.docs.get(ansattePath(T, LEG))), 'no stored baseline was created by the refused contact update');
+  await registerFirst(M, LEG);
+  const r = await M.employees.apply(contactOp());
   assert.equal(r.ok, true); assert.equal(r.ansattId, LEG);
-  assert.deepEqual(F.writes, [ansattePath(T, LEG)]);
+  assert.deepEqual(F.writes, [ansattePath(T, LEG), ansattePath(T, LEG)]);
   const d = F.docs.get(ansattePath(T, LEG));
-  assert.equal(d[E360_KEY].rev, 1); assert.equal(d[E360_KEY].contact.phone, '40000000'); assert.equal(d[E360_KEY].lastOp, 'updateContact');
+  assert.equal(d[E360_KEY].startDate, REG_START); assert.equal(d[E360_KEY].terms[0].validFrom, REG_START);
+  assert.equal(d[E360_KEY].rev, 2); assert.equal(d[E360_KEY].contact.phone, '40000000'); assert.equal(d[E360_KEY].lastOp, 'updateContact');
   assert.equal(d.epost, 'ny@example.test'); assert.equal(d.adresse, 'Nyveien 2, 2816 Gjøvik');
   assert.equal(d.bankkonto, '1234.56.78903'); assert.equal(d.personnummer, '01019012345'); assert.equal(d.notater, 'privat'); assert.equal(d.navn, 'Mr Testperson'); assert.equal(d.stilling, 'butikkmedarbeider'); assert.equal(d.timelonn, 210);
   const rec = M.employees.store()[T][LEG]; assert.equal(rec.contact.phone, '40000000'); assert.equal(rec.legacy.hasE360, true);
@@ -117,20 +129,28 @@ await t('M06', 'createEmployee (Ny ansatt): exactly ONE new document under tenan
   assert.ok(M.employees.store()[T][r.ansattId]); assert.ok(M.employees.people().some((p) => p.ansattId === r.ansattId && p.roleKey === 'kasse'));
   await assert.rejects(M.employees.apply({ kind: 'createEmployee', name: '', startDate: '2026-10-01', role: 'kasse' }), (e) => /NAME_REQUIRED/.test(e.message));
 });
-await t('M07', 'appendTerms / endEmployee: terms history persists in e360 while the legacy current projection (stilling, timelonn, aktiv) follows the accepted current terms', async () => {
+await t('M07', 'appendTerms / endEmployee: both REFUSED with zero writes before first registration; after it terms history persists in e360 while the legacy current projection (stilling, timelonn, aktiv) follows the accepted current terms', async () => {
   const F = makeFakeFs(); F.seed(ansattePath(T, LEG), legacyDoc()); const M = build(F); M.start();
-  await M.employees.apply({ kind: 'appendTerms', ansattId: LEG, terms: { validFrom: '2026-09-15', role: 'skiftleder', compensation: { model: 'timelonn', hourlyRate: 240 }, employmentType: 'fast', percentage: 100 } });
+  const appendOp = () => ({ kind: 'appendTerms', ansattId: LEG, terms: { validFrom: '2026-09-15', role: 'skiftleder', compensation: { model: 'timelonn', hourlyRate: 240 }, employmentType: 'fast', percentage: 100 } });
+  await refusedBeforeRegistration(F, M.employees.apply(appendOp()));
+  await refusedBeforeRegistration(F, M.employees.apply({ kind: 'endEmployee', ansattId: LEG, endDate: '2026-10-31' }));
+  assert.equal(F.docs.get(ansattePath(T, LEG)).aktiv, true); assert.ok(!(E360_KEY in F.docs.get(ansattePath(T, LEG))));
+  await registerFirst(M, LEG);
+  await M.employees.apply(appendOp());
   let d = F.docs.get(ansattePath(T, LEG));
-  assert.equal(d[E360_KEY].terms.length, 2); assert.equal(d.stilling, 'skiftleder'); assert.equal(d.timelonn, 240); assert.equal(d.aktiv, true); assert.equal(d[E360_KEY].rev, 1);
+  assert.equal(d[E360_KEY].terms.length, 2); assert.equal(d[E360_KEY].terms[0].validFrom, REG_START); assert.equal(d.stilling, 'skiftleder'); assert.equal(d.timelonn, 240); assert.equal(d.aktiv, true); assert.equal(d[E360_KEY].rev, 2);
   const r2 = await M.employees.apply({ kind: 'endEmployee', ansattId: LEG, endDate: '2026-10-31' });
   d = F.docs.get(ansattePath(T, LEG));
-  assert.equal(r2.ok, true); assert.equal(d.aktiv, false); assert.equal(d[E360_KEY].status, 'ended'); assert.equal(d[E360_KEY].endedAt, '2026-10-31'); assert.equal(d[E360_KEY].rev, 2);
+  assert.equal(r2.ok, true); assert.equal(d.aktiv, false); assert.equal(d[E360_KEY].status, 'ended'); assert.equal(d[E360_KEY].endedAt, '2026-10-31'); assert.equal(d[E360_KEY].rev, 3);
   assert.equal(M.employees.store()[T][LEG].status, 'ended'); assert.ok(!M.employees.people().some((p) => p.ansattId === LEG));
   assert.ok(F.writes.every((p) => p === ansattePath(T, LEG)));
 });
-await t('M08', 'applyContract: startDraft persists a contract version in e360 on the same document; freezeVersion NOT_READY rejects with the core result (missing facts) and writes nothing', async () => {
+await t('M08', 'applyContract: startDraft / freezeVersion REFUSED with zero writes before first registration; after it startDraft persists a contract version in e360 on the same document; freezeVersion NOT_READY rejects with the core result (missing facts) and writes nothing', async () => {
   const F = makeFakeFs(); F.seed(ansattePath(T, LEG), legacyDoc()); const M = build(F); M.start();
   const profile = JSON.parse(JSON.stringify(FOUR_SEASON_CONTRACT_PROFILE));
+  await refusedBeforeRegistration(F, M.employees.applyContract({ kind: 'startDraft', ansattId: LEG }, profile, { onDate: today }));
+  await refusedBeforeRegistration(F, M.employees.applyContract({ kind: 'freezeVersion', ansattId: LEG }, profile, { onDate: today }));
+  await registerFirst(M, LEG);
   const r = await M.employees.applyContract({ kind: 'startDraft', ansattId: LEG }, profile, { onDate: today });
   assert.equal(r.ok, true); assert.equal(r.version.status, 'utkast');
   const d = F.docs.get(ansattePath(T, LEG)); assert.equal(d[E360_KEY].contractVersions.length, 1); assert.equal(d[E360_KEY].contractVersions[0].contractVersionId, 'kv-' + LEG + '-1');
@@ -178,13 +198,16 @@ await t('M11', 'contractProfile: load() falls back to the tenant default when _m
   const stored = F.docs.get(contractProfilePath(T)); assert.equal(stored.companyFacts.pension.provider, 'Storebrand'); assert.equal(stored.updatedByUid, ADM.uid);
   const M2 = build(F); M2.start(); const p2 = await M2.contractProfile.load(); assert.equal(p2.companyFacts.pension.provider, 'Storebrand'); assert.equal(M2.contractProfile.get(), p2);
 });
-await t('M12', 'employeeSelf.write projects ONLY the limited employee-readable facts from the canonical record (no compensation/contact/ids) to tenants/{T}/employeeSelf/{ansattId}', async () => {
+await t('M12', 'employeeSelf.write is REFUSED with zero writes before first registration (old title / creation date never projected); after it, it projects ONLY the limited employee-readable facts from the canonical record (no compensation/contact/ids) to tenants/{T}/employeeSelf/{ansattId}', async () => {
   const F = makeFakeFs(); F.seed(ansattePath(T, LEG), legacyDoc()); const M = build(F); M.start();
+  await refusedBeforeRegistration(F, M.employeeSelf.write(LEG, M.employees.store()[T][LEG], { onDate: today }));
+  assert.ok(!F.docs.has(s4Path(T, 'employeeSelf', LEG)), 'no employeeSelf document');
+  await registerFirst(M, LEG);
   const r = await M.employeeSelf.write(LEG, M.employees.store()[T][LEG], { onDate: today });
   assert.equal(r.ok, true);
-  assert.deepEqual(F.writes, [s4Path(T, 'employeeSelf', LEG)]);
+  assert.deepEqual(F.writes, [ansattePath(T, LEG), s4Path(T, 'employeeSelf', LEG)]);
   const d = F.docs.get(s4Path(T, 'employeeSelf', LEG));
-  assert.equal(d.name, 'Mr Testperson'); assert.equal(d.role, 'butikkmedarbeider'); assert.equal(d.startDate, '2026-09-01');
+  assert.equal(d.name, 'Mr Testperson'); assert.equal(d.role, 'butikkmedarbeider'); assert.equal(d.startDate, REG_START); assert.ok(!JSON.stringify(d).includes('2026-09-01'), 'the old creation date is not projected');
   for (const k of ['compensation', 'hourlyRate', 'timelonn', 'bankkonto', 'personnummer', 'contact', 'email', 'ansattId', 'terms']) assert.ok(!(k in d), 'forbidden field ' + k);
 });
 await t('M13', 'ansattWriteFor / legacySkeleton: only the projections a kind touches are written (updateContact never rewrites stilling/timelonn/navn; endEmployee only aktiv + e360)', () => {
