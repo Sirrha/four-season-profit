@@ -429,6 +429,8 @@ h1, h2, h3 { margin:0; letter-spacing:-.01em; }
 .form-err { color:var(--red); font-size:13px; min-height:18px; margin-top:10px; }
 .dlg-actions { display:flex; gap:10px; margin-top:16px; }
 .dlg-actions .btn { flex:1 1 0; margin:0; min-height:48px; font-size:15px; padding:12px; box-shadow:none; }
+/* PRECLOSURE-POLISH-001 item 2: an expired self-correction never shows a usable confirm (disabled, muted, no hover) */
+.dlg-actions .btn.primary[disabled], .dlg-actions .btn.primary[disabled]:hover { background:#e4e6e1; color:var(--muted); cursor:not-allowed; box-shadow:none; }
 /* read-only fact rows (Min ansettelse): no clickable affordance (owner QA-D) */
 .emp-row.static { cursor:default; }
 .emp-row.static:hover { border-color:var(--line); background:#fff; }
@@ -455,3 +457,21 @@ h1, h2, h3 { margin:0; letter-spacing:-.01em; }
   .vp-day { display:none; }
 }
 @media (min-width:1200px) { .plan-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+/* ATTENDANCE EXCEPTIONS (owner law 2026-10-06): employee notification cards, locked-date dialog note, Oversikt named rows, manager close note */
+.ax-list { display:grid; gap:12px; margin-top:12px; }
+.ax-card { border:1px solid #efc3bf; background:var(--red-pale, #fff4f2); }
+.ax-card.open { border-color:#f0d9a3; background:#fff8e8; }
+.ax-card .title { font-size:18px; font-weight:800; margin-top:2px; }
+.ax-card .ax-date { color:var(--muted); font-size:13px; }
+.ax-card .lead { margin-top:8px; font-weight:600; }
+.ax-card .ax-deadline { margin-top:6px; }
+.ax-card .ax-deadline.expired { color:#9a2b22; font-weight:700; }
+.ax-card .ax-audit { margin-top:8px; }
+.ax-card .ax-actions { margin-top:10px; display:grid; gap:8px; }
+.ax-locked-date { color:#9a2b22; font-weight:600; }
+.ov-row.ov-ax { flex-wrap:wrap; }
+.ov-row.ov-ax .ov-ax-meta { flex-basis:100%; order:3; color:var(--muted); font-size:12px; font-weight:500; text-align:left; }
+.mt-close-note { color:#5f6b62; }
+/* MULTISESSION law (2026-10-06): one action group per actual session on a day line; the group names its record (data-attendance) */
+.mt-session-actions{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px}
+.mt-target{font-weight:600}

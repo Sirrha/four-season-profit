@@ -69,7 +69,7 @@ t('EI07', 'no full-ansatte read and no management listener for an employee: the 
   for (const src of [code(adapters).slice(code(adapters).indexOf('export function createProductionAdapters'), code(adapters).indexOf('export function createManagementScheduleAdapters')), code(bridge)])
     assert.ok(!/ansatte|vakter|payroll|contractProfile/.test(src));
   const emp = adapters.slice(adapters.indexOf('export function createProductionAdapters'), adapters.indexOf('export function createManagementScheduleAdapters'));
-  assert.equal((emp.match(/^\s+listen\(\{/gm) || []).length, 4, 'four listeners');
+  assert.equal((emp.match(/^\s+listen\(\{/gm) || []).length, 5, 'five listeners (own shifts, open shifts, own attendance, own attendance exceptions, own employeeSelf)');
   assert.ok(html.includes("if(currentUser.role!=='admin')return null;          // S4 host: the management door is admin-only; an employee identity never starts the 17 listeners"));
   assert.equal(html.split('startListeners();').length - 1, 1, 'one guarded caller');
   assert.ok(html.includes("if(role==='employee'){") && html.includes('authEnterEmployeeSurface(gen,authMembership);'));

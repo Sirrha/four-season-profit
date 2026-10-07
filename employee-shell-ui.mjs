@@ -14,8 +14,9 @@ import {
   tenantWorkDate, fmtTenantHM, tenantLocalHMToUtcMs, computeClockTimes,
   startBreak, endBreak, declareBreak, reasonRequiredForBreak,
   daySummaryFor, primaryActionFor,
-  managerManualEntry, managerCorrection,
+  managerManualEntry, managerCorrection, managerCloseOpenAttendance, selfCorrectionWindowMs,
 } from './employee-shell-core.mjs';
+import { deriveAttendanceExceptions, exceptionIdFor, exceptionAuditOf, newExceptionRecord, applyExceptionTransition, missedThresholdMs } from './attendance-exceptions-core.mjs';
 import { buildFourSeasonSchedule, buildFourSeasonScaleSet, FOUR_SEASON_TENANT, FOUR_SEASON_PEOPLE, FOUR_SEASON_MEMBERSHIPS, FOUR_SEASON_MANAGER_ACTOR, FOUR_SEASON_CONTRACT_PROFILE, ROLE_LABELS } from './employee-schedule-fixture.mjs';
 import { ownShiftsForMembership, todayShiftOf, nextUpcomingShift, isOvernight, heroShiftFor, weekFor } from './employee-schedule-week.mjs';
 import { renderScheduleView } from './employee-schedule-view.mjs';
@@ -125,8 +126,33 @@ function scheduleOpVia(A) {
 }
 function scheduleStore() { return ADAPTERS.schedule.store(); }
 function employeeStore() { return ADAPTERS.employees.store(); }
+// In-memory ATTENDANCE-EXCEPTION seam for preview (and the inert denied mount): the same pure record law as the
+// production adapters, without persistence. actor() names who acts (employee page = the membership, Ledelse = admin).
+function makeMemoryExceptionSeam(actor) {
+  const store = new Map();
+  const tr = (id, kind, opt) => { const rec = store.get(id); const r = applyExceptionTransition({ record: rec, kind, actor: actor(), now: Date.now(), resolution: opt && opt.resolution }); if (!r.ok) return Promise.reject(Object.assign(new Error(r.code), { code: 'CORE_REFUSED' })); store.set(id, r.record); return Promise.resolve({ ok: true, record: r.record, event: r.event }); };
+  return {
+    store: () => store, get: (id) => store.get(id), values: () => store.values(),
+    ensure: (ex) => { if (store.has(ex.exceptionId)) return Promise.resolve({ ok: true, created: false, record: store.get(ex.exceptionId) }); const rec = newExceptionRecord(ex, { actor: actor(), now: Date.now() }); store.set(rec.exceptionId, rec); return Promise.resolve({ ok: true, created: true, record: rec }); },
+    markShown: (id) => tr(id, 'shown'), acknowledge: (id) => tr(id, 'acknowledged'),
+    markSeen: (id) => tr(id, 'manager_seen'), resolve: (id, resolution) => tr(id, 'manager_resolved', { resolution }),
+    applyCorrected: (id, actorOverride) => { const rec = store.get(id); if (!rec) return null; const r = applyExceptionTransition({ record: rec, kind: 'corrected', actor: actorOverride || actor(), now: Date.now() }); if (r.ok) store.set(id, r.record); return r; },
+  };
+}
+let PREVIEW_ACTOR = null;   // the preview page's current actor (employee membership or the fixture manager), for the memory seam
 function createPreviewAdapters() {
-  return { schedule: { store: previewScheduleStore }, attendance: new Map(), employees: { store: previewEmployeeStore } };
+  return { schedule: { store: previewScheduleStore }, attendance: new Map(), employees: { store: previewEmployeeStore }, exceptions: makeMemoryExceptionSeam(() => PREVIEW_ACTOR || FOUR_SEASON_MANAGER_ACTOR) };
+}
+// Employee-facing wording for engine refusal codes on the clock dialogs (never a raw code for the two owner-law cases).
+function clockErrorText(code) {
+  switch (code) {
+    case 'SELF_CORRECTION_EXPIRED': return 'Fristen for å rette dette selv har gått ut (6 timer etter planlagt tid). Ledelsen må registrere dette.';
+    case 'DECLARED_OUTSIDE_WORKDATE': return 'Tidspunktet ligger utenfor arbeidsdagen for denne vakten. Velg et tidspunkt på vaktens dato, eller be ledelsen registrere det.';
+    case 'END_BEFORE_START': return 'Slutt må være etter start.';
+    case 'CLOCK_OUT_BEFORE_CLOCK_IN': return 'Utstempling kan ikke være før innstemplingen.';
+    case 'BREAK_OPEN': return 'Avslutt pausen først.';
+    default: return 'Kunne ikke registrere: ' + code;
+  }
 }
 function previewScheduleStore() {
   if (!SCHEDULE_STORE) {
@@ -182,6 +208,46 @@ function fmtDayShort(workDate) {
 // Attendance truth, keyed by deterministic attendanceId. Bound at mount from ADAPTERS.attendance
 // (preview: an in-memory Map; production: the injected adapter with the same get/set/has shape).
 let attendanceStore = null;
+let exceptionSeam = null;                 // production: ADAPTERS.exceptions; preview: memory seam; denied mount: inert memory seam
+const SHOWN_IN_FLIGHT = new Set();        // exceptionIds whose first "shown" write is pending (idempotence across re-renders)
+const ENSURE_IN_FLIGHT = new Set();       // exceptionIds whose manager ensure() write is pending (PRECLOSURE-POLISH-001 item 3: no duplicate local dispatch)
+// PRECLOSURE-POLISH-001 item 3: ONE local dispatch per deterministic exception identity while a write is pending. The server
+// record (mirror) and the in-flight set are the only inputs; the flag is cleared when the write settles (success OR failure),
+// so a failed ensure can be retried by a later render and nothing is permanently suppressed. Idempotence on the server
+// (deterministic ids, exists -> no write) stays the correctness guarantee if another client races. Returns true when dispatched.
+export function ensureExceptionOnce(seam, x, nowMs) {
+  const id = x && x.exceptionId;
+  if (!id || seam.get(id) || ENSURE_IN_FLIGHT.has(id)) return false;
+  ENSURE_IN_FLIGHT.add(id);
+  let p; try { p = Promise.resolve(seam.ensure(x, nowMs)); } catch (e) { p = Promise.reject(e); }
+  p.then(() => {}, () => {}).then(() => { ENSURE_IN_FLIGHT.delete(id); });
+  return true;
+}
+// PRECLOSURE-POLISH-001 item 1: the employee-facing START fact of a clocked-in record. The observed press instant is never
+// shown as the work start when the employee DECLARED a different start (forgotten clock-in backfill / adjusted time):
+// the primary text carries the declared (effective) start, the secondary note discloses the registration instant.
+// An ordinary direct clock-in (declared == observed) keeps the established wording. Audit facts are not touched.
+export function clockInStateFor(att) {
+  const observed = att.observedClockInAt;
+  const declared = att.declaredStartAt;
+  if (Number.isFinite(declared) && declared !== observed) {
+    return { text: 'Start kl. ' + fmtHM(declared) + ' · oppgitt av deg', note: 'Innstemplingen ble registrert kl. ' + fmtHM(observed) + '.' };
+  }
+  return { text: 'Stemplet inn kl. ' + fmtHM(observed), note: null };
+}
+// TRUTHFULNESS-FIX-003: Dagen din START / END row facts. Primary = the effective instant daySummaryFor chose. A declared
+// instant is attributed to whoever attested the record (declarationSource 'manager' -> ledelse, otherwise the employee); the
+// secondary audit line names the observed stamp ONLY when one exists — the formatter is never called with a null instant,
+// so a manager close (no observed clock-out) or a manual entry (no stamps at all) never shows a fabricated "Registrert kl.".
+// ONE attribution rule for every declared fact on the card (start, end, break): the record's declarationSource.
+export function declaredByTag(att) { return att && att.declarationSource === 'manager' ? 'Oppgitt av ledelse' : 'Oppgitt av deg'; }
+export function dayRowFactsFor(att, ds, part) {
+  const f = ds ? (part === 'start' ? ds.start : ds.end) : null;
+  if (!f || f.at == null) return null;
+  const primary = fmtHM(f.at);
+  if (f.source !== 'declared') return { primary, tag: part === 'start' ? 'Stemplet inn' : 'Stemplet ut', secondary: null };
+  return { primary, tag: declaredByTag(att), secondary: f.observedAt != null ? 'Registrert kl. ' + fmtHM(f.observedAt) : 'Ingen stempling registrert' };
+}
 
 // ---- Safe DOM helpers -------------------------------------------------------
 function el(tag, opts) {
@@ -219,6 +285,7 @@ export function mountEmployeeShell(root, options) {
   if (MODE === 'management') { if (entry.kind === 'management') { MGR.actor = managementActorFrom(entry.membership); MGR.tenantId = entry.membership.tenantId; } }
   else if (MODE === 'preview') { MGR.actor = FOUR_SEASON_MANAGER_ACTOR; MGR.tenantId = FOUR_SEASON_TENANT.tenantId; }
   attendanceStore = ADAPTERS ? ADAPTERS.attendance : new Map();   // a denied mount renders no data; this Map is inert
+  exceptionSeam = ADAPTERS && ADAPTERS.exceptions ? ADAPTERS.exceptions : makeMemoryExceptionSeam(() => (current ? actorFromMembership(current) : null));   // inert without an actor (denied mount): every transition refuses
   // Display facts (name, roleKey) come from the employee truth boundary. The fixture people list
   // is consulted ONLY in preview (e.g. the ?scale=40 grid set, whose people are not employment records).
   function personFor(membership) {
@@ -243,11 +310,11 @@ export function mountEmployeeShell(root, options) {
       default: return 'Kunne ikke lagre registreringen (' + (code || 'ukjent') + '). Prøv igjen.';
     }
   }
-  function persistAttendance(attId, res, rerun) {
+  function persistAttendance(attId, res, rerun, exception) {
     if (attendanceStore && typeof attendanceStore.commit === 'function') {
       attendanceNotice = null;
-      attendanceStore.commit(res, { create: res.attendance.revision === 1, rerun })
-        .then(() => { attendanceNotice = null; if (current) goToday(current); })
+      attendanceStore.commit(res, { create: res.attendance.revision === 1, rerun, exception: exception || undefined })
+        .then(() => { attendanceNotice = null; if (current) rerenderWhen(current, () => { const a = attendanceStore.get(attId); return !!(a && a.revision >= res.attendance.revision); }); })
         .catch((e) => {
           attendanceNotice = attendanceErrorText(e && e.code);
           if (current) { goToday(current); root.insertBefore(el('div', { cls: 'form-err', text: attendanceNotice }), root.firstChild); }
@@ -255,6 +322,7 @@ export function mountEmployeeShell(root, options) {
       return;
     }
     attendanceStore.set(attId, res.attendance);
+    if (exception && exceptionSeam && typeof exceptionSeam.applyCorrected === 'function') exceptionSeam.applyCorrected(exception.exceptionId, exception.actor);
   }
   // Fail-closed panel: no chooser, no identity switch, no nav. Neutral wording from the bridge.
   function goDenied(code) {
@@ -373,6 +441,10 @@ export function mountEmployeeShell(root, options) {
     const entry = hero.entry; const p = entry ? entry.projection : null; const att = hero.attendance;
     const started = !!p && nowMs >= p.plannedStartAt;
     const ended = !!p && nowMs >= p.plannedEndAt;
+    // ATTENDANCE EXCEPTIONS (owner law): derived from the SAME shifts + attendance the hero uses — never a second truth
+    if (MODE === 'preview') PREVIEW_ACTOR = actorFromMembership(membership);
+    const exceptions = deriveAttendanceExceptions({ shifts, lookup: (shiftId) => lookup(shiftId), nowMs, policy: POLICY });
+    const heroException = entry ? exceptions.find((x) => x.shiftId === entry.shiftId && x.type === 'MISSING_CLOCK_OUT') || null : null;
     let mood = 'calm';                                   // calm | attn | work | pause | done | missing | free
     if (hero.kind === 'free') mood = 'free';
     else if (att && att.status === 'clocked_in') mood = att.breakState === 'on_break' ? 'pause' : 'work';
@@ -386,8 +458,9 @@ export function mountEmployeeShell(root, options) {
       card.appendChild(el('div', { cls: 'title', text: 'Fri i dag' }));
       card.appendChild(el('div', { cls: 'sub', text: 'Ingen planlagt vakt hos ' + tenantLabel(membership.tenantId) + '. Nyt dagen.' }));
       main.appendChild(card);
+      renderExceptionCards(main, membership, exceptions, nowMs);
     } else {
-      card.appendChild(el('div', { cls: 'kicker' + (mood === 'attn' || mood === 'pause' || mood === 'missing' ? ' amber' : mood === 'done' ? ' neutral' : ''), text: hero.ongoingFromPriorDay ? 'Pågående vakt' : mood === 'done' ? 'Dagens vakt · fullført' : 'Dagens vakt' }));
+      card.appendChild(el('div', { cls: 'kicker' + (mood === 'attn' || mood === 'pause' || mood === 'missing' ? ' amber' : mood === 'done' ? ' neutral' : ''), text: heroException ? 'Vakt ikke avsluttet' : hero.ongoingFromPriorDay ? 'Pågående vakt' : mood === 'done' ? 'Dagens vakt · fullført' : 'Dagens vakt' }));
       const hg = el('div', { cls: 'hero-grid' }); const txt = el('div', { cls: 'txt' }); hg.appendChild(txt);
       const timeRange = fmtHM(p.plannedStartAt) + '–' + fmtHM(p.plannedEndAt) + (isOvernight(p, TZ) ? ' (til neste dag)' : '');
       txt.appendChild(el('div', { cls: 'title', text: mood === 'missing' ? 'Vakten er over' : timeRange }));
@@ -403,12 +476,14 @@ export function mountEmployeeShell(root, options) {
       if (mood === 'missing') { txt.appendChild(el('div', { cls: 'lead', text: 'Ingen arbeidstid er registrert for denne vakten.' })); txt.appendChild(el('div', { cls: 'note', text: 'Ta kontakt med leder for å få registrert eller korrigert arbeidstiden.' })); }
       // status pill (authoritative text)
       let stateText = 'Ikke stemplet inn', stateCls = 'status' + (mood === 'attn' ? ' attn' : '');
-      if (att && att.status === 'clocked_in') { stateText = 'Stemplet inn kl. ' + fmtHM(att.observedClockInAt); stateCls = 'status on'; }
+      let stateNote = null;
+      if (att && att.status === 'clocked_in') { const cs = clockInStateFor(att); stateText = cs.text; stateNote = cs.note; stateCls = 'status on'; }
       else if (att && att.status === 'clocked_out') { stateText = 'Stemplet ut'; }   // Slice003: all start/end meaning lives in Dagen din
       else if (mood === 'missing') { stateText = 'Ingen arbeidstid registrert'; stateCls = 'status attn'; }
       else if (hero.kind === 'completed') { stateText = 'Planlagt vakt er over'; }
       if (att && att.breakState === 'on_break') { stateText = 'På pause siden kl. ' + fmtHM(att.openBreakStartedAt); stateCls = 'status pause'; }
       const st = el('div', { cls: stateCls }); st.appendChild(el('span', { cls: 'dot' })); st.appendChild(el('span', { text: stateText })); txt.appendChild(st);
+      if (stateNote) txt.appendChild(el('div', { cls: 'note ax-registered', text: stateNote }));
       // (the former observed-break cue-line is replaced by the source-aware Dagen din block below)
       // planned-window progress: ring on desktop (CSS shows it), bar on mobile; only while the window runs
       const span = p.plannedEndAt - p.plannedStartAt;
@@ -444,6 +519,8 @@ export function mountEmployeeShell(root, options) {
         btn(primary === key ? capsLabel : label, primary === key ? 'primary' : 'secondary', onClick);
       if (!att && actionable) {
         acts.appendChild(emph('stemple_inn', 'STEMPLE INN', 'Stemple inn', () => openClockDialog(membership, shift, attId, 'in')));
+      } else if (att && att.status === 'clocked_in' && heroException) {
+        // overdue: the exception card below carries the honest choices; no ordinary STEMPLE UT / pause here
       } else if (att && att.status === 'clocked_in') {
         if (att.breakState === 'on_break') {
           acts.appendChild(emph('avslutt_pause', 'AVSLUTT PAUSE', 'Avslutt pause', () => openBreakDialog(membership, shift, attId, 'break_end')));
@@ -455,6 +532,7 @@ export function mountEmployeeShell(root, options) {
         acts.appendChild(el('div', { cls: 'done-line', text: 'Vakten er fullført for i dag.' }));
       }
       main.appendChild(acts);
+      renderExceptionCards(main, membership, exceptions, nowMs);
 
       // ---- DAGEN DIN (Slice003): source-aware day summary from the existing projection, rendered only with attendance ----
       const ds = att ? daySummaryFor({ attendance: att }) : null;
@@ -473,22 +551,17 @@ export function mountEmployeeShell(root, options) {
           r.appendChild(right);
           return r;
         };
-        // START
-        if (ds.start.at != null) {
-          if (ds.start.source === 'declared') sc.appendChild(rowOf('Start', fmtHM(ds.start.at), 'Oppgitt av deg', 'Registrert kl. ' + fmtHM(ds.start.observedAt)));
-          else sc.appendChild(rowOf('Start', fmtHM(ds.start.at), 'Stemplet inn', null));
-        }
+        // START (FIX-003: source-aware attribution; no formatter call on a nullable observed instant)
+        const sr = dayRowFactsFor(att, ds, 'start');
+        if (sr) sc.appendChild(rowOf('Start', sr.primary, sr.tag, sr.secondary));
         // BREAK
         if (ds.breakRow.kind === 'open') sc.appendChild(rowOf('Pause', 'Pågår siden ' + (ds.breakRow.sinceAt != null ? fmtHM(ds.breakRow.sinceAt) : '–'), null, null));
-        else if (ds.breakRow.kind === 'declared') sc.appendChild(rowOf('Pause', ds.breakRow.minutes + ' min', 'Oppgitt av deg', (ds.breakRow.observedMinutes > 0 || ds.breakRow.count > 0) ? 'Registrert ' + ds.breakRow.observedMinutes + ' min' + (ds.breakRow.count > 0 ? ' (' + ds.breakRow.count + (ds.breakRow.count === 1 ? ' pause)' : ' pauser)') : '') : null));
+        else if (ds.breakRow.kind === 'declared') sc.appendChild(rowOf('Pause', ds.breakRow.minutes + ' min', declaredByTag(att), (ds.breakRow.observedMinutes > 0 || ds.breakRow.count > 0) ? 'Registrert ' + ds.breakRow.observedMinutes + ' min' + (ds.breakRow.count > 0 ? ' (' + ds.breakRow.count + (ds.breakRow.count === 1 ? ' pause)' : ' pauser)') : '') : null));
         else if (ds.breakRow.kind === 'observed') sc.appendChild(rowOf('Pause', ds.breakRow.minutes + ' min', 'Registrert', ds.breakRow.count > 0 ? ds.breakRow.count + (ds.breakRow.count === 1 ? ' pause' : ' pauser') : null));
-        // END
-        if (ds.end.at != null) {
-          if (ds.end.source === 'declared') sc.appendChild(rowOf('Slutt', fmtHM(ds.end.at), 'Oppgitt av deg', 'Registrert kl. ' + fmtHM(ds.end.observedAt)));
-          else sc.appendChild(rowOf('Slutt', fmtHM(ds.end.at), 'Stemplet ut', null));
-        } else {
-          sc.appendChild(rowOf('Slutt', '–', null, ds.onBreak ? null : 'Ikke stemplet ut ennå'));
-        }
+        // END (FIX-003)
+        const er = dayRowFactsFor(att, ds, 'end');
+        if (er) sc.appendChild(rowOf('Slutt', er.primary, er.tag, er.secondary));
+        else sc.appendChild(rowOf('Slutt', '–', null, ds.onBreak ? null : 'Ikke stemplet ut ennå'));
         // TOTAL (only when the helper exposes a complete total)
         if (ds.total) {
           const tr = el('div', { cls: 'row', style: 'padding:12px 0 2px;border-top:1px solid #eef0ec;margin-top:2px' });
@@ -590,12 +663,13 @@ export function mountEmployeeShell(root, options) {
       card.appendChild(el('div', { cls: 'kicker', text: hero.ongoingFromPriorDay ? 'Pågående vakt' : hero.kind === 'completed' ? 'Dagens vakt · fullført' : 'Dagens vakt' }));
       card.appendChild(el('div', { cls: 'title', text: fmtHM(p.plannedStartAt) + '–' + fmtHM(p.plannedEndAt) + (isOvernight(p, TZ) ? ' (til neste dag)' : '') }));
       card.appendChild(el('div', { cls: 'sub', text: tenantLabel(membership.tenantId) + (ROLE_LABELS[p.roleKey] ? ' · ' + ROLE_LABELS[p.roleKey] : '') + (hero.ongoingFromPriorDay ? ' · startet ' + fmtDayShort(p.workDate) : '') }));
-      let stateText = 'Ikke stemplet inn', stateCls = 'status';
-      if (att && att.status === 'clocked_in') { stateText = 'Stemplet inn kl. ' + fmtHM(att.observedClockInAt); stateCls = 'status on'; }
+      let stateText = 'Ikke stemplet inn', stateCls = 'status', stateNote = null;
+      if (att && att.status === 'clocked_in') { const cs = clockInStateFor(att); stateText = cs.text; stateNote = cs.note; stateCls = 'status on'; }
       else if (att && att.status === 'clocked_out') { stateText = 'Stemplet ut kl. ' + fmtHM(att.observedClockOutAt) + ' (inn ' + fmtHM(att.observedClockInAt) + ')'; }
       else if (hero.kind === 'completed') { stateText = 'Planlagt vakt er over'; }
       if (att && att.breakState === 'on_break') { stateText = 'På pause siden kl. ' + fmtHM(att.openBreakStartedAt); stateCls = 'status pause'; }
       const st = el('div', { cls: stateCls }); st.appendChild(el('span', { cls: 'dot' })); st.appendChild(el('span', { text: stateText })); card.appendChild(st);
+      if (stateNote) card.appendChild(el('div', { cls: 'note ax-registered', text: stateNote }));
       if (att && att.breakState !== 'on_break' && att.observedBreakMinutesTotal > 0) card.appendChild(el('div', { cls: 'cue-line', text: 'Observert pausetid: ' + att.observedBreakMinutesTotal + ' min (' + att.breakCount + ' pauser)' }));
       // schedule-window progress (planned window only; never worked/payable time)
       const span = p.plannedEndAt - p.plannedStartAt;
@@ -719,10 +793,11 @@ export function mountEmployeeShell(root, options) {
     card.appendChild(el('div', { text: 'Dagens vakt', style: 'font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#2e7d46;font-weight:700;margin-bottom:6px' }));
     card.appendChild(el('div', { text: tenantLabel(shift.tenantId) + (ROLE_LABELS[shift.roleKey] ? ' · ' + ROLE_LABELS[shift.roleKey] : ''), style: 'font-weight:700;font-size:15px' }));
     card.appendChild(el('div', { text: 'Planlagt: ' + fmtHM(shift.plannedStartAt) + '–' + fmtHM(shift.plannedEndAt) + (isOvernight(todayEntry.projection, TZ) ? ' (til neste dag)' : ''), style: 'font-size:14px;color:#333;margin-top:2px' }));
-    let stateText = 'Ikke stemplet inn';
-    if (att && att.status === 'clocked_in') stateText = 'Stemplet inn kl. ' + fmtHM(att.observedClockInAt);
+    let stateText = 'Ikke stemplet inn', stateNote = null;
+    if (att && att.status === 'clocked_in') { const cs = clockInStateFor(att); stateText = cs.text; stateNote = cs.note; }
     else if (att && att.status === 'clocked_out') stateText = 'Stemplet ut kl. ' + fmtHM(att.observedClockOutAt) + ' (inn ' + fmtHM(att.observedClockInAt) + ')';
     card.appendChild(el('div', { text: 'Status: ' + stateText, style: 'font-size:13px;color:#555;margin-top:8px' }));
+    if (stateNote) card.appendChild(el('div', { text: stateNote, style: 'font-size:12px;color:#777;margin-top:4px' }));
     if (att && att.breakState === 'on_break') {
       card.appendChild(el('div', { text: 'På pause siden kl. ' + fmtHM(att.openBreakStartedAt), style: 'font-size:13px;color:#6a5acd;font-weight:600;margin-top:4px' }));
     } else if (att && att.observedBreakMinutesTotal > 0) {
@@ -808,24 +883,95 @@ export function mountEmployeeShell(root, options) {
     return sel;
   }
 
-  function openClockDialog(membership, shift, attId, kind) {
+  // ---- ATTENDANCE EXCEPTION CARDS (employee) — the durable in-app notification, shown + acknowledged + corrected apart ----
+  // One card per applicable exception (missing clock-in / missing clock-out), rendered from the derivation; the durable
+  // record is ensured once (idempotent) and "shown" is written ONCE the first time the card is actually displayed.
+  // Acknowledgement is only ever the explicit button. Nothing here decides time truth: the actions call the canonical
+  // clock transitions through the same dialog, with the shift DATE locked and only the time editable.
+  // after an exception write the mirror changes ONLY through the listener snapshot; wait for it (bounded) before re-rendering
+  function rerenderWhen(membership, pred) {
+    const t0 = Date.now();
+    const tick = () => { if (!current || current.ansattId !== membership.ansattId) return; if (pred() || Date.now() - t0 > 4000) goToday(membership); else setTimeout(tick, 120); };
+    setTimeout(tick, 120);
+  }
+  function renderExceptionCards(host, membership, exceptions, nowMs) {
+    const own = (Array.isArray(exceptions) ? exceptions : []).filter((x) => x.ansattId === membership.ansattId);
+    if (!own.length) return;
+    const wrap = el('div', { cls: 'ax-list' });
+    for (const ex of own) {
+      const rec = exceptionSeam.get(ex.exceptionId) || null;
+      const audit = exceptionAuditOf(rec);
+      const isOut = ex.type === 'MISSING_CLOCK_OUT';
+      const card = el('div', { cls: 'card ax-card ' + (isOut ? 'ax-out' : 'ax-in') + (ex.selfCorrectionOpen ? ' open' : ' expired'), attrs: { 'data-exception': ex.exceptionId } });
+      card.appendChild(el('div', { cls: 'kicker amber', text: isOut ? 'Vakt ikke avsluttet' : 'Innstempling mangler' }));
+      card.appendChild(el('div', { cls: 'title', text: fmtDayShort(ex.workDate) + ' · ' + fmtHM(ex.plannedStartAt) + '–' + fmtHM(ex.plannedEndAt) + (ex.overnight ? ' (til neste dag)' : '') }));
+      card.appendChild(el('div', { cls: 'sub ax-date', text: 'Vaktens dato: ' + fmtDayShort(ex.workDate) + ' (kan ikke endres)' }));
+      if (isOut) {
+        card.appendChild(el('div', { cls: 'lead', text: 'Stemplet inn kl. ' + fmtHM(ex.observedClockInAt) + (ex.onBreak ? ' · på pause' : '') + ' – planlagt slutt kl. ' + fmtHM(ex.plannedEndAt) + ' har passert uten utstempling.' }));
+      } else {
+        card.appendChild(el('div', { cls: 'lead', text: 'Planlagt start kl. ' + fmtHM(ex.plannedStartAt) + ' har passert uten innstempling.' }));
+      }
+      const dl = ex.employeeCorrectionDeadlineAt;
+      if (ex.selfCorrectionOpen) card.appendChild(el('div', { cls: 'note ax-deadline', text: 'Du kan rette dette selv til kl. ' + fmtHM(dl) + ' ' + fmtDayShort(tenantWorkDate(dl, TZ)) + '.' }));
+      else card.appendChild(el('div', { cls: 'note ax-deadline expired', text: 'Fristen for å rette selv gikk ut kl. ' + fmtHM(dl) + ' ' + fmtDayShort(tenantWorkDate(dl, TZ)) + '. Ledelsen må registrere dette.' }));
+      // audit line: shown / acknowledged are separate facts; nothing is claimed without the record
+      const ackLine = el('div', { cls: 'cue-line ax-audit', text: audit && audit.acknowledged ? 'Du bekreftet dette varselet kl. ' + fmtHM(rec.acknowledgedByEmployeeAt) + '.' : audit && audit.shown ? 'Varselet er vist. Bekreft at du har sett det.' : 'Varsel.' });
+      card.appendChild(ackLine);
+      const acts = el('div', { cls: 'actions ax-actions' });
+      const shiftEntry = ownScheduleFor(membership).shifts.find((s) => s.shiftId === ex.shiftId) || null;
+      const shift = shiftEntry ? clockShiftFrom(shiftEntry, membership) : null;
+      const attId = shift ? attendanceIdFor(shift.shiftId, membership.ansattId) : null;
+      if (ex.selfCorrectionOpen && shift) {
+        if (isOut) {
+          acts.appendChild(btn('Jeg glemte å stemple ut', 'primary', () => openClockDialog(membership, shift, attId, 'out', { lockedDate: true, presetHM: fmtHM(ex.plannedEndAt), presetReason: 'FORGOT_CLOCK_OUT', exception: ex })));
+          if (ex.nowValidForClock) acts.appendChild(btn('Jeg jobber fortsatt – stemple ut nå', 'secondary', () => openClockDialog(membership, shift, attId, 'out', { lockedDate: true, exception: ex })));
+          else acts.appendChild(el('div', { cls: 'note', text: 'Utstempling «nå» er ikke lenger mulig for denne vakten; oppgi når du faktisk sluttet.' }));
+        } else {
+          acts.appendChild(btn('Jeg glemte å stemple inn', 'primary', () => openClockDialog(membership, shift, attId, 'in', { lockedDate: true, presetHM: fmtHM(ex.plannedStartAt), presetReason: 'FORGOT_CLOCK_IN', exception: ex })));
+        }
+      }
+      if (audit && audit.shown && !audit.acknowledged) acts.appendChild(btn('Jeg har sett dette', 'secondary ax-ack', () => { exceptionSeam.acknowledge(ex.exceptionId).then(() => rerenderWhen(membership, () => { const r = exceptionSeam.get(ex.exceptionId); return !!(r && r.acknowledgedByEmployeeAt != null); }), () => goToday(membership)); }));
+      card.appendChild(acts);
+      wrap.appendChild(card);
+      // durable record: ensure once; "shown" written ONCE (first display) — a refresh never moves it
+      const shownDone = () => { const r = exceptionSeam.get(ex.exceptionId); return !!(r && r.firstShownToEmployeeAt != null); };
+      const markShownOnce = () => { SHOWN_IN_FLIGHT.add(ex.exceptionId); return exceptionSeam.markShown(ex.exceptionId).then(() => rerenderWhen(membership, shownDone), () => {}).then(() => { /* the flag is cleared only once the mirror shows the fact, so a stale mirror never triggers a second write */ rerenderWhen(membership, () => { if (shownDone()) SHOWN_IN_FLIGHT.delete(ex.exceptionId); return shownDone(); }); }); };
+      if (!rec) { exceptionSeam.ensure(ex, nowMs).then((r) => { if (r && r.record && r.record.firstShownToEmployeeAt == null && !SHOWN_IN_FLIGHT.has(ex.exceptionId)) return markShownOnce(); }).catch(() => {}); }
+      else if (rec.firstShownToEmployeeAt == null && !SHOWN_IN_FLIGHT.has(ex.exceptionId)) markShownOnce();
+    }
+    host.appendChild(wrap);
+  }
+
+  function openClockDialog(membership, shift, attId, kind, variant) {
+    const v = variant || {};
     const nowShown = Date.now();   // display only (B9): the observed instant is captured on confirm
     const plannedAt = kind === 'in' ? shift.plannedStartAt : shift.plannedEndAt;
-    const card = dialogFrame('Dagens vakt', kind === 'in' ? 'Stemple inn' : 'Stemple ut', [
+    const card = dialogFrame(v.lockedDate ? (kind === 'in' ? 'Glemt innstempling' : 'Glemt utstempling') : 'Dagens vakt', kind === 'in' ? 'Stemple inn' : 'Stemple ut', [
       tenantLabel(shift.tenantId) + ' · planlagt ' + fmtHM(plannedAt),
-      'Nå: ' + fmtHM(nowShown) + ' · tidspunktet registreres når du bekrefter.',
+      v.lockedDate ? 'Dato: ' + fmtDayShort(shift.workDate) + ' (låst – kun klokkeslettet kan endres).' : 'Nå: ' + fmtHM(nowShown) + ' · tidspunktet registreres når du bekrefter.',
     ]);
-    // declared time (defaults to the action time; editable only if policy permits)
-    const timeInput = fieldRow(card, 'Faktisk ' + (kind === 'in' ? 'start' : 'slutt'), el('input', { attrs: { type: 'time', value: fmtHM(nowShown) } }));
+    if (v.lockedDate) card.appendChild(el('div', { cls: 'cue-line ax-locked-date', text: 'Vaktens dato ' + fmtDayShort(shift.workDate) + ' kan ikke endres her.' }));
+    // declared time (defaults to the action time; editable only if policy permits; a preset = the planned time)
+    const timeInput = fieldRow(card, 'Faktisk ' + (kind === 'in' ? 'start' : 'slutt'), el('input', { attrs: { type: 'time', value: v.presetHM || fmtHM(nowShown) } }));
     if (POLICY.employeeMayAdjustTime !== true) timeInput.disabled = true;
-    let declaredEdited = false;
+    let declaredEdited = !!v.presetHM;   // a preset IS a declared time on the shift's workDate
     timeInput.addEventListener('input', () => { declaredEdited = true; });
     const reasonKind = kind === 'in' ? 'clock_in' : 'clock_out';
     const reasonSel = fieldRow(card, 'Årsak (kreves ved avvik)', reasonSelectFor(reasonKind));
+    if (v.presetReason) reasonSel.value = v.presetReason;
     const noteInput = fieldRow(card, 'Notat (kreves ved «Annet»)', el('input', { attrs: { type: 'text', placeholder: 'Skriv kort hva som skjedde' } }));
     const errBox = el('div', { cls: 'form-err' });
     card.appendChild(errBox);
+    // PRECLOSURE-POLISH-001 item 2: the 6 h self-correction law (employee-shell-core) is mirrored for DISPLAY only: once the
+    // window is closed the confirm is disabled and the manager-required text is shown. The core stays the authority — a
+    // programmatic submission is still refused there (SELF_CORRECTION_EXPIRED), and that refusal also locks the button.
+    const existingAtOpen = attendanceStore.get(attId);
+    const lawPlannedAt = kind === 'in' ? shift.plannedStartAt : ((existingAtOpen && existingAtOpen.plannedSnapshot && Number.isFinite(existingAtOpen.plannedSnapshot.endAt)) ? existingAtOpen.plannedSnapshot.endAt : shift.plannedEndAt);
+    const selfCorrectionExpired = () => Number.isFinite(lawPlannedAt) && Date.now() >= lawPlannedAt + selfCorrectionWindowMs(POLICY);
+    let okBtn = null;
+    const lockExpired = () => { errBox.textContent = clockErrorText('SELF_CORRECTION_EXPIRED'); if (okBtn) { okBtn.disabled = true; okBtn.setAttribute('aria-disabled', 'true'); okBtn.classList.add('expired'); } };
     dialogActions(card, kind === 'in' ? 'Bekreft innstempling' : 'Bekreft utstempling', () => {
+      if (selfCorrectionExpired()) { lockExpired(); return; }
       // B9: ONE injected action instant is both the observed fact and (by default) the
       // declared time. computeClockTimes never treats an earlier display value as observed.
       const { observedAt, declaredAt } = computeClockTimes({
@@ -834,7 +980,9 @@ export function mountEmployeeShell(root, options) {
         workDate: shift.workDate, timezone: TZ, mayAdjust: POLICY.employeeMayAdjustTime,
       });
       const now = observedAt;
-      const declared = declaredAt;
+      // an OVERNIGHT shift ends on the next calendar day: a declared END time (HH:MM) that falls before the planned start on the
+      // shift's workDate belongs to the next day (the engine's work-day/grace window still bounds it)
+      const declared = (kind === 'out' && declaredAt < shift.plannedStartAt && isOvernight(shift, TZ)) ? declaredAt + 86400000 : declaredAt;
       const reasonCode = reasonSel.value || null;
       const reasonNote = (noteInput.value || '').trim() || null;
       const actor = actorFromMembership(membership);
@@ -849,14 +997,17 @@ export function mountEmployeeShell(root, options) {
       const rerun = (existing) => (kind === 'in'
         ? clockIn({ actor, shift, existing, declaredStartAt: declared, reasonCode, reasonNote, scope }, now, POLICY)
         : clockOut({ actor, existing, declaredEndAt: declared, reasonCode, reasonNote, scope }, now, POLICY));
-      if (res.ok) { persistAttendance(attId, res, rerun); goToday(membership); return; }
+      if (res.ok) { persistAttendance(attId, res, rerun, v.exception ? { exceptionId: v.exception.exceptionId, kind: 'corrected', actor } : null); goToday(membership); return; }
+      if (res.code === 'SELF_CORRECTION_EXPIRED') { lockExpired(); return; }
       if (res.code === 'REASON_REQUIRED') {
         const rr = reasonRequiredForClock(reasonKind, { declaredAt: declared, observedAt: now, plannedAt, policy: POLICY });
         errBox.textContent = 'Årsak kreves (avvik ' + Math.round(rr.declarationDeviationMin) + ' min fra registrert / ' + Math.round(rr.varianceMin) + ' min fra planlagt). Velg en gyldig årsak' + (reasonCode === 'OTHER' ? ' og skriv et notat.' : '.');
       } else {
-        errBox.textContent = 'Kunne ikke registrere: ' + res.code;
+        errBox.textContent = clockErrorText(res.code);
       }
     }, () => goToday(membership));
+    okBtn = card.querySelector('.dlg-actions .btn.primary');   // the shared row's confirm (QA-A2 keeps the call shape)
+    if (selfCorrectionExpired()) lockExpired();
   }
 
   // ETR-2b: START/END BREAK confirm dialog. Observed break time = the single injected instant
@@ -1153,7 +1304,17 @@ export function mountEmployeeShell(root, options) {
     const today = tenantWorkDate(Date.now(), TZ);
     const T = MGR.tenantId;
     const tabs = ledelseTabs().map((t) => t.key);
-    const out = { today, tabs, dag: null, lonn: null, ansatte: null };
+    const out = { today, tabs, dag: null, lonn: null, ansatte: null, exceptions: [] };
+    if (tabs.includes('vaktplan')) {
+      // ATTENDANCE EXCEPTIONS for every employee: the same derivation the employee page uses, over the manager's
+      // bounded shift mirror and the SAME attendance read. The durable record is ensured (idempotent) so the audit
+      // facts exist even before the employee opens the app; the derivation stays the truth of "applicable".
+      const names = new Map(vaktplanPeople().map((p) => [p.ansattId, p.name]));
+      const shiftsAll = Object.keys(scheduleStore()[T] || {}).map((shiftId) => ({ shiftId, projection: scheduleStore()[T][shiftId] }));
+      const derived = deriveAttendanceExceptions({ shifts: shiftsAll, lookup: (shiftId, ansattId) => attendanceStore.get(attendanceIdFor(shiftId, ansattId)) || null, nowMs: Date.now(), policy: POLICY });
+      out.exceptions = derived.map((x) => Object.assign({}, x, { name: names.get(x.ansattId) || x.ansattId, record: exceptionSeam.get(x.exceptionId) || null, audit: exceptionAuditOf(exceptionSeam.get(x.exceptionId) || null) }));
+      for (const x of derived) ensureExceptionOnce(exceptionSeam, x, Date.now());   // PRECLOSURE-POLISH-001 item 3: one local attempt per identity while pending
+    }
     if (tabs.includes('vaktplan')) {
       // managerWeekFor / openShiftsOf are the EXISTING Vaktplan projections; the attendance read is
       // the same attendanceStore.get(attendanceIdFor(...)) the employee home and Vaktplan deps use.
@@ -1189,7 +1350,17 @@ export function mountEmployeeShell(root, options) {
     // 1. KREVER DIN OPPMERKSOMHET — compact action rows, or the honest empty state.
     const items = oppmerksomhetFra({ monthFacts: f.lonn ? f.lonn.facts : null, periodLabel: f.lonn ? f.lonn.label : '', ansatte: f.ansatte, openTodayCount: f.dag ? f.dag.openCount : 0 });
     const s1 = ovSection('Krever din oppmerksomhet');
-    if (!items.length) s1.appendChild(el('div', { cls: 'ov-empty', text: EMPTY_ATTENTION }));
+    if (!items.length && !f.exceptions.length) s1.appendChild(el('div', { cls: 'ov-empty', text: EMPTY_ATTENTION }));
+    // named attendance exceptions FIRST (they are concrete and time-critical), then the existing category rows
+    for (const x of f.exceptions) {
+      const text = x.name + ': ' + (x.type === 'MISSING_CLOCK_OUT' ? 'ikke stemplet ut etter vakt ' : 'mangler innstempling ') + fmtDayShort(x.workDate) + ' (' + fmtHM(x.plannedStartAt) + '–' + fmtHM(x.plannedEndAt) + ')';
+      const meta = (x.audit && x.audit.shown ? 'Vist for ansatt' : 'Ikke vist for ansatt ennå') + ' · ' + (x.audit && x.audit.acknowledged ? 'bekreftet av ansatt' : 'ikke bekreftet') + ' · ' + (x.selfCorrectionOpen ? 'kan rette selv til kl. ' + fmtHM(x.employeeCorrectionDeadlineAt) + ' ' + fmtDayShort(tenantWorkDate(x.employeeCorrectionDeadlineAt, TZ)) : 'fristen er ute – ledelsen må rette');
+      const row = ovRow(text, x.selfCorrectionOpen ? 'warn' : 'hard', () => { if (x.record && !x.audit.managerSeen) exceptionSeam.markSeen(x.exceptionId).catch(() => {}); LG_STATE.periodId = x.workDate.slice(0, 7); LG_STATE.openEmployee = x.ansattId; goLedelse('lonn'); });
+      row.classList.add('ov-ax'); row.setAttribute('data-exception', x.exceptionId);
+      row.appendChild(el('span', { cls: 'ov-ax-meta', text: meta }));
+      s1.appendChild(row);
+    }
+    if (!items.length && !f.exceptions.length) { /* empty state already appended above */ }
     for (const it of items) s1.appendChild(ovRow(it.text, it.tone, () => goOversiktTarget(it.target, f, it.openEmployee)));
     host.appendChild(s1);
     // 2. I DAG — one line per assigned shift with the attendance state the record carries.
@@ -1317,6 +1488,7 @@ export function mountEmployeeShell(root, options) {
       onStateChange: (s) => { LG_STATE.periodId = s.periodId; LG_STATE.openEmployee = s.openEmployee; ensurePeriodRange(s.periodId); },
       manualContext: manualTimeContext,
       onManualTime: submitManualTime,
+      overdueAfterMs: missedThresholdMs(POLICY),   // the ONE overdue threshold (policy.varianceToleranceMinutes) for the manager close action
       plannedShiftsFor: plannedShiftsForPayroll,   // P1: read-only planned projection for DAGER I PERIODEN
       planningFor: planningEconomyForPeriod,       // P2: labelled planning estimates, view-only
       // production: payroll-package persistence is NOT built in this release -> approve / send / correct are blocked with
@@ -1406,16 +1578,69 @@ export function mountEmployeeShell(root, options) {
   }
   // Persist a manager manual entry / correction: production = the accepted attendance commit (REV3 revision law, server
   // confirms, mirror follows the snapshot); preview = the in-memory Map, exactly as before.
-  function persistManualAttendance(res) {
+  function persistManualAttendance(res, exception) {
     if (attendanceStore && typeof attendanceStore.commit === 'function') {
-      return attendanceStore.commit(res, { create: res.attendance.revision === 1 })
+      return attendanceStore.commit(res, { create: res.attendance.revision === 1, exception: exception || undefined })
         .then(() => ({ ok: true }))
         .catch((e) => ({ ok: false, code: (e && e.code) || 'COMMIT_FAILED' }));
     }
+    // preview/memory: a REQUIRED exception (manager close) must exist, match and be open BEFORE the attendance moves —
+    // the same all-or-nothing outcome the production transaction gives
+    if (exception && exception.required === true) {
+      const x = exceptionSeam ? exceptionSeam.get(exception.exceptionId) : null;
+      if (!x) return { ok: false, code: 'NO_EXCEPTION' };
+      const e = exception.expect || {};
+      if ((e.type && x.type !== e.type) || (e.shiftId && x.shiftId !== e.shiftId) || (e.ansattId && x.ansattId !== e.ansattId)) return { ok: false, code: 'exception:EXCEPTION_MISMATCH' };
+      if (x.status !== 'open') return { ok: false, code: 'exception:NOT_OPEN' };
+    }
     attendanceStore.set(res.attendance.attendanceId, res.attendance);
+    if (exception && exceptionSeam) { if (exception.kind === 'manager_resolved' && exceptionSeam.get(exception.exceptionId)) exceptionSeam.resolve(exception.exceptionId, exception.resolution).catch(() => {}); }
     return { ok: true };
   }
+  // MANAGER CLOSE of an open attendance (forgotten clock-out, employee window expired or not): the narrow engine
+  // transition managerCloseOpenAttendance over the EXISTING record (identity/workDate fixed), persisted through the
+  // same commit as every attendance write, and the shared exception is resolved in the same transaction.
+  // MULTISESSION TARGET LAW (owner safety law 2026-10-06): the close targets ONE exact attendance record by attendanceId —
+  // never "the first open record of the day". Identity missing -> RECORD_CHOICE_REQUIRED (fail closed); record not in the
+  // store -> NO_ATTENDANCE; employee/workDate not the form's -> ATTENDANCE_MISMATCH; not open -> NOT_CLOCKED_IN. The matching
+  // MISSING_CLOCK_OUT exception is derived from the record's own shift, ensured (idempotent create) BEFORE the mutation, and
+  // then REQUIRED inside the same commit transaction: attendance close + exception resolution succeed or fail together.
+  function exactRecordFor(form) {
+    if (!form || typeof form.attendanceId !== 'string' || !form.attendanceId) return { ok: false, code: 'RECORD_CHOICE_REQUIRED' };
+    const rec = attendanceStore.get(form.attendanceId) || recordsForEmployee(form.ansattId).find((r) => r.attendanceId === form.attendanceId) || null;
+    if (!rec) return { ok: false, code: 'NO_ATTENDANCE' };
+    if (rec.ansattId !== form.ansattId || rec.workDate !== form.workDate) return { ok: false, code: 'ATTENDANCE_MISMATCH' };
+    return { ok: true, record: rec };
+  }
+  function submitManagerClose(form) {
+    const now = Date.now();
+    const wd = form.workDate;
+    const picked = exactRecordFor(form);
+    if (!picked.ok) return picked;
+    const existing = picked.record;
+    if (existing.status !== 'clocked_in') return { ok: false, code: 'NOT_CLOCKED_IN' };
+    const toMs = (hm) => (/^\d{2}:\d{2}$/.test(hm || '') ? tenantLocalHMToUtcMs(wd, hm, TZ) : null);
+    const breakRaw = String(form.breakMin == null ? '' : form.breakMin).trim();
+    const declaredBreakMinutesTotal = /^\d+$/.test(breakRaw) ? Number(breakRaw) : null;
+    if (declaredBreakMinutesTotal === null) return { ok: false, code: 'DECLARED_BREAK_INVALID' };
+    let declaredEndAt = toMs(form.endHM);
+    // overnight: an end time before the (declared/observed) start on the shift's workDate belongs to the next day; the engine's
+    // work-day/grace window (06:00 next day) still bounds it
+    const startRef = Number.isFinite(existing.declaredStartAt) ? existing.declaredStartAt : existing.observedClockInAt;
+    if (declaredEndAt != null && Number.isFinite(startRef) && declaredEndAt <= startRef) declaredEndAt += 86400000;
+    const res = managerCloseOpenAttendance({ actor: MGR.actor, existing, declaredEndAt, declaredBreakMinutesTotal, reasonCode: form.reasonCode, reasonNote: form.reasonNote, scope: manualScope() }, now, POLICY);
+    if (!res.ok) return { ok: false, code: res.code };
+    // the matching shared exception, derived from THIS record's own shift (same derivation as the employee page and Oversikt)
+    const entry = existing.shiftId ? shiftsForEmployee(scheduleStore(), MGR.tenantId, existing.ansattId, MGR.actor).find((s) => s.shiftId === existing.shiftId) || null : null;
+    const derived = entry ? deriveAttendanceExceptions({ shifts: [entry], lookup: (shiftId, ansattId) => attendanceStore.get(attendanceIdFor(shiftId, ansattId || existing.ansattId)) || null, nowMs: now, policy: POLICY }) : [];
+    const ex = derived.find((x) => x.type === 'MISSING_CLOCK_OUT' && x.ansattId === existing.ansattId && x.shiftId === existing.shiftId) || null;
+    if (!ex) return { ok: false, code: 'NO_EXCEPTION' };
+    const exception = { exceptionId: ex.exceptionId, kind: 'manager_resolved', actor: MGR.actor, resolution: 'manager_close', required: true, expect: { type: 'MISSING_CLOCK_OUT', shiftId: existing.shiftId, ansattId: existing.ansattId } };
+    const ensured = exceptionSeam && typeof exceptionSeam.ensure === 'function' ? exceptionSeam.ensure(ex, now) : Promise.resolve(null);
+    return Promise.resolve(ensured).then(() => persistManualAttendance(res, exception), (e) => ({ ok: false, code: (e && e.code) || 'COMMIT_FAILED' }));
+  }
   function submitManualTime(form) {
+    if (form && form.mode === 'close') return submitManagerClose(form);
     const now = Date.now();
     const wd = form.workDate;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(wd || '')) return { ok: false, code: 'WORKDATE_INVALID' };
@@ -1429,7 +1654,17 @@ export function mountEmployeeShell(root, options) {
     const employment = employmentOf(form.ansattId);
     if (!employment) return { ok: false, code: 'EMPLOYMENT_REQUIRED' };
     const shifts = shiftsForEmployee(scheduleStore(), MGR.tenantId, form.ansattId, MGR.actor);
-    const target = manualTargetFor({ records: recordsForEmployee(form.ansattId), shifts, workDate: wd });
+    // MULTISESSION TARGET LAW: a Korriger opened from a specific day line carries that line's EXACT attendanceId and
+    // targets that record only (employee + workDate re-verified; identity never re-chosen). Without an identity the
+    // resolver decides as before — and several records on the day still fail closed with RECORD_CHOICE_REQUIRED.
+    let target;
+    if (typeof form.attendanceId === 'string' && form.attendanceId) {
+      const picked = exactRecordFor(form);
+      if (!picked.ok) return picked;
+      target = { mode: picked.record.status === 'clocked_in' || picked.record.breakState === 'on_break' ? 'live' : 'correct', record: picked.record, candidates: [] };
+    } else {
+      target = manualTargetFor({ records: recordsForEmployee(form.ansattId), shifts, workDate: wd });
+    }
 
     if (target.mode === 'choose_record') return { ok: false, code: 'RECORD_CHOICE_REQUIRED' };
     // CORRECTION: targets the exact existing record; identity is never re-chosen, observed never touched.
@@ -1467,7 +1702,8 @@ export function mountEmployeeShell(root, options) {
       employment, reasonCode: form.reasonCode, reasonNote: form.reasonNote, scope: manualScope(),
     }, now, POLICY);
     if (!res.ok) return { ok: false, code: res.code };
-    return persistManualAttendance(res);
+    const mci = shift ? { exceptionId: exceptionIdFor('MISSING_CLOCK_IN', shift.shiftId, form.ansattId), kind: 'manager_resolved', actor: MGR.actor, resolution: 'manager_manual_entry' } : null;
+    return persistManualAttendance(res, mci);
   }
 
   // ---- LØNNSGRUNNLAG (Increment 2): monthly payroll INPUT package ----------------------------

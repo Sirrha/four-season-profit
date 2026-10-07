@@ -120,6 +120,12 @@ export const ETR2A_POLICY = Object.freeze({
   employeeClockingEnabled: true,
   managerCorrectionRequiresReason: true,
   maxEditWindowHours: 36,         // rule-enforced upper bound on the edit deadline
+  // OWNER LAW 2026-10-06 (ATTENDANCE-EXCEPTION-NOTIFICATION-AND-REPAIR-LOCAL-BUILD-001): the employee may self-correct a
+  // forgotten clock-in until plannedStartAt + 6 h and a forgotten clock-out until plannedEndAt + 6 h. A BUSINESS window
+  // measured from the planned TIMESTAMPS — deliberately not the same constant as graceHours (the technical work-day /
+  // overnight boundary); the two laws are enforced separately. The missed/overdue threshold itself reuses
+  // varianceToleranceMinutes (the existing planned-time tolerance).
+  employeeSelfCorrectionHours: 6,
   // ETR-2b break policy (PROVISIONAL Four Season business settings, not invariants):
   breakMode: 'trackedStartEnd',   // 'trackedStartEnd' | 'fixedAutoDeduct' | 'manualTotal' | 'none'
   expectedBreakMinutes: 30,
@@ -418,6 +424,9 @@ export function clockIn({ actor, shift, existing, declaredStartAt, reasonCode, r
   // competing stream. Checked before the generic duplicate refusal so the reason is named.
   if (existing && existing.status === 'attested') return err('ATTESTERT_AV_LEDELSE');
   if (existing) return err('DUPLICATE_ATTENDANCE');                                                  // C4 deterministic id exists
+  // OWNER LAW: the employee self-correction window for a missed clock-in ends plannedStartAt + employeeSelfCorrectionHours.
+  // Enforced HERE (core), not only in the UI; after it only management can register the day.
+  if (isFiniteInstant(shift.plannedStartAt) && now >= shift.plannedStartAt + selfCorrectionWindowMs(policy)) return err('SELF_CORRECTION_EXPIRED');   // deadline instant itself is closed (same convention as the edit deadline)
   if (plannedShiftRevision != null && plannedShiftRevision !== shift.revision) return err('SHIFT_REVISION_MISMATCH'); // S5
 
   const observedClockInAt = now;                          // server/injected; immutable
@@ -470,6 +479,10 @@ export function clockOut({ actor, existing, declaredEndAt, reasonCode, reasonNot
   // revision, event, mutation, or observed/provenance fact. Equality is allowed.
   if (!isFiniteInstant(existing.observedClockInAt)) return err('OBSERVED_IN_NOT_FINITE');
   if (now < existing.observedClockInAt) return err('CLOCK_OUT_BEFORE_CLOCK_IN');
+  // OWNER LAW: the employee self-correction window for a missed clock-out ends plannedEndAt + employeeSelfCorrectionHours
+  // (the planned TIMESTAMP, so an overnight shift keeps its full window). Enforced in core; after it the record can
+  // only be closed by management (managerCloseOpenAttendance).
+  if (existing.plannedSnapshot && isFiniteInstant(existing.plannedSnapshot.endAt) && now >= existing.plannedSnapshot.endAt + selfCorrectionWindowMs(policy)) return err('SELF_CORRECTION_EXPIRED');   // deadline instant itself is closed
   // ETR-2b: cannot clock out while a break is open. The employee must end the break
   // first; never silently auto-close and never synthesize a break_end here.
   if (existing.breakState === 'on_break') return err('BREAK_OPEN');
@@ -490,6 +503,45 @@ export function clockOut({ actor, existing, declaredEndAt, reasonCode, reasonNot
     declaredEndAt: { before: null, after: declared },
   });
   return ok({ attendance, event, reason: rr });
+}
+
+export function selfCorrectionWindowMs(policy) { return (policy && Number.isFinite(policy.employeeSelfCorrectionHours) ? policy.employeeSelfCorrectionHours : 6) * HOUR_MS; }
+
+// ---- MANAGER CLOSE OF AN OPEN ATTENDANCE (forgotten clock-out after the employee window) -------------
+// The ONLY transition that completes a clocked_in record without an employee clock-out. Narrow by design:
+//   - admin scope; target must exist and be clocked_in (an open break is closed by this act: the manager DECLARES the
+//     break total, nothing observed is invented);
+//   - the manager states the actual historical END (declared) inside the record's work-day/overnight window and after
+//     the declared/observed start; a manager reason is required by the existing reason contract;
+//   - observedClockOutAt stays null (never fabricated); observed clock-in and declared start are preserved;
+//   - completed state = 'attested' with declarationSource 'manager' — the existing manager-declared completion state,
+//     which keeps "manager corrected" apart from "approved" (approve() admits it through its attested chain).
+export function managerCloseOpenAttendance({ actor, existing, declaredEndAt, declaredBreakMinutesTotal, reasonCode, reasonNote, scope }, now, policy) {
+  if (!existing) return err('NO_ATTENDANCE');
+  if (!isFiniteInstant(now)) return err('NOW_NOT_FINITE');
+  if (!policy || typeof policy !== 'object') return err('POLICY_REQUIRED');
+  const se = laterScopeError(actor, existing, ['admin'], false, scope);
+  if (se) return err(se);
+  if (existing.status !== 'clocked_in') return err('NOT_CLOCKED_IN');
+  if (!isFiniteInstant(declaredEndAt)) return err('DECLARED_NOT_FINITE');
+  if (!withinTenantWorkDay(declaredEndAt, existing.workDate, policy)) return err('DECLARED_OUTSIDE_WORKDATE');
+  if (isFiniteInstant(existing.declaredStartAt) && declaredEndAt <= existing.declaredStartAt) return err('END_BEFORE_START');
+  if (isFiniteInstant(existing.observedClockInAt) && declaredEndAt <= existing.observedClockInAt) return err('END_BEFORE_START');
+  if (typeof declaredBreakMinutesTotal !== 'number' || !Number.isInteger(declaredBreakMinutesTotal) || declaredBreakMinutesTotal < 0) return err('DECLARED_BREAK_INVALID');
+  const spanErr = breakWithinSpan(declaredBreakMinutesTotal, isFiniteInstant(existing.declaredStartAt) ? existing.declaredStartAt : existing.observedClockInAt, declaredEndAt);
+  if (spanErr) return err(spanErr);
+  if (policy.managerCorrectionRequiresReason && !isReasonValid('manager', reasonCode, reasonNote, policy)) return err('REASON_REQUIRED');
+  const attendance = Object.assign({}, existing, {
+    declaredEndAt, declaredBreakMinutesTotal, declarationSource: 'manager',
+    status: 'attested', breakState: 'working', openBreakStartedAt: null,
+    revision: existing.revision + 1, updatedAt: now,
+  });
+  const event = mkEvent('manager_close', attendance, actor, now, reasonCode, reasonNote, {
+    declaredEndAt: { before: existing.declaredEndAt == null ? null : existing.declaredEndAt, after: declaredEndAt },
+    declaredBreakMinutesTotal: { before: existing.declaredBreakMinutesTotal == null ? null : existing.declaredBreakMinutesTotal, after: declaredBreakMinutesTotal },
+    status: { before: 'clocked_in', after: 'attested' },
+  });
+  return ok({ attendance, event });
 }
 
 // ---- EMPLOYEE EDIT (declared times / note only; once; pre-approval; in window)
@@ -909,10 +961,13 @@ export function daySummaryFor({ attendance }) {
   // below: a legacy record has no declarationSource, so `attested` is false and the original
   // expressions apply verbatim.
   const attested = a.declarationSource === 'manager' && obsIn == null && obsOut == null && decIn != null && decOut != null;
+  // CASE 5 (ATTENDANCE-EXCEPTION law): a record CLOSED BY MANAGEMENT after a forgotten clock-out keeps the employee's
+  // observed clock-in and has NO observed clock-out; its end is the manager-declared end. Only with the manager marker.
+  const managerClosed = a.declarationSource === 'manager' && obsIn != null && obsOut == null && decOut != null;
   const startDeclared = attested || (obsIn != null && decIn != null && decIn !== obsIn);
-  const endDeclared = attested || (obsOut != null && decOut != null && decOut !== obsOut);
+  const endDeclared = attested || managerClosed || (obsOut != null && decOut != null && decOut !== obsOut);
   const start = attested ? decIn : (obsIn == null ? null : (startDeclared ? decIn : obsIn));
-  const end = attested ? decOut : (obsOut == null ? null : (endDeclared ? decOut : obsOut));
+  const end = attested ? decOut : (managerClosed ? decOut : (obsOut == null ? null : (endDeclared ? decOut : obsOut)));
   const onBreak = a.breakState === 'on_break';
   const declaredBreak = (Number.isInteger(a.declaredBreakMinutesTotal) && a.declaredBreakMinutesTotal >= 0) ? a.declaredBreakMinutesTotal : null;
   const observedBreak = (typeof a.observedBreakMinutesTotal === 'number' && Number.isFinite(a.observedBreakMinutesTotal) && a.observedBreakMinutesTotal > 0) ? a.observedBreakMinutesTotal : 0;

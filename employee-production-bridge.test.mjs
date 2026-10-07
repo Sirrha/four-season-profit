@@ -70,7 +70,7 @@ t('B3', 'shell: the Ledelse doorway exists in preview and in production MANAGEME
   assert.ok(shellSrc.includes("if (MODE !== 'preview' && MODE !== 'management') return tabs;"), 'tabs gated to preview | management (never the employee surface)');
   assert.ok(shellSrc.includes("if (MODE !== 'preview' || !canOpenVaktplan(MGR.actor)) return goChooser();"), 'standalone Vaktplan destination stays preview-only');
   // the fixture manager actor is referenced exactly three times: the import, the MGR default, and the PREVIEW binding
-  assert.equal((shellSrc.match(/FOUR_SEASON_MANAGER_ACTOR/g) || []).length, 3);
+  assert.equal((shellSrc.match(/FOUR_SEASON_MANAGER_ACTOR/g) || []).length, 4); assert.ok(shellSrc.includes('exceptions: makeMemoryExceptionSeam(() => PREVIEW_ACTOR || FOUR_SEASON_MANAGER_ACTOR)'), 'the fourth use is inside createPreviewAdapters (preview only)');
   assert.ok(shellSrc.includes("if (MODE === 'management') { if (entry.kind === 'management') { MGR.actor = managementActorFrom(entry.membership); MGR.tenantId = entry.membership.tenantId; } }"), 'management identity is derived from the ONE resolved membership');
   assert.ok(shellSrc.includes("else if (MODE === 'preview') { MGR.actor = FOUR_SEASON_MANAGER_ACTOR; MGR.tenantId = FOUR_SEASON_TENANT.tenantId; }"), 'fixture binding is the preview branch only');
   assert.ok(!/DEFAULT_UID|FIXTURE_MEMBERSHIPS|FIXTURE_USERS/.test(shellSrc.slice(shellSrc.indexOf('function managementEntry('), shellSrc.indexOf('function scheduleOpVia('))), 'management entry reads no fixture');
@@ -180,8 +180,8 @@ t('H3', 'preview keeps ONE schedule truth and ONE attendance truth behind the se
   // clock/break writers unchanged: attendance is written only from successful core results
   // S4 foundation: the three employee writers go through ONE persistence seam; the preview Map path is the
   // single direct set() inside persistAttendance (unchanged preview behaviour); production uses commit().
-  assert.equal((shellSrc.match(/(?<!function )persistAttendance\(attId, res, rerun\)/g) || []).length, 3, 'three call sites (definition excluded)');
-  assert.equal((shellSrc.match(/function persistAttendance\(attId, res, rerun\)/g) || []).length, 1);
+  assert.equal((shellSrc.match(/(?<!function )persistAttendance\(attId, res, rerun[^)]*\)/g) || []).length, 3, 'three call sites (definition excluded; the clock dialog adds the optional exception correction argument)');
+  assert.equal((shellSrc.match(/function persistAttendance\(attId, res, rerun, exception\)/g) || []).length, 1, 'the one seam (the optional exception correction rides in the same commit)');
   assert.equal((shellSrc.match(/attendanceStore\.set\(attId, res\.attendance\)/g) || []).length, 1);
   assert.ok(shellSrc.includes("if (attendanceStore && typeof attendanceStore.commit === 'function') {"));
 });

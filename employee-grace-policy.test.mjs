@@ -65,11 +65,15 @@ t('G6', 'the 36 h cap still bounds the deadline: a clock-in early on the workDat
   assert.equal(ci.attendance.employeeEditDeadline, at(NX, '06:00'));
   assert.ok(ci.attendance.employeeEditDeadline - ci.attendance.createdAt <= 36 * 3600000);
 });
-t('G7', 'a plain day shift 08:00–16:00 behaves exactly as before (clock-out at 16:00; a declared 09:00 next day is outside)', () => {
+t('G7', 'a plain day shift 08:00–16:00: clock-out at 16:00 ok; the two boundaries stay SEPARATE laws — a clock-out attempted at 09:00 next day is refused by the OWNER self-correction window (plannedEnd + 6 h = 22:00) BEFORE any work-day check, while a clock-out at 21:00 (inside the 6 h window) declaring 09:00 next day is still refused by the work-day/grace law (DECLARED_OUTSIDE_WORKDATE)', () => {
   const ci = clockIn({ actor, shift: day, existing: null, scope: scope(day) }, at(WD, '08:00'), P); assert.ok(ci.ok, ci.code);
   const co = clockOut({ actor, existing: ci.attendance, scope: scope(day) }, at(WD, '16:00'), P); assert.ok(co.ok, co.code);
   const bad = clockOut({ actor, existing: ci.attendance, scope: scope(day), reasonCode: 'MANAGEMENT_DECISION' }, at(NX, '09:00'), P);
-  assert.equal(bad.ok, false); assert.equal(bad.code, 'DECLARED_OUTSIDE_WORKDATE');
+  assert.equal(bad.ok, false); assert.equal(bad.code, 'SELF_CORRECTION_EXPIRED');
+  const bad2 = clockOut({ actor, existing: ci.attendance, scope: scope(day), declaredEndAt: at(NX, '09:00'), reasonCode: 'MANAGEMENT_DECISION' }, at(WD, '21:00'), P);
+  assert.equal(bad2.ok, false); assert.equal(bad2.code, 'DECLARED_OUTSIDE_WORKDATE');
+  const ok2 = clockOut({ actor, existing: ci.attendance, scope: scope(day), declaredEndAt: at(WD, '16:00'), reasonCode: 'FORGOT_CLOCK_OUT' }, at(WD, '21:59'), P);
+  assert.ok(ok2.ok, 'just before the 6 h window closes: ' + ok2.code);
 });
 t('G8', 'once-only edit and observed immutability are unchanged under grace 6', () => {
   const ci = clockIn({ actor, shift: night, existing: null, scope: scope(night) }, at(WD, '22:00'), P);

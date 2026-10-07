@@ -68,12 +68,15 @@ const today = tenantWorkDate(Date.now(), TZ);
 const hm = (h) => tenantLocalHMToUtcMs(today, h, TZ);
 const memb = (ansattId, role) => ({ uid: 'auth-' + ansattId, tenantId: T, accessRole: role || 'employee', ansattId, accessEnabled: true });
 const shiftDoc = (ansattId, from, to, status) => ({ ansattId, plannedStartAt: hm(from), plannedEndAt: hm(to), workDate: today, roleKey: null, status: status || (ansattId ? 'assigned' : 'open'), revision: 1, createdByUid: 'auth-adm', createdAt: Date.now() - 3600000, updatedAt: Date.now() - 3600000, serverCreatedAt: { __srv: 1 }, serverUpdatedAt: { __srv: 1 } });
+// owner law 2026-10-06: an employee clock-in is refused 6 h after the planned start, so the clock-path fixture shift lies around NOW
+// (it used to be 08:00-16:00, which made these tests time-of-day dependent)
+const shiftNow = (ansattId) => Object.assign(shiftDoc(ansattId, '08:00', '16:00'), { plannedStartAt: Date.now() - 3600000, plannedEndAt: Date.now() + 7 * 3600000 });
 const shiftFor = (id, d) => ({ shiftId: id, tenantId: T, ansattId: d.ansattId, status: d.status, workDate: d.workDate, plannedStartAt: d.plannedStartAt, plannedEndAt: d.plannedEndAt, revision: d.revision, roleKey: d.roleKey });
 const actorOf = (m) => ({ uid: m.uid, accessRole: m.accessRole, ansattId: m.ansattId, accessEnabled: true, tenantId: T });
 function build(F, m, extra) { return createProductionAdapters(Object.assign({ fs: F.api, tenantId: T, membership: m, policy: POLICY }, extra || {})); }
 
-await t('P1', 's4Path builds only the three S4 collections (+events); vakter/ansatte/root/other paths are refused', () => {
-  assert.deepEqual([...S4_COLLECTIONS], ['shifts', 'attendance', 'employeeSelf']);
+await t('P1', 's4Path builds only the four S4 collections (+events; attendanceExceptions added by the ATTENDANCE-EXCEPTION law); vakter/ansatte/root/other paths are refused', () => {
+  assert.deepEqual([...S4_COLLECTIONS], ['shifts', 'attendance', 'employeeSelf', 'attendanceExceptions']);
   assert.equal(s4Path(T, 'shifts', 'mg-1'), 'tenants/four-season-as/shifts/mg-1');
   assert.equal(s4Path(T, 'attendance', 'a_b', 'events', 'a_b-rev-000001'), 'tenants/four-season-as/attendance/a_b/events/a_b-rev-000001');
   for (const bad of [() => s4Path(T, 'vakter', 'x'), () => s4Path(T, 'ansatte', 'x'), () => s4Path(T, 'shifts', 'x', 'children'), () => s4Path(T, 'shifts', 'a/b'), () => s4Path('../x', 'shifts'), () => s4Path(T, 'shifts', 'x', 'events', 'bad id')]) assert.throws(bad, (e) => e.code === ADAPTER_ERROR.PATH_FORBIDDEN);
@@ -86,19 +89,20 @@ await t('P2', 'factory refuses a missing capability, a wrong tenant and a member
   assert.throws(() => build(F, { uid: 'u', tenantId: T, accessRole: 'admin', ansattId: null, accessEnabled: true }), (e) => e.code === ADAPTER_ERROR.CORE_REFUSED);
   assert.throws(() => build(F, { uid: 'uid-maria', tenantId: 'four-season', accessRole: 'employee', ansattId: 'ans-maria', accessEnabled: true }), (e) => e.code === ADAPTER_ERROR.CORE_REFUSED, 'fixture tenant id is not the production tenant');
 });
-await t('P3', 'start() attaches exactly 4 listeners (own shifts, open shifts, own attendance, own employeeSelf); dispose() unsubscribes all and empties mirrors', () => {
+await t('P3', 'start() attaches exactly 5 listeners (own shifts, open shifts, own attendance, own attendance exceptions, own employeeSelf); dispose() unsubscribes all and empties mirrors', () => {
   const F = makeFakeFs(); const A = build(F, memb('a1'));
   assert.equal(A.listenerCount(), 0); A.start(); A.start();
-  assert.equal(A.listenerCount(), 4);
-  assert.deepEqual(F.listeners.map((l) => l.spec.col || l.spec.doc), ['tenants/four-season-as/shifts', 'tenants/four-season-as/shifts', 'tenants/four-season-as/attendance', 'tenants/four-season-as/employeeSelf/a1']);
+  assert.equal(A.listenerCount(), 5);
+  assert.deepEqual(F.listeners.map((l) => l.spec.col || l.spec.doc), ['tenants/four-season-as/shifts', 'tenants/four-season-as/shifts', 'tenants/four-season-as/attendance', 'tenants/four-season-as/attendanceExceptions', 'tenants/four-season-as/employeeSelf/a1']);
+  assert.deepEqual(F.listeners[3].spec.where, [['ansattId', '==', 'a1']], 'exceptions: own only');
   assert.deepEqual(F.listeners[0].spec.where, [['ansattId', '==', 'a1']]); assert.deepEqual(F.listeners[1].spec.where, [['status', '==', 'open'], ['ansattId', '==', null]]); assert.deepEqual(F.listeners[2].spec.where, [['ansattId', '==', 'a1']]);
-  A.dispose(); assert.equal(A.listenerCount(), 0); assert.equal(F.state.unsubscribed, 4);
+  A.dispose(); assert.equal(A.listenerCount(), 0); assert.equal(F.state.unsubscribed, 5);
   assert.deepEqual(A.schedule.store(), { [T]: {} }); assert.equal(A.attendance.has('x'), false);
   assert.rejects(A.claim ? Promise.resolve() : Promise.resolve());
 });
 await t('P4', 'snapshots mirror own + open shifts into ONE container (server-stamps stripped); removals apply; stale-generation callbacks are ignored', () => {
   const F = makeFakeFs(); let current = true; const A = build(F, memb('a1'), { isCurrent: () => current });
-  F.seed('tenants/four-season-as/shifts/s-a1', shiftDoc('a1', '08:00', '16:00')); F.seed('tenants/four-season-as/shifts/s-open', shiftDoc(null, '16:00', '20:00', 'open')); F.seed('tenants/four-season-as/shifts/s-a2', shiftDoc('a2', '10:00', '18:00'));
+  F.seed('tenants/four-season-as/shifts/s-a1', shiftNow('a1')); F.seed('tenants/four-season-as/shifts/s-open', shiftDoc(null, '16:00', '20:00', 'open')); F.seed('tenants/four-season-as/shifts/s-a2', shiftDoc('a2', '10:00', '18:00'));
   A.start(); F.emit();
   const c = A.schedule.store()[T];
   assert.deepEqual(Object.keys(c).sort(), ['s-a1', 's-open']); assert.ok(!('serverCreatedAt' in c['s-a1'])); assert.equal(c['s-a1'].ansattId, 'a1');
@@ -124,7 +128,7 @@ await t('P5', 'Ta vakten: applyScheduleOperation decides; the transaction update
 });
 await t('P6', 'attendance commit (create): batch writes the core record + server stamps and the normalised core event; set() is refused in production; mirror unchanged until snapshot', async () => {
   const F = makeFakeFs(); const A = build(F, memb('a1'));
-  F.seed('tenants/four-season-as/shifts/s-a1', shiftDoc('a1', '08:00', '16:00')); A.start(); F.emit();
+  F.seed('tenants/four-season-as/shifts/s-a1', shiftNow('a1')); A.start(); F.emit();
   const sh = shiftFor('s-a1', F.docs.get('tenants/four-season-as/shifts/s-a1'));
   const ci = clockIn({ actor: actorOf(memb('a1')), shift: sh, existing: null, scope: { tenantId: T, shiftId: 's-a1' }, reasonCode: 'MANAGEMENT_DECISION' }, Date.now(), POLICY);
   assert.ok(ci.ok, ci.code);
@@ -140,7 +144,7 @@ await t('P6', 'attendance commit (create): batch writes the core record + server
 });
 await t('P7a', 'attendance commit (update) without a rerun on a STALE record fails visibly with STALE_REVISION and writes nothing', async () => {
   const F = makeFakeFs(); const A = build(F, memb('a1'));
-  F.seed('tenants/four-season-as/shifts/s-a1', shiftDoc('a1', '08:00', '16:00')); A.start(); F.emit();
+  F.seed('tenants/four-season-as/shifts/s-a1', shiftNow('a1')); A.start(); F.emit();
   const sh = shiftFor('s-a1', F.docs.get('tenants/four-season-as/shifts/s-a1')); const act = actorOf(memb('a1')); const sc = { tenantId: T, shiftId: 's-a1' };
   const ci = clockIn({ actor: act, shift: sh, existing: null, scope: sc, reasonCode: 'MANAGEMENT_DECISION' }, Date.now() - 60000, POLICY);
   await A.attendance.commit(ci, { create: true }); F.emit();
@@ -154,7 +158,7 @@ await t('P7a', 'attendance commit (update) without a rerun on a STALE record fai
 });
 await t('P7b', 'stale re-run semantics precisely: rerun is invoked once with the SERVER record; a legitimate re-run commits with retried=true; a refusing re-run fails with its core code and writes nothing', async () => {
   const F = makeFakeFs(); const A = build(F, memb('a1'));
-  F.seed('tenants/four-season-as/shifts/s-a1', shiftDoc('a1', '08:00', '16:00')); A.start(); F.emit();
+  F.seed('tenants/four-season-as/shifts/s-a1', shiftNow('a1')); A.start(); F.emit();
   const sh = shiftFor('s-a1', F.docs.get('tenants/four-season-as/shifts/s-a1')); const act = actorOf(memb('a1')); const sc = { tenantId: T, shiftId: 's-a1' };
   const ci = clockIn({ actor: act, shift: sh, existing: null, scope: sc, reasonCode: 'MANAGEMENT_DECISION' }, Date.now() - 120000, POLICY);
   await A.attendance.commit(ci, { create: true }); F.emit();
@@ -177,7 +181,7 @@ await t('P7b', 'stale re-run semantics precisely: rerun is invoked once with the
 });
 await t('P8', 'permission / network failure: the commit rejects with the mapped code and NOTHING changes locally (no optimistic state)', async () => {
   const F = makeFakeFs(); const A = build(F, memb('a1'));
-  F.seed('tenants/four-season-as/shifts/s-a1', shiftDoc('a1', '08:00', '16:00')); A.start(); F.emit();
+  F.seed('tenants/four-season-as/shifts/s-a1', shiftNow('a1')); A.start(); F.emit();
   const sh = shiftFor('s-a1', F.docs.get('tenants/four-season-as/shifts/s-a1'));
   const ci = clockIn({ actor: actorOf(memb('a1')), shift: sh, existing: null, scope: { tenantId: T, shiftId: 's-a1' }, reasonCode: 'MANAGEMENT_DECISION' }, Date.now(), POLICY);
   F.state.failNext = 'permission-denied';
@@ -189,7 +193,7 @@ await t('P8', 'permission / network failure: the commit rejects with the mapped 
 });
 await t('P9', 'event normalisation: an employee_edit whose note never existed carries no `before` (undefined dropped); the stored event equals JSON-normalised core output', async () => {
   const F = makeFakeFs(); const A = build(F, memb('a1'));
-  F.seed('tenants/four-season-as/shifts/s-a1', shiftDoc('a1', '08:00', '16:00')); A.start(); F.emit();
+  F.seed('tenants/four-season-as/shifts/s-a1', shiftNow('a1')); A.start(); F.emit();
   const sh = shiftFor('s-a1', F.docs.get('tenants/four-season-as/shifts/s-a1')); const act = actorOf(memb('a1')); const sc = { tenantId: T, shiftId: 's-a1' };
   const ci = clockIn({ actor: act, shift: sh, existing: null, scope: sc, reasonCode: 'MANAGEMENT_DECISION' }, Date.now() - 1000, POLICY); await A.attendance.commit(ci, { create: true }); F.emit();
   const co = clockOut({ actor: act, existing: A.attendance.get(ci.attendance.attendanceId), scope: sc, reasonCode: 'MANAGEMENT_DECISION' }, Date.now() - 500, POLICY); await A.attendance.commit(co); F.emit();
@@ -260,8 +264,8 @@ await t('P14', 'source guards: adapters/projection have zero Firebase or network
     assert.ok(!/firebase|initializeApp|firestore\(|fetch\(|XMLHttpRequest|WebSocket|localStorage|sessionStorage|document\.|window\./i.test(src), f);
   }
   const shell = fs.readFileSync(new URL('./employee-shell-ui.mjs', import.meta.url), 'utf8');
-  assert.equal((shell.match(/(?<!function )persistAttendance\(attId, res, rerun\)/g) || []).length, 3);
-  assert.ok(shell.includes("return { schedule: { store: previewScheduleStore }, attendance: new Map(), employees: { store: previewEmployeeStore } };"), 'preview adapters unchanged');
+  assert.equal((shell.match(/(?<!function )persistAttendance\(attId, res, rerun[^)]*\)/g) || []).length, 3, 'three writers through ONE seam (the clock dialog passes the optional exception correction)');
+  assert.ok(shell.includes("return { schedule: { store: previewScheduleStore }, attendance: new Map(), employees: { store: previewEmployeeStore }, exceptions: makeMemoryExceptionSeam("), 'preview adapters: same seams + the in-memory exception seam');
   assert.ok(shell.includes('attendanceStore.set(attId, res.attendance);'), 'preview direct set retained inside the seam');
   assert.ok(!shell.includes("import { createProductionAdapters"), 'the shell never imports the production adapters (the host injects them)');
 });

@@ -1276,9 +1276,12 @@ t('PA-T12 overnight end -> absolute-instant comparison yields the correct 10-min
   assert.equal(primaryActionFor({ attendance: paAtt(), shift: night, now: NEXT(1, 49), policy: POL }), 'start_pause');
   assert.equal(primaryActionFor({ attendance: paAtt(), shift: night, now: NEXT(1, 50), policy: POL }), 'stemple_ut');
 });
-t('PA-T13 late clock-in already inside the finish window -> stemple_ut right after clock-in', () => {
-  const att = clockedIn({ declared: D(19, 55), now: D(19, 55), reasonCode: 'LATE_ARRIVAL' });
-  assert.equal(primaryActionFor({ attendance: att, shift: paShift(), now: D(19, 56), policy: POL }), 'stemple_ut');
+t('PA-T13 late clock-in already inside the finish window -> stemple_ut right after clock-in (owner law 2026-10-06: a clock-in more than 6 h after the planned start is refused SELF_CORRECTION_EXPIRED, so the late shift here starts 14:00)', () => {
+  const late = clockIn({ actor: emp('ans-a1'), shift: mkShift('ans-a1', { start: D(14) }), declaredStartAt: D(19, 55), reasonCode: 'LATE_ARRIVAL', reasonNote: null, scope: SCOPE }, D(19, 55), POL);
+  assert.ok(late.ok, 'clock-in 5 h 55 after planned start: ' + late.code);
+  assert.equal(primaryActionFor({ attendance: late.attendance, shift: paShift(), now: D(19, 56), policy: POL }), 'stemple_ut');
+  const expired = clockIn({ actor: emp('ans-a1'), shift: mkShift('ans-a1'), declaredStartAt: D(19, 55), reasonCode: 'LATE_ARRIVAL', reasonNote: null, scope: SCOPE }, D(19, 55), POL);
+  assert.equal(expired.ok, false); assert.equal(expired.code, 'SELF_CORRECTION_EXPIRED', 'planned start 12:00 + 6 h has passed');
 });
 t('PA-T14 indeterminate/missing required state -> none (fail closed)', () => {
   assert.equal(primaryActionFor({ attendance: paAtt(), shift: paShift(), now: NaN, policy: POL }), null);

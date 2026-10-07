@@ -1,5 +1,9 @@
 rules_version = '2';
 // S4 CANDIDATE (REV3.1: budget-safe attendance block, laws unchanged from REV3) — Sormena employee production integration. SCRATCH / EMULATOR ONLY. NOT PUBLISHED.
+// REV4 CANDIDATE (local, 2026-10-06, ATTENDANCE-EXCEPTION law): (a) employee clock-in/clock-out are bound to the owner's
+// 6 h self-correction window measured from the PLANNED timestamps (selfCreateOk / opClockOut); (b) one new admin
+// transition manager_close (clocked_in -> attested, manager-declared end, no fabricated observed clock-out);
+// (c) new least-privilege collection attendanceExceptions (+ events): the durable shared notification/exception record.
 // Architecture: no recursive tenant-wide grant. S3 admin capability is preserved by ONE explicit
 // recursive grant per management collection of the measured operation inventory (17 STARTUP_COLS
 // + _meta + employeeAuthLock). The S4 protected collections (shifts, attendance, employeeSelf and
@@ -85,7 +89,11 @@ service cloud.firestore {
         || (e.type == 'approval' && admOk(e, mrole, mans) && noReason(e) && x && p.status in ['clocked_out', 'attested'] && q.status == 'approved'
               && cKeys(c, ['approvedStartAt', 'approvedEndAt', 'status'])
               && cv(c, 'approvedStartAt', p.approvedStartAt, q.approvedStartAt) && cv(c, 'approvedEndAt', p.approvedEndAt, q.approvedEndAt)
-              && cv(c, 'status', p.status, 'approved')));
+              && cv(c, 'status', p.status, 'approved'))
+        // manager_close LAST and lean (rules expression budget): the existing branches keep their cost; the close event
+        // binds type, admin actor, the clocked_in -> attested transition and the three changed keys
+        || (e.type == 'manager_close' && admOk(e, mrole, mans) && x && p.status == 'clocked_in' && q.status == 'attested'
+              && cKeys(c, ['declaredEndAt', 'declaredBreakMinutesTotal', 'status']) && cv(c, 'status', 'clocked_in', 'attested')));
     }
     // SHIFT event fidelity (schedule-core buildEvent / shiftChangedMapError; management-schedule-core claim)
     function shiftFid(e, x, p, q, c, mrole, mans) {
@@ -269,6 +277,8 @@ service cloud.firestore {
             && n.status == 'clocked_out' && n.breakState == 'working' && n.openBreakStartedAt == null
             && n.observedClockOutAt == n.updatedAt
             && n.declaredEndAt is int
+            // OWNER LAW (6 h self-correction window from the PLANNED end; the work-day/grace law on declaredEndAt is separate)
+            && n.updatedAt < o.plannedSnapshot.endAt + 21600000
             && changedOnly(n, o, ['status', 'observedClockOutAt', 'declaredEndAt', 'revision', 'updatedAt', 'serverUpdatedAt']);
         }
         function opBreakStart(n, o) {
@@ -316,7 +326,9 @@ service cloud.firestore {
             && shift.status == 'assigned' && shift.ansattId == my
             && n.workDate == shift.workDate
             && n.plannedShiftRevision == shift.revision
-            && n.plannedSnapshot == { 'startAt': shift.plannedStartAt, 'endAt': shift.plannedEndAt };
+            && n.plannedSnapshot == { 'startAt': shift.plannedStartAt, 'endAt': shift.plannedEndAt }
+            // OWNER LAW (6 h self-correction window from the PLANNED start): no employee clock-in / backfill after it
+            && n.createdAt < shift.plannedStartAt + 21600000;
         }
         function selfUpdateOk(n, o, my) {
           return o.ansattId == my
@@ -352,9 +364,20 @@ service cloud.firestore {
             && nearNow(n.createdAt) && n.updatedAt == n.createdAt
             && n.serverCreatedAt == request.time && n.serverUpdatedAt == request.time;
         }
+        // manager_close: the ONLY completion of a clocked_in record without an employee clock-out. Observed facts stay
+        // (observedClockOutAt remains null — never fabricated); the manager DECLARES end + break; an open break is closed.
+        function admClose(n, o) {
+          return o.status == 'clocked_in' && n.status == 'attested' && n.declarationSource == 'manager'
+            && n.observedClockOutAt == null
+            && n.declaredEndAt is int && (o.declaredStartAt == null || n.declaredEndAt > o.declaredStartAt) && (o.observedClockInAt == null || n.declaredEndAt > o.observedClockInAt)
+            && n.declaredBreakMinutesTotal is int && n.declaredBreakMinutesTotal >= 0
+            && n.breakState == 'working' && n.openBreakStartedAt == null
+            && n.approvedStartAt == null && n.approvedEndAt == null && n.approvedByUid == null && n.approvedAt == null && n.approvedBreakMinutesTotal == null
+            && changedOnly(n, o, ['status', 'declarationSource', 'declaredEndAt', 'declaredBreakMinutesTotal', 'breakState', 'openBreakStartedAt', 'revision', 'updatedAt', 'serverUpdatedAt']);
+        }
         function admUpdateOk(n, o) {
           return ownershipKept(n, o) && observedKept(n, o) && stamped(n, o)
-            && (admCorrection(n, o) || admApprove(n, o));
+            && (admCorrection(n, o) || admApprove(n, o) || admClose(n, o));
         }
         allow get, list: if isSelfActor(tenantId) && resource.data.ansattId == myAnsattId(tenantId);
         // ordering law (rules expression budget): cheap discriminators first, the document-shape check last
@@ -414,6 +437,108 @@ service cloud.firestore {
         allow get, list: if isEnabledAdminMember(tenantId);
         allow create, update: if isEnabledAdminMember(tenantId) && projShape(pd());
         allow delete: if isEnabledAdminMember(tenantId);
+      }
+
+      // ---- ATTENDANCE EXCEPTIONS — the durable SHARED notification/exception record (owner law 2026-10-06) ----
+      // Derived facts only (bound to the ASSIGNED shift: ids, workDate, planned timestamps, deadline = planned + 6 h,
+      // effectiveAt = planned + 15 min). Employee: read own, create own, and three write-once own facts (shown,
+      // acknowledged, corrected-with-real-attendance). Admin: read all, create, seen/resolve. Nothing here is authority
+      // for attendance; the attendance block above stays the only time truth.
+      match /attendanceExceptions/{exceptionId} {
+        // LEAN by design (rules expression budget, see the attendance block): one key-set check + the facts that carry
+        // authority (ids, planned timestamps, deadline arithmetic, status, revision); the per-field null/int checks are
+        // carried by the transition shapes (xCreate / xShown / …), each evaluated only on its own path.
+        function xk() {
+          return ['exceptionId','type','ansattId','shiftId','workDate','plannedStartAt','plannedEndAt','effectiveAt','employeeCorrectionDeadlineAt','overnight',
+                  'status','detectedAt','detectedByRole','detectedByUid','firstShownToEmployeeAt','acknowledgedByEmployeeAt','correctionSubmittedAt','correctionSource',
+                  'managerSeenAt','managerSeenByUid','managerResolvedAt','managerResolvedByUid','resolution','revision','createdAt','updatedAt','serverCreatedAt','serverUpdatedAt'];
+        }
+        function shiftOf(d) { return get(/databases/$(database)/documents/tenants/$(tenantId)/shifts/$(d.shiftId)).data; }
+        function attOf(d) { return getAfter(/databases/$(database)/documents/tenants/$(tenantId)/attendance/$(d.shiftId + '_' + d.ansattId)).data; }
+        function planned(d) { return d.type == 'MISSING_CLOCK_IN' ? d.plannedStartAt : d.plannedEndAt; }
+        function xShape(d) {
+          return d.keys().hasOnly(xk()) && d.size() == 28
+            && d.exceptionId == exceptionId
+            && d.type in ['MISSING_CLOCK_IN', 'MISSING_CLOCK_OUT']
+            && exceptionId == ((d.type == 'MISSING_CLOCK_IN' ? 'mci-' : 'mco-') + d.shiftId + '_' + d.ansattId)
+            && d.workDate is string
+            && d.plannedStartAt is int && d.plannedEndAt is int && d.plannedEndAt > d.plannedStartAt
+            && d.effectiveAt == planned(d) + 900000
+            && d.employeeCorrectionDeadlineAt == planned(d) + 21600000
+            && d.status in ['open', 'corrected', 'resolved_by_manager']
+            && d.revision is int && d.revision >= 1 && d.createdAt is int && d.updatedAt is int;
+        }
+        // bound to the real ASSIGNED shift of that employee at create
+        function xBound(d, sh) { return sh.status == 'assigned' && sh.ansattId == d.ansattId && sh.workDate == d.workDate && sh.plannedStartAt == d.plannedStartAt && sh.plannedEndAt == d.plannedEndAt; }
+        function xCreate(d, role) {
+          return d.status == 'open' && d.revision == 1 && nearNow(d.createdAt) && d.updatedAt == d.createdAt && d.detectedAt == d.createdAt
+            && d.detectedByRole == role && d.detectedByUid == request.auth.uid && d.overnight is bool
+            && d.firstShownToEmployeeAt == null && d.acknowledgedByEmployeeAt == null && d.correctionSubmittedAt == null && d.correctionSource == null
+            && d.managerSeenAt == null && d.managerSeenByUid == null && d.managerResolvedAt == null && d.managerResolvedByUid == null && d.resolution == null
+            && d.serverCreatedAt == request.time && d.serverUpdatedAt == request.time;
+        }
+        // every update: identity/planned/deadline/detection immutable, revision +1, server stamp, and ONLY the named keys change
+        function xStep(n, o, ks) {
+          return n.revision == o.revision + 1 && nearNow(n.updatedAt) && n.serverUpdatedAt == request.time
+            && n.diff(o).affectedKeys().hasOnly(ks);
+        }
+        function xShown(n, o) { return o.firstShownToEmployeeAt == null && n.firstShownToEmployeeAt == n.updatedAt && xStep(n, o, ['firstShownToEmployeeAt', 'revision', 'updatedAt', 'serverUpdatedAt']); }
+        function xAck(n, o) { return o.firstShownToEmployeeAt != null && o.acknowledgedByEmployeeAt == null && n.acknowledgedByEmployeeAt == n.updatedAt && xStep(n, o, ['acknowledgedByEmployeeAt', 'revision', 'updatedAt', 'serverUpdatedAt']); }
+        // corrected: inside the 6 h window AND the canonical attendance (after this request) proves the correction
+        function xCorrected(n, o) {
+          return o.status == 'open' && n.status == 'corrected' && n.correctionSubmittedAt == n.updatedAt && n.correctionSource == 'employee'
+            && n.updatedAt < o.employeeCorrectionDeadlineAt
+            // the canonical attendance AFTER this request proves the correction: for a missing clock-in the record is being created in
+            // the request right before (the adapter creates the attendance first, then marks the exception; exists); for a missing clock-out it is the existing record, now clocked_out
+            && (o.type == 'MISSING_CLOCK_IN'
+                  ? exists(/databases/$(database)/documents/tenants/$(tenantId)/attendance/$(o.shiftId + '_' + o.ansattId))
+                  : (attOf(o).ansattId == o.ansattId && attOf(o).status == 'clocked_out'))
+            && xStep(n, o, ['status', 'correctionSubmittedAt', 'correctionSource', 'revision', 'updatedAt', 'serverUpdatedAt']);
+        }
+        function xSeen(n, o) { return o.managerSeenAt == null && n.managerSeenAt == n.updatedAt && n.managerSeenByUid == request.auth.uid && xStep(n, o, ['managerSeenAt', 'managerSeenByUid', 'revision', 'updatedAt', 'serverUpdatedAt']); }
+        function xResolved(n, o) { return o.status == 'open' && n.status == 'resolved_by_manager' && n.managerResolvedAt == n.updatedAt && n.managerResolvedByUid == request.auth.uid && n.resolution is string && xStep(n, o, ['status', 'managerResolvedAt', 'managerResolvedByUid', 'resolution', 'revision', 'updatedAt', 'serverUpdatedAt']); }
+
+        // get is bound to the DOCUMENT ID (…_<ansattId>), so the idempotent create-if-absent transaction may read a missing
+        // own record; list is bound to the stored ansattId
+        allow get: if isSelfActor(tenantId) && exceptionId.matches('^(mci|mco)-.*_' + myAnsattId(tenantId) + '$');
+        allow list: if isSelfActor(tenantId) && resource.data.ansattId == myAnsattId(tenantId);
+        allow get, list: if isEnabledAdminMember(tenantId);
+        // create: cheap discriminators first (role, own), shape, then the shift binding (one get)
+        allow create: if isSelfActor(tenantId) && request.resource.data.ansattId == myAnsattId(tenantId) && request.resource.data.detectedByRole == 'employee'
+          && xShape(request.resource.data) && xCreate(request.resource.data, 'employee') && xBound(request.resource.data, shiftOf(request.resource.data));
+        allow create: if isEnabledAdminMember(tenantId) && request.resource.data.detectedByRole == 'admin'
+          && xShape(request.resource.data) && xCreate(request.resource.data, 'admin') && xBound(request.resource.data, shiftOf(request.resource.data));
+        // update: the changed-keys fence inside each shape makes identity, planned times, deadline and the other party's
+        // fields immutable (anything else in the diff fails hasOnly), so no separate "kept" sweep is needed
+        allow update: if isSelfActor(tenantId) && resource.data.ansattId == myAnsattId(tenantId) && xShape(request.resource.data)
+          && (xShown(request.resource.data, resource.data) || xAck(request.resource.data, resource.data) || xCorrected(request.resource.data, resource.data));
+        allow update: if isEnabledAdminMember(tenantId) && xShape(request.resource.data)
+          && (xSeen(request.resource.data, resource.data) || xResolved(request.resource.data, resource.data));
+        allow delete: if false;
+
+        // append-only audit events, bound to the parent post-state fact they name
+        match /events/{eventId} {
+          function xe() { return request.resource.data; }
+          function parent() { return getAfter(/databases/$(database)/documents/tenants/$(tenantId)/attendanceExceptions/$(exceptionId)).data; }
+          function xeShape(q) {
+            return xe().keys().hasOnly(['eventId', 'exceptionId', 'type', 'revision', 'actorUid', 'actorRole', 'actorAnsattId', 'at'])
+              && xe().keys().hasAll(['eventId', 'exceptionId', 'type', 'revision', 'actorUid', 'actorRole', 'actorAnsattId', 'at'])
+              && xe().eventId == eventId && xe().exceptionId == exceptionId
+              && eventId.matches('^' + exceptionId + '-rev-0*' + string(xe().revision) + '$')
+              && xe().revision is int && xe().revision == q.revision
+              && xe().actorUid == request.auth.uid && xe().actorRole == member(tenantId).accessRole
+              && nearNow(xe().at) && xe().at == q.updatedAt
+              && ( (xe().type == 'detected' && q.revision == 1)
+                || (xe().type == 'shown' && q.firstShownToEmployeeAt == q.updatedAt)
+                || (xe().type == 'acknowledged' && q.acknowledgedByEmployeeAt == q.updatedAt)
+                || (xe().type == 'corrected' && q.status == 'corrected' && q.correctionSubmittedAt == q.updatedAt)
+                || (xe().type == 'manager_seen' && q.managerSeenAt == q.updatedAt)
+                || (xe().type == 'manager_resolved' && q.status == 'resolved_by_manager' && q.managerResolvedAt == q.updatedAt));
+          }
+          allow get, list: if isEnabledAdminMember(tenantId) || (isSelfActor(tenantId) && get(/databases/$(database)/documents/tenants/$(tenantId)/attendanceExceptions/$(exceptionId)).data.ansattId == myAnsattId(tenantId));
+          allow create: if isEnabledMember(tenantId) && xeShape(parent());
+          allow update, delete: if false;
+        }
       }
     }
   }

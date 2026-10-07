@@ -84,18 +84,18 @@ await t('M03', 'normalizeAnsatt: an e360 block is authoritative for Employee 360
   assert.equal(r.terms[0].role, 'kasse'); assert.equal(r.terms[0].employmentType, 'deltid'); assert.equal(r.terms[0].percentage, 50); assert.equal(r.terms[0].workplace, null);
   assert.equal(r.contact.phone, '99999999'); assert.equal(r.contact.email, null); assert.equal(r.contact.birthDate, '1990-05-05'); assert.equal(r.documents.length, 1); assert.equal(r.legacy.hasE360, true);
 });
-await t('M04', 'start: employee store rebuilt from the host mirror (no second listener for ansatte); TWO bounded listeners (shifts + attendance) with the workDate range; people() = active only; dispose -> 0', () => {
+await t('M04', 'start: employee store rebuilt from the host mirror (no second listener for ansatte); THREE bounded listeners (shifts + attendance + attendance exceptions) with the SAME workDate range; people() = active only; dispose -> 0', () => {
   const F = makeFakeFs(); F.seed(ansattePath(T, LEG), legacyDoc()); F.seed(ansattePath(T, 'InAkT1vE0000000000ab'), legacyDoc({ navn: 'Inaktiv', aktiv: false })); F.seed(ansattePath(T, 'NoAktivField00000000'), { navn: 'Uten Aktivfelt', stilling: '' });
   const M = build(F); let changes = 0; M.onChange(() => { changes += 1; });
   M.start(); M.start();
-  assert.equal(M.listenerCount(), 2); assert.equal(F.listeners.length, 2);
-  assert.deepEqual(F.listeners.map((l) => l.spec.col).sort(), [s4Path(T, 'attendance'), s4Path(T, 'shifts')]);
+  assert.equal(M.listenerCount(), 3); assert.equal(F.listeners.length, 3);
+  assert.deepEqual(F.listeners.map((l) => l.spec.col).sort(), [s4Path(T, 'attendance'), s4Path(T, 'attendanceExceptions'), s4Path(T, 'shifts')]);
   for (const l of F.listeners) assert.deepEqual(l.spec.where, [['workDate', '>=', RANGE.from], ['workDate', '<=', RANGE.to]]);
   assert.ok(!F.listeners.some((l) => /ansatte/.test(l.spec.col)), 'no ansatte listener');
   const st = M.employees.store()[T]; assert.deepEqual(Object.keys(st).sort(), ['InAkT1vE0000000000ab', 'Kx9mQ2vT7pLa4RcW1nZb', 'NoAktivField00000000']);
   assert.deepEqual(M.employees.people().map((p) => p.name).sort(), ['Mr Testperson', 'Uten Aktivfelt']);
   assert.ok(changes >= 1);
-  M.dispose(); assert.equal(M.listenerCount(), 0); assert.equal(F.state.unsubscribed, 2); assert.deepEqual(M.employees.store()[T], {});
+  M.dispose(); assert.equal(M.listenerCount(), 0); assert.equal(F.state.unsubscribed, 3); assert.deepEqual(M.employees.store()[T], {});
 });
 await t('M05', 'updateContact: REFUSED with zero writes before first registration; after it ONE transaction on the canonical ansatte document — e360 block (rev 2) + legacy epost/adresse synced; untouched legacy fields (bankkonto, personnummer, notater, navn) not rewritten; store reflects the persisted state', async () => {
   const F = makeFakeFs(); F.seed(ansattePath(T, LEG), legacyDoc()); const M = build(F); M.start();
@@ -177,12 +177,12 @@ await t('M09', 'attendance: bounded management-wide read mirrors in-range record
   assert.equal(w.length, 2); assert.ok(w.every((p) => p.startsWith(s4Path(T, 'attendance'))), w.join(','));
   F.emit(); assert.ok(M.attendance.has(res.attendance.attendanceId));
 });
-await t('M10', 'setRange / ensureRange: both bounded listeners are re-windowed (never a third); ensureRange only widens; an inside window is a no-op', () => {
+await t('M10', 'setRange / ensureRange: all three bounded listeners are re-windowed (never a fourth); ensureRange only widens; an inside window is a no-op', () => {
   const F = makeFakeFs(); const M = build(F); M.start();
-  assert.equal(M.ensureRange({ from: '2026-09-07', to: '2026-09-13' }), false); assert.equal(F.listeners.length, 2);
+  assert.equal(M.ensureRange({ from: '2026-09-07', to: '2026-09-13' }), false); assert.equal(F.listeners.length, 3);
   assert.equal(M.ensureRange({ from: '2026-08-01', to: '2026-08-31' }), true);
   assert.deepEqual(M.currentRange(), { from: '2026-08-01', to: '2026-10-31' });
-  assert.equal(F.listeners.filter((l) => l.active).length, 2); assert.equal(F.state.unsubscribed, 2); assert.equal(M.listenerCount(), 2);
+  assert.equal(F.listeners.filter((l) => l.active).length, 3); assert.equal(F.state.unsubscribed, 3); assert.equal(M.listenerCount(), 3);
   for (const l of F.listeners.filter((l) => l.active)) assert.deepEqual(l.spec.where, [['workDate', '>=', '2026-08-01'], ['workDate', '<=', '2026-10-31']]);
   assert.equal(M.setRange({ from: '2026-08-01', to: '2026-10-31' }), false);
   assert.throws(() => M.setRange({ from: 'x', to: 'y' }), (e) => e.code === ADAPTER_ERROR.CORE_REFUSED);

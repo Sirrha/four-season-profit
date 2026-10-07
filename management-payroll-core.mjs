@@ -137,6 +137,16 @@ export function payrollCalendarStateFor(periodId, policy, todayWorkDate) {
 }
 
 // ---- CANONICAL READS -------------------------------------------------------------------------
+// MULTISESSION TARGETING (owner safety law 2026-10-06): the interactive day-by-day UI needs the EXACT record identity of
+// every actual session (a workDate is not an identity when several records share the day). This helper iterates the SAME
+// records in the SAME order as the package builder below, so index i here is index i of payload.days — UI-only, never
+// written into the package row, the accountant payload or a frozen snapshot (those shapes are unchanged).
+export function sessionIdentitiesFor(attendanceStore, ansattId, periodId) {
+  return attendanceRecordsFor(attendanceStore, ansattId, periodId).map((a) => ({
+    attendanceId: a.attendanceId, shiftId: a.shiftId || null, status: a.status || null, workDate: a.workDate,
+    plannedEndAt: a.plannedSnapshot && Number.isFinite(a.plannedSnapshot.endAt) ? a.plannedSnapshot.endAt : null,
+  }));
+}
 function attendanceRecordsFor(attendanceStore, ansattId, periodId) {
   const out = [];
   if (!attendanceStore) return out;
@@ -213,6 +223,9 @@ export function buildPayrollPackage({ employeeStore, scheduleStore, attendanceSt
         // provenance the accountant legitimately cares about: which days were management-entered.
         declarationSource: a.declarationSource || null,
         fortAvLedelse: a.declarationSource === 'manager' && a.observedClockInAt == null && a.observedClockOutAt == null,
+        // ATTENDANCE-EXCEPTION law: a record CLOSED BY MANAGEMENT after a forgotten clock-out (employee clock-in kept, no
+        // observed clock-out, manager-declared end) — distinguishable from employee time and from approval
+        closedByManager: a.status === 'attested' && a.declarationSource === 'manager' && a.observedClockInAt != null && a.observedClockOutAt == null,
         recordApproved, exceptions: dayExceptions,
       });
     }
@@ -251,7 +264,7 @@ export function buildPayrollPackage({ employeeStore, scheduleStore, attendanceSt
           workDate: d.workDate, startAt: d.startAt, startSource: d.startSource, endAt: d.endAt,
           endSource: d.endSource, breakRow: d.breakRow, anyDeclared: d.anyDeclared,
           minutes: d.minutes, hours: d.hours, label: d.label, recordApproved: d.recordApproved,
-          declarationSource: d.declarationSource, fortAvLedelse: d.fortAvLedelse,
+          declarationSource: d.declarationSource, fortAvLedelse: d.fortAvLedelse, closedByManager: d.closedByManager,
           exceptions: d.exceptions.slice(),
         })),
         hardFindings: exceptions.filter((x) => x.severity === 'hard').map((x) => ({ code: x.code, label: x.label, detail: x.detail })),

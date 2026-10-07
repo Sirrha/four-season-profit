@@ -13,8 +13,8 @@
     {
       "name": "employee-shell-core.mjs",
       "source": "employee-shell-core.mjs",
-      "sha256": "71d1804ff5926c8327a0ae0c1e4b0d750e7418ec0d78524da980537535f2b6b4",
-      "bytes": 67444
+      "sha256": "9f9576ee3981bd9de402ada691ca263d3dba877daa4ff1265c8836fd634ad162",
+      "bytes": 72712
     },
     {
       "name": "management-contract-core.mjs",

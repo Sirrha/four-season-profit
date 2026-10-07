@@ -36,7 +36,7 @@ t('QA-A1', 'no employee-visible preview/build wording in the three time-action d
   for (const fn of ['function openClockDialog(', 'function openBreakDialog(', 'function openDeclareBreakDialog(']) assert.ok(dialogs.includes(fn), fn);
 });
 t('QA-A2', 'dialogs use one product frame: card + kicker + h2 + labelled rows + primary confirm / secondary Avbryt with consistent heights; no inline styles', () => {
-  assert.equal((dialogs.match(/dialogFrame\('Dagens vakt'/g) || []).length, 3);
+  assert.equal((dialogs.match(/dialogFrame\('Dagens vakt'/g) || []).length, 2); assert.ok(dialogs.includes("dialogFrame(v.lockedDate ? (kind === 'in' ? 'Glemt innstempling' : 'Glemt utstempling') : 'Dagens vakt'"), 'the clock dialog keeps the frame; its title names the locked-date correction variant');
   assert.equal((dialogs.match(/^\s+dialogActions\(card, /gm) || []).length, 3, 'three dialogs call the shared action row');
   assert.ok(dialogs.includes("el('button', { cls: 'btn primary', text: confirmLabel") && dialogs.includes("el('button', { cls: 'btn secondary', text: 'Avbryt'"));
   assert.ok(!/style:/.test(strip(dialogs)), 'no inline styles in the dialogs');

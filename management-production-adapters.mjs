@@ -23,7 +23,7 @@
 // atomically (one transaction per operation, legacy projections updated in the same write).
 
 import {
-  createManagementScheduleAdapters, makeAttendanceCommitter, makeEmployeeSelfWriter,
+  createManagementScheduleAdapters, makeAttendanceCommitter, makeEmployeeSelfWriter, makeExceptionWriter,
   validateFsCapability, adapterError, mapFsError, ADAPTER_ERROR, s4Path, stripServerFields,
 } from './employee-production-adapters.mjs';
 import { applyEmployeeOperation, normalizeAddress, formatAddress, currentTermsOf, lacksEmploymentBaseline } from './management-employees-core.mjs';
@@ -359,7 +359,20 @@ export function createManagementAdapters(options) {
       (docs) => { if (!live()) return; attendance.clear(); for (const d of (Array.isArray(docs) ? docs : [])) if (d.exists !== false) attendance.set(d.id, stripServerFields(d.data)); notify(); },
       (err) => { if (!live()) return; onError({ scope: 'attendance', code: mapFsError(err) }); });
     attSubs.push(typeof un === 'function' ? un : () => {});
+    // the SAME bounded window for the shared attendance exceptions (manager reads every employee's record)
+    const unx = fs.listen({ col: s4Path(T, 'attendanceExceptions'), where: [['workDate', '>=', range.from], ['workDate', '<=', range.to]] },
+      (docs) => { if (!live()) return; exceptions.clear(); for (const d of (Array.isArray(docs) ? docs : [])) if (d.exists !== false) exceptions.set(d.id, stripServerFields(d.data)); notify(); },
+      (err) => { if (!live()) return; onError({ scope: 'attendanceExceptions', code: mapFsError(err) }); });
+    attSubs.push(typeof unx === 'function' ? unx : () => {});
   }
+  const exceptions = new Map();
+  const xw = makeExceptionWriter({ fs, T, st, assertLive, rejectMapped, actor: adminActor });
+  const exceptionSeam = {
+    store: () => exceptions, get: (id) => exceptions.get(id), values: () => exceptions.values(),
+    ensure: (ex, now) => xw.ensure(ex, now),
+    markSeen: (id, now) => xw.transition(id, 'manager_seen', { now }),
+    resolve: (id, resolution, now) => xw.transition(id, 'manager_resolved', { now, resolution }),
+  };
   const commit = makeAttendanceCommitter({ fs, T, st, evRef, assertLive, rejectMapped });
   const attendanceSeam = {
     get: (id) => attendance.get(id), has: (id) => attendance.has(id), values: () => attendance.values(),
@@ -401,6 +414,7 @@ export function createManagementAdapters(options) {
     attendance: attendanceSeam,
     employees: { store: () => employees, refresh, apply: applyEmployee, applyContract, people, privateFields: Object.freeze({ masked: maskedPrivateEmployeeFields, read: readPrivateEmployeeFields, update: updatePrivateEmployeeFields }) },
     employeeSelf: { write: writeEmployeeSelf },
+    exceptions: exceptionSeam,
     contractProfile,
     start, dispose, listenerCount, onChange, setRange, ensureRange,
     currentRange: () => ({ from: range.from, to: range.to }),

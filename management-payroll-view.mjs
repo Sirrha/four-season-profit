@@ -7,7 +7,7 @@
 
 import {
   PACKAGE_STATUS, buildPayrollPackage, periodTitle, periodLabel, addMonths,
-  applyPayrollOperation, versionsOf, latestVersionOf, activeDraftOf,
+  applyPayrollOperation, versionsOf, latestVersionOf, activeDraftOf, sessionIdentitiesFor,
 } from './management-payroll-core.mjs';
 import { fmtTenantHM } from './employee-shell-core.mjs';
 
@@ -225,6 +225,26 @@ export function packageRollupOf(rows) {
 //              choice and never a fallback to m2 (U-S4).
 //   'm2'       no attendance and no assigned shift -> the accepted no-shift manual-key path.
 // Cancelled/open shifts are not entry targets: only a shift genuinely assigned to this employee is.
+// MULTISESSION TARGETING: the day lines of the UI are payload.days (frozen contract) joined index-by-index with the UI-only
+// session identities (same records, same order — sessionIdentitiesFor). A line whose identity cannot be joined safely
+// (count or workDate disagree) carries NO identity, and every mutation on it then fails closed. Pure; exported for tests.
+export function daysWithIdentity(payloadDays, identities) {
+  const days = Array.isArray(payloadDays) ? payloadDays : [];
+  const ids = Array.isArray(identities) ? identities : [];
+  const joinable = ids.length === days.length && days.every((d, i) => d && ids[i] && ids[i].workDate === d.workDate);
+  return days.map((d, i) => Object.assign({}, d, joinable
+    ? { attendanceId: ids[i].attendanceId || null, shiftId: ids[i].shiftId || null, status: ids[i].status || null, plannedEndAt: Number.isFinite(ids[i].plannedEndAt) ? ids[i].plannedEndAt : null }
+    : { attendanceId: null, shiftId: null, status: null, plannedEndAt: null }));
+}
+// The manager-close action is decided PER SESSION: an open session (aapen_oekt), with its OWN exact identity and its OWN
+// canonical planned end (plannedSnapshot.endAt), past that end by the one overdue threshold. Never the day row's maximum
+// planned end, never a sibling shift's end. No identity or no own planned end -> not eligible (fail closed). Pure; exported.
+export function managerCloseEligible(day, nowMs, overdueAfterMs) {
+  return !!(day && Array.isArray(day.exceptions) && day.exceptions.includes('aapen_oekt')
+    && typeof day.attendanceId === 'string' && day.attendanceId
+    && Number.isFinite(day.plannedEndAt) && Number.isFinite(overdueAfterMs) && Number.isFinite(nowMs)
+    && nowMs > day.plannedEndAt + overdueAfterMs);
+}
 export function manualTargetFor({ records, shifts, workDate }) {
   const recs = (Array.isArray(records) ? records : []).filter((r) => r && r.workDate === workDate);
   if (recs.length > 1) return { mode: 'choose_record', records: recs, candidates: [] };
@@ -248,6 +268,8 @@ export function manualErrorText(code) {
   if (c === 'ATTESTERT_AV_LEDELSE') return 'Dagen er allerede ført av ledelsen. Bruk Korriger på den dagen.';
   if (c === 'ATTENDANCE_EXISTS') return 'Det finnes allerede en registrering denne dagen. Bruk Korriger i stedet for å legge til på nytt.';
   if (c === 'INITIAL_REGISTRATION_REQUIRED') return 'Registrer arbeidsforholdet først.';
+  if (c === 'NOT_CLOCKED_IN') return 'Dagen er ikke lenger en åpen økt.';
+  if (c === 'SELF_CORRECTION_EXPIRED') return 'Fristen for den ansattes egen retting er ute.';
   if (c === 'EMPLOYMENT_REQUIRED') return 'Mangler arbeidsforhold for denne ansatte. Dagen kan ikke føres.';
   if (c === 'BEFORE_EMPLOYMENT_START') return 'Datoen er før ansettelsen startet.';
   if (c === 'AFTER_EMPLOYMENT_END') return 'Datoen er etter at ansettelsen ble avsluttet.';
@@ -267,12 +289,14 @@ export function manualErrorText(code) {
   if (c === 'NO_SHIFT' || c === 'NOT_OWN_SHIFT' || c === 'SHIFT_WORKDATE_MISMATCH') return 'Vakten passer ikke til denne ansatte eller datoen.';
   if (c === 'SHIFT_CHOICE_REQUIRED') return 'Det finnes flere vakter denne dagen. Velg hvilken vakt dagen gjelder.';
   if (c === 'RECORD_CHOICE_REQUIRED') return 'Det finnes flere registreringer denne dagen. Korriger den aktuelle dagen fra dag-for-dag-listen.';
+  if (c === 'ATTENDANCE_MISMATCH') return 'Registreringen passer ikke til denne ansatte eller datoen. Last siden på nytt og prøv igjen.';
+  if (c === 'NO_EXCEPTION' || c.startsWith('exception:')) return 'Fant ikke avviksvarselet som hører til denne vakten. Åpne Oversikt først, og prøv igjen.';
   if (c.startsWith('FIELD_NOT_CORRECTABLE')) return 'Feltet kan ikke korrigeres.';
   if (c.startsWith('INCOMPLETE_ATTENDANCE')) return 'Dagen mangler opplysninger og kan ikke godkjennes.';
   return 'Kunne ikke lagre (' + c + ').';
 }
 
-export function renderPayrollView(root, { employeeStore, scheduleStore, attendanceStore, payrollStore, tenantId, actor, operatorName, nowMs, timezone, todayWorkDate, initialPeriodId, initialOpenEmployee, onStateChange, onBack, onOpenEmployee, manualContext, onManualTime, plannedShiftsFor, planningFor, packageOpsEnabled, packageOpsNote }) {
+export function renderPayrollView(root, { overdueAfterMs, employeeStore, scheduleStore, attendanceStore, payrollStore, tenantId, actor, operatorName, nowMs, timezone, todayWorkDate, initialPeriodId, initialOpenEmployee, onStateChange, onBack, onOpenEmployee, manualContext, onManualTime, plannedShiftsFor, planningFor, packageOpsEnabled, packageOpsNote }) {
   // Ledelse integration: durable package operations (approve / mark sent / corrected version) are only offered when the
   // host confirms a persistent package store; otherwise the review renders from live data and the actions are blocked honestly.
   const pkgOps = packageOpsEnabled !== false;
@@ -441,13 +465,15 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
     const st = {
       mode, ansattId, err: '', shiftId: '', attendanceId: null,
       workDate: day ? day.workDate : (todayWorkDate || ''),
-      startHM: '', endHM: '', breakMin: '0', reasonCode: '', reasonNote: '', targetLabel: null,
+      startHM: '', endHM: '', breakMin: '0', reasonCode: '', reasonNote: '', targetLabel: null, targetStartHM: '',
     };
     if (day) {
       if (day.startAt != null) st.startHM = fmtHM(day.startAt);
       if (day.endAt != null) st.endHM = fmtHM(day.endAt);
       if (day.breakRow && day.breakRow.kind === 'declared') st.breakMin = String(day.breakRow.minutes);
       st.targetLabel = fmtDate(day.workDate);
+      st.attendanceId = typeof day.attendanceId === 'string' && day.attendanceId ? day.attendanceId : null;   // EXACT record identity of the clicked line (MULTISESSION law)
+      st.targetStartHM = day.startAt != null ? fmtHM(day.startAt) : '';
     }
     return st;
   }
@@ -458,13 +484,15 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
   // from the canonical projection.
   function drawManualPanel(row, host) {
     const st = manual;
-    const wrap = el('div', { cls: 'lg-detail mt-panel' });
-    const isCorrect = st.mode === 'correct';
+    const wrap = el('div', { cls: 'lg-detail mt-panel', attrs: { 'data-attendance': st.attendanceId || '' } });   // the EXACT targeted record (MULTISESSION law)
+    const isClose = st.mode === 'close';           // MANAGER CLOSE of an open attendance (ATTENDANCE-EXCEPTION law)
+    const isCorrect = st.mode === 'correct' || isClose;   // same fixed-identity panel shape: date locked, record targeted
     // P1 §E panel honesty: the heading follows the resolver target — when an add lands on a day
     // that already has a record, it says Korriger arbeidstid (updated in renderResolution).
-    const heading = el('div', { cls: 'kicker neutral', text: isCorrect ? 'Korriger arbeidstid' : 'Legg til arbeidstid' });
+    const heading = el('div', { cls: 'kicker neutral', text: isClose ? 'Avslutt vakt (ledelse)' : isCorrect ? 'Korriger arbeidstid' : 'Legg til arbeidstid' });
     wrap.appendChild(heading);
-    if (isCorrect && st.targetLabel) wrap.appendChild(el('div', { cls: 'cue-line', text: 'Gjelder ' + st.targetLabel }));
+    if (isCorrect && st.targetLabel) wrap.appendChild(el('div', { cls: 'cue-line mt-target', text: 'Gjelder ' + st.targetLabel + (st.attendanceId && st.targetStartHM ? ' · registreringen som starter kl. ' + st.targetStartHM : '') }));
+    if (isClose) wrap.appendChild(el('div', { cls: 'cue-line mt-close-note', text: 'Den ansatte stemplet inn' + (st.startHM ? ' kl. ' + st.startHM : '') + ' og har ikke stemplet ut. Oppgi når arbeidsdagen faktisk sluttet og pausen; datoen og innstemplingen er låst. Registreres som avsluttet av ledelsen (ikke godkjent).' }));
 
     // STAGE R (R-A wrong-date wiring): the resolver is consulted ONLY for a COMPLETE canonical
     // workDate. A native date control emits change events with an EMPTY value while a segment is
@@ -508,6 +536,7 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
     field('Dato (dd.mm.åååå)', dateRow);
     if (!isCorrect) { calBox = el('div', { cls: 'mt-cal', attrs: { hidden: '' } }); wrap.appendChild(calBox); }
     const startI = field('Start', input('time', st.startHM));
+    if (isClose) startI.disabled = true;   // the observed clock-in is immutable; the manager declares only the end + break
     const endI = field('Slutt', input('time', st.endHM));
     const breakI = field('Pause (minutter)', input('number', st.breakMin, { min: '0', step: '1' }));
 
@@ -685,6 +714,7 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
   }
   function sourceText(day) {
     if (day.fortAvLedelse) return 'Ført av ledelse';
+    if (day.closedByManager) return 'Slutt oppgitt av ledelse';
     if (day.declarationSource === 'manager') return 'Korrigert av ledelse';
     return day.label || 'Ingen tidslinje';
   }
@@ -718,7 +748,7 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
     if (u.kind === 'planned_only') stt.appendChild(chip('warn', plannedLabel));
     for (const day of u.actual) {
       for (const code of day.exceptions) stt.appendChild(chip('hard', code === 'aapen_oekt' ? 'Åpen økt' : 'Dag uten svar'));
-      if (!day.exceptions.length) stt.appendChild(chip(day.recordApproved ? 'ok' : 'neutral', day.recordApproved ? 'Godkjent' : 'Registrert'));
+      if (!day.exceptions.length) stt.appendChild(chip(day.recordApproved ? 'ok' : day.closedByManager ? 'warn' : 'neutral', day.recordApproved ? 'Godkjent' : day.closedByManager ? 'Avsluttet av ledelse' : 'Registrert'));
     }
     cell('Status', stt);
     const ha = el('div');
@@ -735,7 +765,22 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
           }));
         }
       }
-      for (const day of u.actual) ha.appendChild(btn('Korriger', 'btn tertiary mt-fix', () => { manual = newManualState('correct', row.ansattId, day); draw(); }));
+      // MULTISESSION law: one action group PER actual session, in the same order as the Faktisk lines, each carrying the
+      // EXACT attendanceId of its line; with several sessions the labels name the session's start so the owner sees which
+      // record an action belongs to. A line without a joinable identity gets no mutating action at all (fail closed).
+      const many = u.actual.length > 1;
+      for (const day of u.actual) {
+        const who = many && day.startAt != null ? ' ' + fmtHM(day.startAt) + '–' : '';
+        const grp = el('div', { cls: 'mt-session-actions', attrs: { 'data-attendance': day.attendanceId || '' } });
+        if (day.attendanceId) grp.appendChild(btn('Korriger' + who, 'btn tertiary mt-fix', () => { manual = newManualState('correct', row.ansattId, day); draw(); }));
+        else grp.appendChild(el('span', { cls: 'lg-nr', text: 'Ingen handling (uklar registrering)' }));
+        // an OPEN session past ITS OWN canonical planned end (plannedSnapshot.endAt) by the one overdue threshold: the
+        // manager closes it (the ONLY path that completes it without an employee clock-out). Never the row's max planned end.
+        if (managerCloseEligible(day, nowMs, overdueAfterMs)) {
+          grp.appendChild(btn('Avslutt vakt (ledelse)' + who, 'btn tertiary mt-fix mt-close', () => { manual = newManualState('close', row.ansattId, day); manual.endHM = ''; manual.breakMin = '0'; draw(); }));
+        }
+        ha.appendChild(grp);
+      }
     }
     cell('Handling', ha);
     return r;
@@ -759,7 +804,8 @@ export function renderPayrollView(root, { employeeStore, scheduleStore, attendan
     // P1 §C DAGER I PERIODEN — the presentation-only union, assembled read-only every render.
     const d = el('div', { cls: 'lg-detail' });
     d.appendChild(el('div', { cls: 'kicker neutral', text: 'Dager i perioden' }));
-    const union = dagerIPerioden({ plannedShifts: plannedFor(row.ansattId), days: row.payload.days, periodId });
+    // actual lines = payload.days (frozen contract) + UI-only exact session identity (same records, same order)
+    const union = dagerIPerioden({ plannedShifts: plannedFor(row.ansattId), days: daysWithIdentity(row.payload.days, sessionIdentitiesFor(attendanceStore, row.ansattId, periodId)), periodId });
     if (!union.length) {
       d.appendChild(el('div', { style: 'color:var(--faint);font-size:14px', text: 'Ingen planlagte vakter eller registrert tid i perioden.' }));
     } else {

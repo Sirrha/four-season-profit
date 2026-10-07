@@ -21,8 +21,9 @@ import { applyScheduleOperation } from './management-schedule-core.mjs';
 import { validateAssignmentChange } from './schedule-core.mjs';
 import { attendanceIdFor, eventIdFor } from './employee-shell-core.mjs';
 import { projectEmployeeSelf, employeeSelfToShellEmployee, validateEmployeeSelfDoc } from './employee-self-projection.mjs';
+import { newExceptionRecord, applyExceptionTransition, exceptionEventFor } from './attendance-exceptions-core.mjs';
 
-export const S4_COLLECTIONS = Object.freeze(['shifts', 'attendance', 'employeeSelf']);
+export const S4_COLLECTIONS = Object.freeze(['shifts', 'attendance', 'employeeSelf', 'attendanceExceptions']);
 export const FS_CAPABILITY = Object.freeze(['doc', 'listen', 'runTransaction', 'batch', 'serverTimestamp']);
 export const ADAPTER_ERROR = Object.freeze({
   PERMISSION_DENIED: 'PERMISSION_DENIED', UNAVAILABLE: 'UNAVAILABLE', STALE_REVISION: 'STALE_REVISION',
@@ -127,6 +128,31 @@ function makeAdminWriter(ctx) {
 
 // ---- shared attendance committer (employee factory + Ledelse management adapters) -------------------------------
 // Body is the accepted employee-factory commit(res, opts), unchanged; free variables bound through `ctx`.
+// Optional, same transaction as the attendance write (ATTENDANCE-EXCEPTION law): opts.exception =
+// { exceptionId, kind: 'corrected' | 'manager_resolved', actor, resolution? }. The exception record is read inside the
+// transaction, the pure transition is applied, and record + audit event are written atomically with the attendance.
+// A missing exception record is not an error (the employee may have acted before any surface detected it).
+// ex.required === true (manager close, MULTISESSION law 2026-10-06): the exception MUST exist, MUST match ex.expect
+// ({type, shiftId, ansattId}) and MUST be open — any miss throws, so the enclosing transaction (attendance + exception) is
+// abandoned as a whole and the attendance is NOT closed. Non-required (employee correction) keeps the lenient behaviour.
+async function applyExceptionInTx(tx, ctx, ex, now) {
+  if (!ex || !ex.exceptionId) return null;
+  const { fs, T, st } = ctx;
+  const xref = fs.doc(s4Path(T, 'attendanceExceptions', ex.exceptionId));
+  const xs = await tx.get(xref);
+  const required = ex.required === true;
+  if (!xs || !xs.exists) { if (required) throw adapterError(ADAPTER_ERROR.CORE_REFUSED, 'exception:NO_EXCEPTION'); return null; }
+  const stored = stripServerFields(xs.data);
+  if (required) {
+    const e = ex.expect || {};
+    if ((e.type && stored.type !== e.type) || (e.shiftId && stored.shiftId !== e.shiftId) || (e.ansattId && stored.ansattId !== e.ansattId)) throw adapterError(ADAPTER_ERROR.CORE_REFUSED, 'exception:EXCEPTION_MISMATCH');
+  }
+  const r = applyExceptionTransition({ record: stored, kind: ex.kind, actor: ex.actor, now, resolution: ex.resolution });
+  if (!r.ok) { if (r.code === 'NOT_OPEN' && !required) return null; throw adapterError(ADAPTER_ERROR.CORE_REFUSED, 'exception:' + r.code); }
+  tx.update(xref, Object.assign({}, r.record, { serverUpdatedAt: st() }));
+  tx.set(fs.doc(s4Path(T, 'attendanceExceptions', ex.exceptionId, 'events', r.event.eventId)), normalizeEvent(r.event));
+  return r.record;
+}
 export function makeAttendanceCommitter(ctx) {
   const { fs, T, st, evRef, assertLive, rejectMapped } = ctx;
   return function commit(res, opts) {
@@ -137,10 +163,19 @@ export function makeAttendanceCommitter(ctx) {
     let ref;
     try { ref = fs.doc(s4Path(T, 'attendance', rec.attendanceId)); } catch (e) { return Promise.reject(e); }
     if (op.create === true || rec.revision === 1) {
+      // CREATE is a batch (no read of the not-yet-existing document: the attendance get rule needs a stored record). When an
+      // exception correction accompanies the creation (forgotten clock-in backfill) it is applied in a SECOND transaction
+      // right after — measured 2026-10-06: a create inside a read transaction is refused by the rules, and a four-write
+      // transaction exceeds the rules expression budget. Order is safe: the attendance is the truth; if the second step
+      // failed, the derivation shows no exception any more and the record would simply stay 'open' for the audit.
       const b = fs.batch();
       b.set(ref, Object.assign({}, rec, { serverCreatedAt: st(), serverUpdatedAt: st() }));
       b.set(evRef('attendance', rec.attendanceId, res.event), normalizeEvent(res.event));
-      return b.commit().then(() => ({ ok: true, retried: false, attendance: rec, event: res.event })).catch(rejectMapped);
+      return b.commit().then(async () => {
+        if (!op.exception) return { ok: true, retried: false, attendance: rec, event: res.event };
+        const exRec = await fs.runTransaction((tx2) => applyExceptionInTx(tx2, ctx, op.exception, rec.updatedAt));
+        return { ok: true, retried: false, attendance: rec, event: res.event, exception: exRec };
+      }).catch(rejectMapped);
     }
     return fs.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
@@ -156,12 +191,51 @@ export function makeAttendanceCommitter(ctx) {
         if (r2.attendance.revision !== current.revision + 1) throw adapterError(ADAPTER_ERROR.STALE_REVISION, 'rerun');
         use = r2;
       }
+      const exRec = await applyExceptionInTx(tx, ctx, op.exception, use.attendance.updatedAt);
       tx.update(ref, Object.assign({}, use.attendance, { serverUpdatedAt: st() }));
       tx.set(evRef('attendance', use.attendance.attendanceId, use.event), normalizeEvent(use.event));
+      if (exRec) return { ok: true, retried, attendance: use.attendance, event: use.event, exception: exRec };
       return { ok: true, retried, attendance: use.attendance, event: use.event };
     }).catch(rejectMapped);
   };
 
+}
+// ---- shared ATTENDANCE-EXCEPTION writer (durable shared notification record; idempotent create; write-once facts) ---
+// ensure(ex): creates the record for a DERIVED exception exactly once (transaction: exists -> no write). transition(id, kind):
+// applies one pure write-once transition (shown / acknowledged / manager_seen / manager_resolved) with its audit event.
+export function makeExceptionWriter(ctx) {
+  const { fs, T, st, assertLive, rejectMapped, actor } = ctx;
+  const refOf = (id) => fs.doc(s4Path(T, 'attendanceExceptions', id));
+  const evOf = (id, ev) => fs.doc(s4Path(T, 'attendanceExceptions', id, 'events', ev.eventId));
+  function ensure(ex, now) {
+    try { assertLive(); } catch (e) { return Promise.reject(e); }
+    if (!ex || !ex.exceptionId) return Promise.reject(adapterError(ADAPTER_ERROR.CORE_REFUSED, 'exception'));
+    const rec = newExceptionRecord(ex, { actor: actor(), now: Number.isFinite(now) ? now : Date.now() });
+    if (!rec) return Promise.reject(adapterError(ADAPTER_ERROR.CORE_REFUSED, 'exception'));
+    let ref; try { ref = refOf(rec.exceptionId); } catch (e) { return Promise.reject(e); }
+    return fs.runTransaction(async (tx) => {
+      const s = await tx.get(ref);
+      if (s && s.exists) return { ok: true, created: false, record: stripServerFields(s.data) };
+      tx.set(ref, Object.assign({}, rec, { serverCreatedAt: st(), serverUpdatedAt: st() }));
+      tx.set(evOf(rec.exceptionId, exceptionEventFor(rec, 'detected', actor(), rec.createdAt)), normalizeEvent(exceptionEventFor(rec, 'detected', actor(), rec.createdAt)));
+      return { ok: true, created: true, record: rec };
+    }).catch(rejectMapped);
+  }
+  function transition(exceptionId, kind, opt) {
+    try { assertLive(); } catch (e) { return Promise.reject(e); }
+    let ref; try { ref = refOf(exceptionId); } catch (e) { return Promise.reject(e); }
+    const now = opt && Number.isFinite(opt.now) ? opt.now : Date.now();
+    return fs.runTransaction(async (tx) => {
+      const s = await tx.get(ref);
+      if (!s || !s.exists) throw adapterError(ADAPTER_ERROR.CORE_REFUSED, 'exception:NO_EXCEPTION');
+      const r = applyExceptionTransition({ record: stripServerFields(s.data), kind, actor: actor(), now, resolution: opt && opt.resolution });
+      if (!r.ok) throw adapterError(ADAPTER_ERROR.CORE_REFUSED, 'exception:' + r.code);
+      tx.update(ref, Object.assign({}, r.record, { serverUpdatedAt: st() }));
+      tx.set(evOf(exceptionId, r.event), normalizeEvent(r.event));
+      return { ok: true, record: r.record, event: r.event };
+    }).catch(rejectMapped);
+  }
+  return { ensure, transition };
 }
 // ---- shared employeeSelf writer (admin-only projection; derived from the canonical record only) -----------------
 // FAIL-CLOSED LAW (initial-registration closeout): nothing is projected to employeeSelf for an employee whose real
@@ -255,6 +329,7 @@ export function createProductionAdapters(options) {
     container[T] = next;
   }
   const attendance = new Map();                        // own records only; changed ONLY by snapshots
+  const exceptions = new Map();                        // own durable attendance exceptions; changed ONLY by snapshots
   const employees = { [T]: {} };
   let started = false;
 
@@ -278,6 +353,10 @@ export function createProductionAdapters(options) {
       attendance.clear();
       for (const d of docs) if (d.exists !== false) attendance.set(d.id, stripServerFields(d.data));
     });
+    listen({ col: s4Path(T, 'attendanceExceptions'), where: [['ansattId', '==', MY]] }, (docs) => {
+      exceptions.clear();
+      for (const d of docs) if (d.exists !== false) exceptions.set(d.id, stripServerFields(d.data));
+    });
     listen({ doc: s4Path(T, 'employeeSelf', MY) }, (docs) => {
       const d = docs[0];
       const next = {};
@@ -291,7 +370,7 @@ export function createProductionAdapters(options) {
   function dispose() {
     disposed = true;
     for (const un of subs.splice(0)) { try { un(); } catch (e) { /* one failing unsubscribe must not abort the sweep */ } }
-    shiftSources.own = new Map(); shiftSources.open = new Map(); container[T] = {}; attendance.clear(); employees[T] = {};
+    shiftSources.own = new Map(); shiftSources.open = new Map(); container[T] = {}; attendance.clear(); exceptions.clear(); employees[T] = {};
   }
   function listenerCount() { return subs.length; }
 
@@ -339,6 +418,17 @@ export function createProductionAdapters(options) {
     commit,
   };
 
+  // ---- attendance exceptions: own records; ensure (idempotent) + the employee's write-once facts ----
+  const xw = makeExceptionWriter({ fs, T, st, assertLive, rejectMapped, actor: selfActor });
+  const exceptionSeam = {
+    store: () => exceptions,
+    get: (id) => exceptions.get(id),
+    values: () => exceptions.values(),
+    ensure: (ex, now) => xw.ensure(ex, now),
+    markShown: (id, now) => xw.transition(id, 'shown', { now }),
+    acknowledge: (id, now) => xw.transition(id, 'acknowledged', { now }),
+  };
+
   // ---- employeeSelf: admin-written projection (anti-fork: derived from the canonical record only) ----
   const writeEmployeeSelf = makeEmployeeSelfWriter({ fs, T, st, assertLive, rejectMapped });
 
@@ -347,6 +437,7 @@ export function createProductionAdapters(options) {
     attendance: attendanceSeam,
     employees: { store: () => employees },
     employeeSelf: { write: writeEmployeeSelf, project: projectEmployeeSelf },
+    exceptions: exceptionSeam,
     start, dispose, listenerCount,
     identity: Object.freeze({ tenantId: T, ansattId: MY, uid: UID, accessRole: ROLE }),
   };
