@@ -201,6 +201,8 @@ h1, h2, h3 { margin:0; letter-spacing:-.01em; }
 .vp-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
 .vp-actions .btn { display:inline-block; width:auto; min-height:44px; padding:10px 16px; font-size:14px; margin:0; box-shadow:none; }
 .vp-actions .btn.danger { background:#fff; color:var(--red); border:1px solid #e7b3ae; }
+.emp-end-confirm { margin-top:10px; padding:12px; border:1px solid #e7b3ae; border-radius:10px; background:#fff7f6; }
+.emp-end-confirm .emp-end-q { font-weight:800; color:var(--ink,#1b1b1b); }
 /* ---- vaktplan second increment: search, full month matrix, summary, manko ---- */
 .vp-search { display:flex; gap:8px; align-items:center; margin-bottom:12px; }
 .vp-search input { flex:1; max-width:340px; margin-bottom:0; }

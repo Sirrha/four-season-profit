@@ -70,6 +70,8 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
   let arbeidCorrectOpen = false; // Arbeidsforhold: the "Korriger gjeldende arbeidsforhold" form (feilregistrering, same period) is open (UI state only)
   let freezeConfirm = null;      // Step 4: { contractVersionId, inputs } captured when "Godkjenn og frys versjon" is pressed — the exact content under review (UI state only)
   let freezeBusy = false;        // a freeze request is in flight: the confirm control is disabled (no double submit)
+  let endConfirm = null;         // Arbeidsforhold: { endDate } captured when "Registrer som sluttet" is pressed — the in-page confirmation is open (UI state only)
+  let endBusy = false;           // an end-employment request is in flight: the confirm control is disabled (no double submit)
   // PRIVATE CONTRACT FIELDS (release 019B-R2) — the values themselves live on the contract DRAFT (core op setPrivateFields).
   // `privSeen` is UI state only: the identity (version id + exact field values) of the draft the preview last showed.
   // While the draft holds a private value, "Godkjenn og frys versjon" is offered only when the draft still equals what was
@@ -97,6 +99,10 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
   // header, list and summaries use this neutral label instead of the derived role.
   const UNREGISTERED_LABEL = 'Arbeidsforhold ikke registrert';
   const roleLineOf = (e, t) => (lacksEmploymentBaseline(e) ? UNREGISTERED_LABEL : roleOf(t ? t.role : null));
+  // Status text for an employee record. An ended record without a stored end date (old-register `aktiv=false`, no e360)
+  // gets a truthful neutral fallback — the date is never manufactured from `opprettet` or any other field.
+  const ENDED_NO_DATE_LABEL = 'Sluttet – dato ikke registrert';
+  const statusLabelOf = (e) => (e.status === 'active' ? 'Aktiv' : (e.endedAt ? 'Sluttet ' + fmtDate(e.endedAt) : ENDED_NO_DATE_LABEL));
   const FIRST_REG_LABELS = { role: 'Stilling', employmentForm: 'Ansettelsesform', employmentType: 'Stillingstype', percentage: 'Stillingsprosent', compensation: 'Lønnsgrunnlag', expectedWeeklyHours: 'Avtalt arbeidstid', workplace: 'Arbeidssted', noticePeriod: 'Oppsigelsestid' };
   function opError(code) {
     if (code === 'INITIAL_REGISTRATION_REQUIRED') return 'Arbeidsforholdet må registreres først. Gå til «Arbeidsforhold» og velg «Registrer arbeidsforhold».';
@@ -127,6 +133,8 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     if (code === 'EMPLOYMENTTYPE_INVALID') return 'Ugyldig stillingstype.';
     if (code === 'EMPLOYMENTFORM_INVALID') return 'Ugyldig ansettelsesform.';
     if (code === 'ENDDATE_INVALID') return 'Oppgi en gyldig sluttdato.';
+    if (code === 'ENDDATE_BEFORE_START') return 'Sluttdatoen kan ikke være før registrert startdato.';
+    if (code === 'ENDDATE_BEFORE_LATER_PERIOD') return 'Sluttdatoen kan ikke være før en senere registrert arbeidsperiode. Velg en sluttdato på eller etter siste periodes startdato.';
     if (code === 'ALREADY_ENDED') return 'Den ansatte er allerede registrert som sluttet.';
     if (code === 'DOC_NAME_REQUIRED') return 'Dokumentet må ha et navn.';
     if (code === 'DOC_CATEGORY_INVALID') return 'Velg en gyldig kategori.';
@@ -158,6 +166,15 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     const run = typeof applyOperation === 'function' ? applyOperation : applyEmployeeOperation;
     let res; try { res = run({ store: employeeStore, tenantId, actor, op, now: Date.now(), timezone }); } catch (e) { settle(coreErr(e)); return; }
     if (res && typeof res.then === 'function') res.then(settle, (e) => settle(coreErr(e))); else settle(res);
+  }
+  // END EMPLOYMENT (ELA-V1a): same operation boundary as apply(), plus the in-flight flag so the confirm control cannot
+  // double-submit; the confirmation closes only on success, a refusal keeps it open with the mapped message.
+  function applyEnd(op) {
+    endBusy = true;
+    const settle = (res) => { endBusy = false; if (res && res.ok) { errMsg = ''; endConfirm = null; } else { errMsg = opError(res && res.code ? res.code : 'UNKNOWN'); } draw(); };
+    const run = typeof applyOperation === 'function' ? applyOperation : applyEmployeeOperation;
+    let res; try { res = run({ store: employeeStore, tenantId, actor, op, now: Date.now(), timezone }); } catch (e) { settle(coreErr(e)); return; }
+    if (res && typeof res.then === 'function') { draw(); res.then(settle, (e) => settle(coreErr(e))); } else settle(res);
   }
   function applyC(op, after) {
     const settle = (res) => {
@@ -272,7 +289,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
       if (cs.state === 'mangler') m.push('mangler arbeidsavtale');
       else if (cs.state === 'utkast') m.push('arbeidsavtale er utkast');
       if (m.length) row.appendChild(miss(m));
-      row.addEventListener('click', () => { selectedId = e.ansattId; section = 'oversikt'; page = 'card'; errMsg = ''; arbeidChangeOpen = false; arbeidCorrectOpen = false; corrDraft = null; draw(); });
+      row.addEventListener('click', () => { selectedId = e.ansattId; section = 'oversikt'; page = 'card'; errMsg = ''; arbeidChangeOpen = false; arbeidCorrectOpen = false; corrDraft = null; endConfirm = null; endBusy = false; draw(); });
       card.appendChild(row);
     }
     root.appendChild(card);
@@ -417,7 +434,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     const e = employeeOf(employeeStore, tenantId, selectedId);
     if (!e) { page = 'list'; return drawList(); }
     const cur = currentTermsOf(e, todayWd) || e.terms[e.terms.length - 1];
-    root.appendChild(head(e.name, roleLineOf(e, cur) + ' · ' + (e.status === 'active' ? 'Aktiv' : 'Sluttet ' + fmtDate(e.endedAt))));
+    root.appendChild(head(e.name, roleLineOf(e, cur) + ' · ' + statusLabelOf(e)));
     const back = btn('← Alle ansatte', 'btn tertiary', () => { page = 'list'; errMsg = ''; draw(); });
     back.style.cssText = 'width:auto;padding:4px 0;min-height:0;margin-bottom:10px';
     root.appendChild(back);
@@ -425,7 +442,7 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     const seg = el('div', { cls: 'seg emp-seg', attrs: { role: 'tablist', 'aria-label': 'Seksjon' } });
     for (const s of SECTIONS) {
       const b = el('button', { text: s.label, cls: section === s.key ? 'on' : '', attrs: { type: 'button', role: 'tab', 'aria-selected': section === s.key ? 'true' : 'false' } });
-      b.addEventListener('click', () => { section = s.key; errMsg = ''; draw(); });
+      b.addEventListener('click', () => { section = s.key; errMsg = ''; endConfirm = null; endBusy = false; draw(); });
       seg.appendChild(b);
     }
     root.appendChild(seg);
@@ -447,7 +464,9 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
   function drawOversikt(e, cur) {
     const card = el('div', { cls: 'card' });
     card.appendChild(el('div', { cls: 'kicker', text: 'Oversikt' }));
-    card.appendChild(factRow('Status', e.status === 'active' ? 'Aktiv' : 'Sluttet ' + fmtDate(e.endedAt)));
+    card.appendChild(factRow('Status', statusLabelOf(e)));
+    // ELA-V1a: when the end itself was recorded here, say when (the audit instant), so the owner can see the record is complete
+    if (e.status === 'ended' && Number.isInteger(e.endedRecordedAt)) card.appendChild(factRow('Avslutning registrert', fmtDate(tenantWorkDate(e.endedRecordedAt, timezone)) + ' kl. ' + fmtHM(e.endedRecordedAt)));
     const unreg = lacksEmploymentBaseline(e);   // old-register values are not shown as current facts
     card.appendChild(factRow('Stilling', unreg ? 'Ikke registrert' : roleOf(cur ? cur.role : null)));
     card.appendChild(factRow('Stillingstype', cur && cur.employmentType ? cur.employmentType : 'Ikke registrert'));
@@ -739,7 +758,11 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     hist.appendChild(el('div', { cls: 'kicker neutral', text: 'Perioder (nyeste først)' }));
     for (const r of termsWithRanges(e)) {
       const b = el('div', { cls: 'emp-period' });
-      b.appendChild(el('div', { cls: 'rg', text: fmtDate(r.validFrom) + ' – ' + (r.validTo ? fmtDate(r.validTo) : 'løpende') }));
+      // corrective (008): an ENDED employment has no "løpende" period. The latest, otherwise open-ended period is DISPLAYED
+      // as ending on endedAt; stored terms and their derived validTo are never touched for presentation, earlier periods
+      // keep their derived range. Without a stored end date nothing is manufactured: the neutral fallback is shown.
+      const endTxt = r.validTo ? fmtDate(r.validTo) : (e.status === 'ended' ? (e.endedAt ? fmtDate(e.endedAt) : 'sluttet – dato ikke registrert') : 'løpende');
+      b.appendChild(el('div', { cls: 'rg', text: fmtDate(r.validFrom) + ' – ' + endTxt }));
       const bits = [roleOf(r.terms.role)];
       if (r.terms.employmentForm) bits.push(formLabel(r.terms.employmentForm));
       if (r.terms.employmentType) bits.push(r.terms.employmentType);
@@ -757,12 +780,47 @@ export function renderEmployeesView(root, { employeeStore, scheduleStore, tenant
     root.appendChild(hist);
 
     if (canEditEmployment(actor) && e.status === 'active') {
+      // AVSLUTT ARBEIDSFORHOLD (ELA-V1a): no one-click finalization. "Registrer som sluttet" only captures the typed end date
+      // and opens an in-page confirmation; only "Ja, registrer som sluttet" sends endEmployee. The confirmation states the
+      // truth: history is kept, the employee is marked ended from that date, and ACCESS to Sormena is a separate authority
+      // that must already be switched off — this operation never revokes access and never claims to.
       const endCard = el('div', { cls: 'card emp-form' });
       endCard.appendChild(el('div', { cls: 'kicker neutral', text: 'Avslutt arbeidsforhold' }));
-      const ed = textInput(todayWd, null, 'date');
+      const confirming = !!endConfirm;
+      const ed = textInput(confirming ? endConfirm.endDate : todayWd, null, 'date');
+      if (confirming) { ed.setAttribute('disabled', 'disabled'); ed.setAttribute('aria-disabled', 'true'); }
       endCard.appendChild(field('Sluttdato', ed));
       endCard.appendChild(el('div', { cls: 'cue-line', text: 'Den ansatte slettes aldri – historikk og vakter forblir synlige.' }));
-      endCard.appendChild(btn('Registrer som sluttet', 'btn secondary danger', () => apply({ kind: 'endEmployee', ansattId: e.ansattId, endDate: ed.value })));
+      endCard.appendChild(el('div', { cls: 'cue-line', text: 'Tilgang til Sormena styres separat og må være slått av før arbeidsforholdet avsluttes.' }));
+      if (!confirming) {
+        endCard.appendChild(btn('Registrer som sluttet', 'btn secondary danger', () => {
+          const v = ed.value;
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(v || '')) { errMsg = opError('ENDDATE_INVALID'); draw(); return; }
+          // corrective (008): same canonical start truth as the core law (first period's validFrom); the core refuses it
+          // again at the boundary — this only keeps the confirmation from opening for a date that can never be accepted
+          if (v < startDateOf(e)) { errMsg = opError('ENDDATE_BEFORE_START'); draw(); return; }
+          // integrity (011): same fail-closed law as the core — on/after every canonical period's validFrom (core stays authoritative)
+          if (e.terms.some((t) => v < t.validFrom)) { errMsg = opError('ENDDATE_BEFORE_LATER_PERIOD'); draw(); return; }
+          endConfirm = { endDate: v }; errMsg = ''; draw();
+        }));
+      } else {
+        const cf = el('div', { cls: 'emp-end-confirm' });
+        cf.appendChild(el('div', { cls: 'kicker', text: 'Bekreft avslutning av arbeidsforhold' }));
+        cf.appendChild(el('div', { cls: 'cue-line emp-end-q', text: 'Registrer ' + e.name + ' som sluttet ' + fmtDate(endConfirm.endDate) + '?' }));
+        cf.appendChild(el('div', { cls: 'cue-line', text: 'Historikk, vakter og dokumenter beholdes. Den ansatte slettes aldri.' }));
+        cf.appendChild(el('div', { cls: 'cue-line', text: 'Den ansatte merkes som sluttet fra denne datoen.' }));
+        cf.appendChild(el('div', { cls: 'cue-line', text: 'Tilgang til Sormena styres separat og må være slått av før arbeidsforholdet avsluttes. Denne handlingen slår ikke av tilgang.' }));
+        const ca = el('div', { cls: 'vp-actions' });
+        const yes = btn('Ja, registrer som sluttet', 'btn secondary danger', () => {
+          if (endBusy || !endConfirm) return;
+          applyEnd({ kind: 'endEmployee', ansattId: e.ansattId, endDate: endConfirm.endDate });
+        });
+        if (endBusy) { yes.setAttribute('disabled', 'disabled'); yes.setAttribute('aria-disabled', 'true'); }
+        ca.appendChild(yes);
+        ca.appendChild(btn('Avbryt', 'btn tertiary', () => { if (endBusy) return; endConfirm = null; errMsg = ''; draw(); }));
+        cf.appendChild(ca);
+        endCard.appendChild(cf);
+      }
       root.appendChild(endCard);
     }
   }

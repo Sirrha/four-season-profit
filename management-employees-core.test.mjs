@@ -159,9 +159,11 @@ t('E14', 'ending preserves record/history; no delete path exists; ended excluded
   assert.equal(r.ok, true, r.code);
   const emp = employeeOf(store, T, 'ans-aboud');
   assert.equal(emp.status, 'ended'); assert.equal(emp.endedAt, '2026-09-30');
+  assert.equal(emp.endedByUid, MGR.uid); assert.equal(emp.endedRecordedAt, NOW);   // ELA-V1a audit: WHO (actor at the boundary) + WHEN (injected now)
   assert.equal(emp.terms.length, 1);                                  // history intact
   assert.ok(employeesOf(store, T).some((e) => e.ansattId === 'ans-aboud'));   // never deleted
   assert.equal(applyE(store, { kind: 'endEmployee', ansattId: 'ans-aboud', endDate: '2026-10-01' }).code, 'ALREADY_ENDED');
+  assert.equal(emp.endedAt, '2026-09-30'); assert.equal(emp.endedByUid, MGR.uid); assert.equal(emp.endedRecordedAt, NOW);   // the refused repeat changes nothing
   assert.equal(applyE(store, { kind: 'deleteEmployee', ansattId: 'ans-aboud' }).code, 'UNKNOWN_OPERATION');
   assert.ok(!vaktplanPeopleFrom(store, T, TODAY).some((p) => p.ansattId === 'ans-aboud'));
 });

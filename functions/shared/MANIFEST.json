@@ -25,8 +25,8 @@
     {
       "name": "management-employees-core.mjs",
       "source": "management-employees-core.mjs",
-      "sha256": "02b929c4336c451dd9a7be3ffa9de9d774e9cf0f098ab72a2cd061b4f2d3f7a3",
-      "bytes": 39412
+      "sha256": "2e91a9dc677e052be112fe927e6759f2515c01f8b635958a30f5874b87c7f0da",
+      "bytes": 41404
     },
     {
       "name": "management-schedule-core.mjs",

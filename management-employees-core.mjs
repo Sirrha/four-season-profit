@@ -161,7 +161,7 @@ export function seedFourSeasonEmployees(people, tenantId) {
     tenant[p.ansattId] = {
       ansattId: p.ansattId, name: p.name,
       contact: { email: null, phone: null, address: null, birthDate: null },
-      status: 'active', endedAt: null,
+      status: 'active', endedAt: null, endedByUid: null, endedRecordedAt: null,
       terms: [freezeTerms({ validFrom: s.validFrom, role: p.roleKey, employmentType: s.employmentType, percentage: s.percentage, compensation: comp, workplace: 'Four Season', expectedWeeklyHours: null, workingTimeArrangement: null, probation: null, noticePeriod: null, breaksArrangement: null, scheduleChangeHandling: null, employmentBasis: null, employmentEndDate: null, paymentInterval: null, employmentForm: null })],
       documents: s.kontrakt ? [{ docId: 'doc-' + p.ansattId + '-1', name: 'Arbeidskontrakt', category: 'kontrakt', date: s.validFrom, source: 'registrert manuelt', note: null }] : [],
       contractVersions: [],          // append-only; written ONLY by the contract operation boundary
@@ -336,7 +336,7 @@ export function applyEmployeeOperation({ store, tenantId, actor, op, now, timezo
     const emp = {
       ansattId, name: op.name.trim(),
       contact: { email: null, phone: null, address: createAddress, birthDate: createBirthDate },
-      status: 'active', endedAt: null,
+      status: 'active', endedAt: null, endedByUid: null, endedRecordedAt: null,
       terms: [freezeTerms({ validFrom: op.startDate, role: op.role, employmentType: null, percentage: null, compensation: null, workplace: null, expectedWeeklyHours: null, workingTimeArrangement: null, probation: null, noticePeriod: null, breaksArrangement: null, scheduleChangeHandling: null, employmentBasis: null, employmentEndDate: null, paymentInterval: null, employmentForm: null })],
       documents: [],
       contractVersions: [],
@@ -513,9 +513,27 @@ export function applyEmployeeOperation({ store, tenantId, actor, op, now, timezo
   }
 
   if (op.kind === 'endEmployee') {
+    // ELA-V1a: the canonical end transition (active -> ended, endedAt = the employment END DATE) now also records WHO
+    // ended the employment (the authenticated admin actor at this operation boundary, never UI text) and WHEN it was
+    // recorded (the injected operation instant `now` — the same source as e360.updatedAt / termsCorrections[].at).
+    // Access to Sormena is a SEPARATE authority (membership), untouched here: this operation never revokes access.
     if (!WD_RE.test(op.endDate || '')) return { ok: false, code: 'ENDDATE_INVALID' };
     if (emp.status === 'ended') return { ok: false, code: 'ALREADY_ENDED' };
+    // Corrective (008): the end date can never precede the REGISTERED canonical employment start — the first terms
+    // period's validFrom, the single start truth of the first-registration model (never legacy opprettet). Unregistered
+    // records were already refused above (INITIAL_REGISTRATION_REQUIRED); the null branch is fail-closed defence only.
+    // Equal is allowed (a one-day employment). Refused before any mutation.
+    const start = registeredStartDateOf(emp);
+    if (typeof start !== 'string') return { ok: false, code: INITIAL_REGISTRATION_REQUIRED_CODE };
+    if (op.endDate < start) return { ok: false, code: 'ENDDATE_BEFORE_START' };
+    // Integrity (011): the end date must also be on/after EVERY canonical terms period's validFrom — an employment can
+    // never end before a later registered period begins. Canonical terms history only (never legacy opprettet). Refused,
+    // never rewritten / auto-closed / deleted to make the end fit. Equal to the latest period's start is allowed.
+    if (emp.terms.some((t) => op.endDate < t.validFrom)) return { ok: false, code: 'ENDDATE_BEFORE_LATER_PERIOD' };
+    if (typeof actor.uid !== 'string' || !actor.uid) return { ok: false, code: 'ACTOR_UID_REQUIRED' };
+    if (!Number.isFinite(now)) return { ok: false, code: 'NOW_REQUIRED' };
     emp.status = 'ended'; emp.endedAt = op.endDate;          // never delete; history remains inspectable
+    emp.endedByUid = actor.uid; emp.endedRecordedAt = now;   // audit of the end itself; terms/contracts/documents untouched
     return { ok: true, ansattId, employee: emp };
   }
 

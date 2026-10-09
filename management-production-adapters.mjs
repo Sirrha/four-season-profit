@@ -84,6 +84,8 @@ export function normalizeAnsatt(id, d) {
     contact,
     status,
     endedAt: e && typeof e.endedAt === 'string' ? e.endedAt : null,
+    endedByUid: e && typeof e.endedByUid === 'string' && e.endedByUid ? e.endedByUid : null,          // ELA-V1a end audit
+    endedRecordedAt: e && Number.isInteger(e.endedRecordedAt) ? e.endedRecordedAt : null,
     terms,
     documents: e && Array.isArray(e.documents) ? clone(e.documents) : [],
     contractVersions: e && Array.isArray(e.contractVersions) ? clone(e.contractVersions) : [],
@@ -105,6 +107,11 @@ export function ansattWriteFor(kind, rec, prev, nowMs, todayWd) {
   };
   // correction audit rides in the SAME block; written only once one exists, so uncorrected documents keep their shape
   if (Array.isArray(rec.termsCorrections) && rec.termsCorrections.length) e360.termsCorrections = clone(rec.termsCorrections);
+  // end audit (ELA-V1a): who recorded the end and when; present only on an ended record, never fabricated for active ones
+  if (rec.status === 'ended') {
+    if (typeof rec.endedByUid === 'string' && rec.endedByUid) e360.endedByUid = rec.endedByUid;
+    if (Number.isInteger(rec.endedRecordedAt)) e360.endedRecordedAt = rec.endedRecordedAt;
+  }
   const out = { [E360_KEY]: e360 };
   const t = currentTermsOf(rec, todayWd) || rec.terms[rec.terms.length - 1];
   // registerInitialEmployment (first registration of an old-register employee) follows the same projection law: the

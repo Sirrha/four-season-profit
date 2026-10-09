@@ -142,6 +142,8 @@ await t('M07', 'appendTerms / endEmployee: both REFUSED with zero writes before 
   const r2 = await M.employees.apply({ kind: 'endEmployee', ansattId: LEG, endDate: '2026-10-31' });
   d = F.docs.get(ansattePath(T, LEG));
   assert.equal(r2.ok, true); assert.equal(d.aktiv, false); assert.equal(d[E360_KEY].status, 'ended'); assert.equal(d[E360_KEY].endedAt, '2026-10-31'); assert.equal(d[E360_KEY].rev, 3);
+  assert.equal(d[E360_KEY].endedByUid, ADM.uid); assert.ok(Number.isInteger(d[E360_KEY].endedRecordedAt) && d[E360_KEY].endedRecordedAt === d[E360_KEY].updatedAt);   // ELA-V1a audit persisted in the SAME block
+  assert.equal(d[E360_KEY].lastOp, 'endEmployee'); assert.equal(d.opprettet, legacyDoc().opprettet);   // legacy opprettet never written
   assert.equal(M.employees.store()[T][LEG].status, 'ended'); assert.ok(!M.employees.people().some((p) => p.ansattId === LEG));
   assert.ok(F.writes.every((p) => p === ansattePath(T, LEG)));
 });

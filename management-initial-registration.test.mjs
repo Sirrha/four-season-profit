@@ -358,7 +358,7 @@ await t('IR18', '(static) UI WORDING: before registration the list row and the c
   assert.ok(view.includes("  const UNREGISTERED_LABEL = 'Arbeidsforhold ikke registrert';"));
   assert.ok(view.includes('  const roleLineOf = (e, t) => (lacksEmploymentBaseline(e) ? UNREGISTERED_LABEL : roleOf(t ? t.role : null));'));
   assert.ok(view.includes('      const bits = [roleLineOf(e, t)];'), 'list row');
-  assert.ok(view.includes("    root.appendChild(head(e.name, roleLineOf(e, cur) + ' · ' + (e.status === 'active' ? 'Aktiv' : 'Sluttet ' + fmtDate(e.endedAt))));"), 'card header (shared by every tab incl. Kontrakt and Dokumenter)');
+  assert.ok(view.includes("    root.appendChild(head(e.name, roleLineOf(e, cur) + ' · ' + statusLabelOf(e)));"), 'card header (shared by every tab incl. Kontrakt and Dokumenter)');   // ELA-V1a: status text through ONE helper (statusLabelOf), still beside roleLineOf
   assert.ok(!view.includes("head(e.name, roleOf(") && !view.includes('const bits = [roleOf(t ? t.role : null)];'), 'the old-register title is no longer the header/list line');
   assert.ok(view.includes("    card.appendChild(factRow('Stilling', unreg ? 'Ikke registrert' : roleOf(cur ? cur.role : null)));"));
   assert.ok(view.includes('    if (canViewCompensation(actor) && cur && cur.compensation && !unreg) {'));
